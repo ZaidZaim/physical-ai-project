@@ -104,3 +104,33 @@ def test_no_keepalive_republish_while_holding_a_key():
         assert len(moving) == 1, moving
     finally:
         d.close(); fb.close()
+
+
+def test_turn_rate_never_exceeds_the_tested_limit_even_at_speed_3():
+    from puppy_mind.rosbridge import YAW_LIMIT
+
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb, max_yaw=2.0)  # asking for a dangerous turn rate is clamped
+    try:
+        drive.arm(True)
+        drive.set_speed(3)
+        for _ in range(5):
+            drive.command(0, 0, 1)
+            time.sleep(0.1)
+        yaws = [abs(v["yaw_rate"]) for v in fb.vels()]
+        assert max(yaws) <= YAW_LIMIT + 1e-9 and max(yaws) > 0.4, yaws
+    finally:
+        d.close(); fb.close()
+
+
+def test_startup_restores_stock_gait_not_trot():
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        time.sleep(0.2)
+        gait = [m["msg"] for m in fb.msgs if m["op"] == "publish" and m["topic"] == "/puppy_control/gait"][0]
+        assert gait["swing_time"] == 0.15 and gait["overlap_time"] == 0.1
+        pose = [m["msg"] for m in fb.msgs if m["op"] == "publish" and m["topic"] == "/puppy_control/pose"][0]
+        assert pose["x_shift"] == -0.5 and pose["height"] == -10.0
+    finally:
+        d.close(); fb.close()

@@ -25,7 +25,9 @@ import time
 import urllib.request
 
 LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0}
-GAITS = {  # from Hiwonder's puppy_demo.py
+YAW_LIMIT = 0.436  # rad/s = 25 deg/s, the fastest turn Hiwonder's own teleop uses; above it the robot can tip over
+GAITS = {  # "stock" = the robot's own default (puppy.py GaitConfigFast + Stand); the others are from puppy_demo.py
+    "stock": dict(overlap_time=0.1, swing_time=0.15, clearance_time=0.0, z_clearance=5.0, x_shift=-0.5),
     "trot": dict(overlap_time=0.2, swing_time=0.3, clearance_time=0.0, z_clearance=5.0, x_shift=-0.6),
     "walk": dict(overlap_time=0.1, swing_time=0.2, clearance_time=0.3, z_clearance=5.0, x_shift=-0.65),
     "amble": dict(overlap_time=0.1, swing_time=0.2, clearance_time=0.1, z_clearance=5.0, x_shift=-0.9),
@@ -134,15 +136,16 @@ def main():
     ap.add_argument("--brain", required=True, help="e.g. http://192.168.149.2:8000")
     ap.add_argument("--token", default="")
     ap.add_argument("--hz", type=float, default=10.0)
-    ap.add_argument("--gait", choices=list(GAITS), default="trot")
+    ap.add_argument("--gait", choices=list(GAITS), default="stock")
     ap.add_argument("--max-x", type=float, default=12.0, help="cm/s at speed level 3")
     ap.add_argument("--max-y", type=float, default=0.0, help="cm/s at speed level 3 (stock firmware has no lateral move)")
-    ap.add_argument("--max-yaw", type=float, default=0.6, help="rad/s at speed level 3")
+    ap.add_argument("--max-yaw", type=float, default=YAW_LIMIT, help="rad/s at speed level 3 (capped at 0.436)")
     ap.add_argument("--invert-y", action="store_true")
     ap.add_argument("--invert-yaw", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print commands, publish nothing")
     a = ap.parse_args()
 
+    a.max_yaw = min(abs(a.max_yaw), YAW_LIMIT)
     drv = Driver(a.dry_run, a.gait)
     print("ROS%s driver ready%s; polling %s" % (drv.ros or "-", " (dry run)" if a.dry_run else "", a.brain))
     applied = dict(ZERO)

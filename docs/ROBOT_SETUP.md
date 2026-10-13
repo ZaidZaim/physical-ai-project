@@ -63,7 +63,7 @@ Stock firmware has no lateral (sideways) walking; Q/E do nothing unless you rais
 
 ## 4b. Keyboard drive (verified against the Hiwonder `ros2` branch source, not yet run on your unit)
 `robot/puppy_drive.py` publishes `puppy_control_msgs/Velocity{x cm/s, y cm/s, yaw_rate rad/s}` to `/puppy_control/velocity`,
-sets the Trot gait/pose like Hiwonder's `puppy_demo.py`, and calls `/puppy_control/go_home` for the H key.
+restores the robot's STOCK gait/pose (fast short steps; the demo's slow Trot tipped it when turning) and caps turning at 25 deg/s (0.436 rad/s), and calls `/puppy_control/go_home` for the H key.
 1. `python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run` and press keys in the UI: confirm the printed values.
 2. Run it without `--dry-run` with the dog held off the ground, then in open space on the lowest speed (key `1`).
 3. If strafe or turn is mirrored on your unit, add `--invert-y` / `--invert-yaw`. Tune `--max-x/--max-y/--max-yaw`.

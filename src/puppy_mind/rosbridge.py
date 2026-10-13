@@ -20,15 +20,19 @@ import uuid
 from .drive import DriveState
 
 LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0}
-GAIT = dict(overlap_time=0.2, swing_time=0.3, clearance_time=0.0, z_clearance=5.0, x_shift=-0.6)  # Hiwonder Trot
+# Hiwonder's STOCK walking style (puppy.py GaitConfigFast + Stand pose). Fast, short steps are stable; the slower long-stride
+# "Trot" from their demo tipped the robot over when turning. Sending these also undoes any gait set earlier.
+GAIT = dict(overlap_time=0.1, swing_time=0.15, clearance_time=0.0, z_clearance=5.0, x_shift=-0.5)
+YAW_LIMIT = 0.436  # rad/s = 25 deg/s: the fastest turn Hiwonder's own teleop uses; above it the robot can tip over
 TYPE_CANDIDATES = ("puppy_control/Velocity", "puppy_control_msgs/msg/Velocity")  # ROS1, ROS2
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
 
 class RosbridgeDriver:
-    def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=0.6, invert_yaw=False):
+    def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=YAW_LIMIT, invert_yaw=False):
         self.url, self.drive = url, drive
-        self.max_x, self.max_y, self.max_yaw, self.invert_yaw = max_x, max_y, max_yaw, invert_yaw
+        self.max_x, self.max_y, self.invert_yaw = max_x, max_y, invert_yaw
+        self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
         self.connected = False
         self.error = ""
         self.vel_type = ""
