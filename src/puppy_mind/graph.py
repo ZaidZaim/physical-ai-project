@@ -237,6 +237,17 @@ class Memory:
             """,
             loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold,
         )
+        # a possibly-gone object no longer "is on" anything: end its relations (history is kept)
+        gone_ids = [m["id"] for m in missed if m["status"] == "possibly_gone"]
+        if gone_ids:
+            self._write(
+                f"""
+                MATCH (a:Object)-[r:{REL_ALT}]->(:Object)
+                WHERE a.id IN $gone AND r.active
+                SET r.active=false, r.until=datetime($ts), r.ended_by='possibly_gone'
+                """,
+                gone=gone_ids, ts=ts,
+            )
         return {
             "observation_id": obs_id,
             "ts": ts,
@@ -245,6 +256,10 @@ class Memory:
             "matched_objects": sorted(f"{d['label']} ({d['id']})" for d in det_rows if not d["new"]),
             "missed": missed,
             "relations": len(rels),
+            "objects": det_rows,
+            "relation_list": [
+                {"a": obj_id[r.subject], "b": obj_id[r.object], "predicate": r.predicate} for r in rels
+            ],
         }
 
     # ---- read tools (also exposed to the Q&A agent)
@@ -407,22 +422,25 @@ class Memory:
         )[0]
 
     def graph_snapshot(self, limit: int = 300) -> dict[str, Any]:
+        """Nodes/edges with stable ids (Object.id, 'loc:<name>') so the UI can diff and animate."""
         nodes = self._read(
             """
-            MATCH (n) WHERE n:Object OR n:Location OR n:Robot
-            RETURN elementId(n) AS id, labels(n)[0] AS kind,
-                   coalesce(n.label, n.name) AS label, n.color AS color, n.status AS status
+            MATCH (n) WHERE n:Object OR n:Location
+            RETURN CASE WHEN n:Object THEN n.id ELSE 'loc:' + n.name END AS id,
+                   labels(n)[0] AS kind, coalesce(n.label, n.name) AS label,
+                   n.color AS color, n.status AS status
             LIMIT $limit
             """,
             limit=limit,
         )
         edges = self._read(
             """
-            MATCH (a)-[r]->(b) WHERE (a:Object OR a:Robot) AND (b:Object OR b:Location)
+            MATCH (a:Object)-[r]->(b) WHERE (b:Object OR b:Location)
               AND type(r) IN $types AND coalesce(r.active, true)
-            RETURN elementId(a) AS source, elementId(b) AS target, type(r) AS type
+            RETURN a.id AS source,
+                   CASE WHEN b:Object THEN b.id ELSE 'loc:' + b.name END AS target, type(r) AS type
             LIMIT $limit
             """,
-            types=list(PREDICATES) + ["LOCATED_AT", "OBSERVED"], limit=limit * 3,
+            types=list(PREDICATES) + ["LOCATED_AT"], limit=limit * 3,
         )
         return {"nodes": nodes, "edges": edges}

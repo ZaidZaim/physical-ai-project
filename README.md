@@ -48,6 +48,18 @@ uv run puppy-mind serve       # UI at http://localhost:8000
 Without the robot: `CAMERA_SOURCE=webcam:0 uv run puppy-mind watch`, or `folder:./frames` to replay photos.
 With the robot: see [docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md).
 
+## Live view (camera + animated graph)
+`uv run puppy-mind serve`, open http://localhost:8000.
+* **Live camera**: MJPEG at `/api/stream`. Frames come from the robot (`robot/puppy_streamer.py` pushes ~3 fps to `/api/frame`)
+  or from the laptop (`Start camera` pulls `CAMERA_SOURCE`). Video is shown at full rate; OpenAI perception runs on at most
+  one frame per `WATCH_INTERVAL_S`, and a scan line shows while a frame is being analysed.
+* **Graph in real time**: every observation is pushed over Server-Sent Events (`/api/events`). New objects grow in and glow
+  green, re-seen objects pulse blue, misses pulse amber, objects that become `possibly_gone` turn grey, ended relations flash
+  red and drop out, and the nodes the agent consulted for your question glow purple. Detected labels also appear over the
+  left/centre/right third of the video they were seen in.
+* **`Demo replay`** plays a scripted booth day (`eval/scenarios/booth.json`) so you can watch the graph build without a robot.
+* **Dev only:** `PUPPY_FAKE_MEMORY=1` swaps Aura for an in-memory stand-in (nothing persists) to try the UI offline.
+
 ## Memory rules that matter
 * **One missed detection never deletes anything.** Objects carry `miss_count`; only after `MISS_THRESHOLD`
   consecutive misses *at the same location* do they become `possibly_gone`, and answers say "not seen", never "removed".

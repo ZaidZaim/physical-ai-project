@@ -5,7 +5,7 @@ Stdlib + OpenCV only (OpenCV ships on the PuppyPi image). The robot does no infe
 laptop runs perception, memory and Q&A.
 
 Usage on the robot:
-  python3 puppy_streamer.py --brain http://<laptop-ip>:8000 --source mjpeg --interval 5
+  python3 puppy_streamer.py --brain http://<laptop-ip>:8000 --source mjpeg --fps 3
   python3 puppy_streamer.py --brain http://<laptop-ip>:8000 --source opencv:0
 
 Sources:
@@ -52,7 +52,7 @@ def post(url, jpeg, token, location, source):
             parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
     parts.append(f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="f.jpg"\r\n'
                  f"Content-Type: image/jpeg\r\n\r\n".encode() + jpeg + f"\r\n--{b}--\r\n".encode())
-    req = urllib.request.Request(url + "/api/observe", data=b"".join(parts), method="POST")
+    req = urllib.request.Request(url + "/api/frame", data=b"".join(parts), method="POST")
     req.add_header("Content-Type", f"multipart/form-data; boundary={b}")
     if token:
         req.add_header("X-Brain-Token", token)
@@ -64,7 +64,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain", required=True)
     ap.add_argument("--source", default="mjpeg")
-    ap.add_argument("--interval", type=float, default=5.0)
+    ap.add_argument("--fps", type=float, default=3.0, help="frames/s pushed for the live view; the brain decides how often to run perception")
     ap.add_argument("--token", default="")
     ap.add_argument("--location", default="")
     a = ap.parse_args()
@@ -75,10 +75,10 @@ def main():
             if frame is not None:
                 ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if ok:
-                    print(post(a.brain, buf.tobytes(), a.token, a.location, "puppypi-push"))
+                    post(a.brain, buf.tobytes(), a.token, a.location, "puppypi-push")
         except Exception as e:  # keep streaming through wifi blips
             print("error:", e)
-        time.sleep(a.interval)
+        time.sleep(1.0 / a.fps)
 
 
 if __name__ == "__main__":

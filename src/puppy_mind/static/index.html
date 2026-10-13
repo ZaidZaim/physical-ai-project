@@ -6,54 +6,165 @@
 <title>PuppyPi Mind</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
-  :root { --bg:#0f1419; --panel:#182028; --ink:#e6edf3; --mute:#8b98a5; --accent:#4fb3ff; --ok:#3fb950; --warn:#d29922; --line:#26323d; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --ink:#1f2328; --mute:#656d76; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --line:#d0d7de; } }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,sans-serif }
-  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
-  header h1 { font-size:16px; margin:0 } .pill { padding:2px 8px; border-radius:99px; background:var(--panel); border:1px solid var(--line); color:var(--mute); font-size:12px }
-  main { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 16px }
-  @media (max-width:860px){ main{grid-template-columns:1fr} }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0 }
-  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 8px }
-  #chat { height:340px; overflow:auto; display:flex; flex-direction:column; gap:8px }
-  .m { padding:8px 10px; border-radius:8px; max-width:92%; white-space:pre-wrap } .u { background:var(--accent); color:#fff; align-self:flex-end } .a { background:var(--bg); border:1px solid var(--line) }
-  details { font-size:12px; color:var(--mute); margin-top:4px } pre { overflow:auto; max-height:200px }
-  form { display:flex; gap:8px; margin-top:8px } input[type=text] { flex:1; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
-  button { padding:8px 12px; border-radius:6px; border:1px solid var(--line); background:var(--accent); color:#fff; cursor:pointer } button.ghost { background:var(--panel); color:var(--ink) }
-  #graph { height:320px; border:1px solid var(--line); border-radius:6px } ul { margin:0; padding-left:18px } li { margin:2px 0 }
-  .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--bg); border:1px solid var(--line) } .present{color:var(--ok)} .possibly_gone{color:var(--warn)}
+  :root { --bg:#0b1016; --panel:#141c25; --ink:#e6edf3; --mute:#8b98a5; --line:#25313d;
+          --obj:#4fb3ff; --loc:#3fb950; --gone:#6e7681; --new:#3fb950; --seen:#4fb3ff; --miss:#d29922; --ask:#bc8cff; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f3f5f8; --panel:#fff; --ink:#1f2328; --mute:#656d76; --line:#d0d7de;
+          --obj:#0969da; --loc:#1a7f37; --gone:#8c959f; --new:#1a7f37; --seen:#0969da; --miss:#9a6700; --ask:#8250df; } }
+  * { box-sizing:border-box } html,body { height:100% }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,sans-serif; display:flex; flex-direction:column }
+  header { display:flex; gap:10px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  h1 { font-size:15px; margin:0 } .pill { padding:2px 9px; border-radius:99px; background:var(--panel); border:1px solid var(--line); color:var(--mute); font-size:12px }
+  .live { width:8px; height:8px; border-radius:50%; background:var(--gone); display:inline-block; margin-right:5px } .live.on { background:var(--new); box-shadow:0 0 8px var(--new) }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(300px,2fr) minmax(0,3fr); gap:10px; padding:10px 14px }
+  @media (max-width:900px){ main { grid-template-columns:1fr; grid-auto-rows:minmax(360px,auto) } html,body{height:auto} }
+  .col { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0 }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; min-width:0; min-height:0; display:flex; flex-direction:column }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--mute); margin:0 0 6px; display:flex; justify-content:space-between }
+  #video { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:4/3 }
+  #video img { width:100%; height:100%; object-fit:contain; display:block }
+  [hidden] { display:none !important }
+  #novid { position:absolute; inset:0; display:grid; place-items:center; color:#8b98a5; text-align:center; padding:12px }
+  .zones { position:absolute; inset:0; display:grid; grid-template-columns:1fr 1fr 1fr; pointer-events:none }
+  .zone { display:flex; flex-direction:column; justify-content:flex-end; gap:4px; padding:6px; border-right:1px dashed rgba(255,255,255,.12) }
+  .chip { align-self:flex-start; padding:1px 7px; border-radius:6px; font-size:12px; color:#fff; background:rgba(20,28,37,.82); border:1px solid var(--seen); animation:pop .35s ease-out }
+  .chip.new { border-color:var(--new); background:rgba(26,127,55,.85) } @keyframes pop { from { transform:scale(.4); opacity:0 } to { transform:scale(1); opacity:1 } }
+  #scan { position:absolute; left:0; right:0; height:3px; top:0; background:linear-gradient(90deg,transparent,var(--obj),transparent); opacity:0; box-shadow:0 0 14px var(--obj) }
+  #scan.on { opacity:1; animation:scan 1.4s linear infinite } @keyframes scan { from { top:0 } to { top:calc(100% - 3px) } }
+  #chat { flex:1; min-height:120px; overflow:auto; display:flex; flex-direction:column; gap:6px }
+  .m { padding:7px 10px; border-radius:8px; max-width:94%; white-space:pre-wrap } .u { background:var(--obj); color:#fff; align-self:flex-end } .a { background:var(--bg); border:1px solid var(--line) }
+  details { font-size:12px; color:var(--mute); margin-top:4px } pre { overflow:auto; max-height:180px; margin:4px 0 0 }
+  form { display:flex; gap:6px; margin-top:6px } input[type=text] { flex:1; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+  button { padding:7px 11px; border-radius:6px; border:1px solid var(--line); background:var(--obj); color:#fff; cursor:pointer } button.ghost { background:var(--panel); color:var(--ink) }
+  #graphwrap { flex:1; min-height:380px; position:relative } #graph { position:absolute; inset:0; border:1px solid var(--line); border-radius:8px }
+  #legend { position:absolute; left:8px; bottom:8px; font-size:11px; color:var(--mute); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px 8px; display:flex; gap:10px; flex-wrap:wrap }
+  #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
+  #log { height:120px; overflow:auto; font:12px/1.5 ui-monospace,monospace; color:var(--mute) } #log b { color:var(--ink) }
+  .k-new { color:var(--new) } .k-miss { color:var(--miss) } .k-ask { color:var(--ask) }
 </style>
 </head>
 <body>
 <header>
   <h1>🐕 PuppyPi Mind</h1>
+  <span class="pill"><span class="live" id="dot"></span><span id="conn">connecting…</span></span>
   <span class="pill" id="loc"></span><span class="pill" id="stats"></span><span class="pill" id="nams"></span>
   <span style="flex:1"></span>
-  <input type="text" id="locin" placeholder="Set location" style="max-width:160px;flex:none">
+  <input type="text" id="locin" placeholder="Set location" style="max-width:150px;flex:none;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
   <button class="ghost" id="setloc">Set</button>
-  <button id="watch">Start watching</button>
+  <button class="ghost" id="demo" title="Replay a scripted booth day so you can watch the graph build without a robot">▶ Demo replay</button>
+  <button id="watch">Start camera</button>
 </header>
 <main>
-  <section>
-    <h2>Talk with the environment</h2>
-    <div id="chat"></div>
-    <form id="f"><input type="text" id="q" placeholder="What do you see? What changed since the beginning?" autocomplete="off"><button>Ask</button></form>
-  </section>
-  <section>
-    <h2>Right now (latest observation)</h2>
-    <div id="current"></div>
-    <h2 style="margin-top:14px">Memory graph</h2>
-    <div id="graph"></div>
-  </section>
-  <section><h2>Recent ingests</h2><div id="recent"></div></section>
-  <section><h2>Observation timeline</h2><div id="timeline"></div></section>
+  <div class="col">
+    <section>
+      <h2><span>Live camera</span><span id="vstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="video">
+        <img id="vimg" alt="" hidden>
+        <div id="novid">No frames yet.<br>Press “Start camera”, or run the robot streamer.</div>
+        <div class="zones"><div class="zone" id="z-left"></div><div class="zone" id="z-center"></div><div class="zone" id="z-right"></div></div>
+        <div id="scan"></div>
+      </div>
+    </section>
+    <section style="flex:1">
+      <h2>Talk with the environment</h2>
+      <div id="chat"></div>
+      <form id="f"><input type="text" id="q" placeholder="What changed since the beginning?" autocomplete="off"><button>Ask</button></form>
+    </section>
+  </div>
+  <div class="col">
+    <section style="flex:1">
+      <h2><span>Memory graph (live)</span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="graphwrap"><div id="graph"></div>
+        <div id="legend"><span><i style="background:var(--obj)"></i>object</span><span><i style="background:var(--loc)"></i>location</span>
+          <span><i style="background:var(--gone)"></i>possibly gone</span><span><i style="background:var(--new)"></i>new</span>
+          <span><i style="background:var(--miss)"></i>missed</span><span><i style="background:var(--ask)"></i>consulted by agent</span></div></div>
+    </section>
+    <section><h2>Event feed</h2><div id="log"></div></section>
+  </div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let net;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+const post = (p, body) => api(p, { method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
 
+/* ---------- graph ---------- */
+const nodes = new vis.DataSet(), edges = new vis.DataSet();
+const net = new vis.Network($('#graph'), { nodes, edges }, {
+  physics: { solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-70, springLength:120, springConstant:.06, damping:.5 }, stabilization:false },
+  nodes: { shape:'dot', borderWidth:2, font:{ color:css('--ink'), size:13 } },
+  edges: { arrows:'to', smooth:{ type:'dynamic' }, font:{ size:10, color:css('--mute'), strokeWidth:0, align:'middle' }, width:1.5 },
+  interaction: { hover:true },
+});
+const baseOf = n => n.kind === 'Location' ? { bg:css('--loc'), size:20, shape:'box' }
+  : n.status === 'possibly_gone' ? { bg:css('--gone'), size:14, shape:'dot' } : { bg:css('--obj'), size:16, shape:'dot' };
+const nodeLabel = n => n.kind === 'Location' ? '📍 ' + n.label : (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label;
+const edgeId = e => `${e.source}|${e.type}|${e.target}`;
+
+function tween(from, to, ms, step, done) {
+  const t0 = performance.now();
+  (function f(t) { const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3); step(from + (to - from) * e); k < 1 ? requestAnimationFrame(f) : done && done(); })(t0);
+}
+const timers = {};
+function glow(id, color, ms = 1600) {
+  if (!nodes.get(id)) return;
+  clearTimeout(timers[id]);
+  nodes.update({ id, borderWidth:5, color:{ border:color, background:nodes.get(id)._bg }, shadow:{ enabled:true, color, size:28, x:0, y:0 } });
+  timers[id] = setTimeout(() => nodes.get(id) && nodes.update({ id, borderWidth:2, color:{ border:nodes.get(id)._bg, background:nodes.get(id)._bg }, shadow:{ enabled:false } }), ms);
+}
+function flashEdge(id, color) {
+  if (!edges.get(id)) return;
+  edges.update({ id, width:5, color:{ color } });
+  setTimeout(() => edges.get(id) && edges.update({ id, width:1.5, color:{ color:css('--mute') } }), 1400);
+}
+
+let syncing = Promise.resolve(), known = { n: new Set(), e: new Set() };
+function syncGraph() {
+  syncing = syncing.then(async () => {
+    const g = await api('/api/graph');
+    const seen = new Set();
+    for (const n of g.nodes) {
+      seen.add(n.id); const b = baseOf(n);
+      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind };
+      if (!nodes.get(n.id)) {                                  // newly appeared: grow in from nothing
+        nodes.add({ ...view, size:2 });
+        tween(2, b.size, 500, v => nodes.get(n.id) && nodes.update({ id:n.id, size:v }));
+      } else nodes.update({ ...view, size:b.size });
+    }
+    for (const id of nodes.getIds()) if (!seen.has(id)) {      // vanished: fade then remove
+      tween(nodes.get(id).size || 14, 0, 500, v => nodes.get(id) && nodes.update({ id, size:v }), () => nodes.remove(id));
+    }
+    const eseen = new Set();
+    for (const e of g.edges) {
+      const id = edgeId(e); eseen.add(id);
+      if (!edges.get(id)) {
+        edges.add({ id, from:e.source, to:e.target, label:e.type === 'LOCATED_AT' ? '' : e.type, dashes:e.type === 'LOCATED_AT', color:{ color:css('--mute') }, width:1.5 });
+        if (e.type !== 'LOCATED_AT') flashEdge(id, css('--new'));
+      }
+    }
+    for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, '#f85149'); setTimeout(() => edges.remove(id), 900); }
+    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} edges`;
+  }).catch(e => log('error', 'graph: ' + e.message));
+  return syncing;
+}
+
+/* ---------- video overlay ---------- */
+let chipTimer;
+function showChips(objs) {
+  for (const z of ['left','center','right']) $('#z-' + z).innerHTML = '';
+  for (const o of objs) {
+    const el = document.createElement('div'); el.className = 'chip' + (o.new ? ' new' : '');
+    el.textContent = `${o.new ? '✨ ' : ''}${o.color !== 'unknown' ? o.color + ' ' : ''}${o.label} ${Math.round(o.conf * 100)}%`;
+    ($('#z-' + (['left','center','right'].includes(o.zone) ? o.zone : 'center'))).appendChild(el);
+  }
+  clearTimeout(chipTimer); chipTimer = setTimeout(() => ['left','center','right'].forEach(z => $('#z-' + z).innerHTML = ''), 9000);
+}
+
+/* ---------- log + chat ---------- */
+function log(kind, html) {
+  const d = document.createElement('div'); d.innerHTML = `<span style="opacity:.6">${new Date().toLocaleTimeString()}</span> <span class="k-${kind}">${html}</span>`;
+  const L = $('#log'); L.prepend(d); while (L.children.length > 80) L.lastChild.remove();
+}
 function add(cls, text, evidence) {
   const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text;
   if (evidence && evidence.length) {
@@ -61,39 +172,58 @@ function add(cls, text, evidence) {
     e.innerHTML = '<summary>Evidence: ' + evidence.map(t => esc(t.tool)).join(' → ') + '</summary><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>';
     d.appendChild(e);
   }
-  $('#chat').appendChild(d); $('#chat').scrollTop = 1e9;
+  $('#chat').appendChild(d); $('#chat').scrollTop = 1e9; return d;
 }
 $('#f').onsubmit = async e => {
   e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; $('#q').value = '';
-  add('u', q); add('a', '…');
-  try { const r = await api('/api/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q}) });
-    $('#chat').lastChild.remove(); add('a', r.answer, r.evidence); }
-  catch (err) { $('#chat').lastChild.textContent = 'Error: ' + err.message; }
+  add('u', q); const w = add('a', '…');
+  try { const r = await post('/api/ask', { question:q }); w.remove(); add('a', r.answer, r.evidence); }
+  catch (err) { w.textContent = 'Error: ' + err.message; }
 };
-$('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await api('/api/location', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:n})}); refresh(); } };
-$('#watch').onclick = async () => { const w = $('#watch').dataset.on === '1'; await api('/api/watch/' + (w ? 'stop' : 'start'), {method:'POST'}); refresh(); };
 
-async function refresh() {
+/* ---------- live events (SSE) ---------- */
+function connect() {
+  const es = new EventSource('/api/events');
+  es.onopen = () => { $('#conn').textContent = 'live'; $('#dot').classList.add('on'); };
+  es.onerror = () => { $('#conn').textContent = 'reconnecting…'; $('#dot').classList.remove('on'); };
+  es.addEventListener('status', e => {
+    const d = JSON.parse(e.data); $('#scan').classList.toggle('on', d.state === 'perceiving');
+    $('#vstat').textContent = d.state === 'perceiving' ? 'analysing frame…' : (d.note || '');
+  });
+  es.addEventListener('error', e => { if (e.data) { const d = JSON.parse(e.data); log('miss', '⚠ ' + esc(d.error)); $('#scan').classList.remove('on'); } });
+  es.addEventListener('observation', async e => {
+    const d = JSON.parse(e.data);
+    $('#scan').classList.remove('on'); $('#vstat').textContent = '';
+    showChips(d.objects);
+    const n = d.objects.filter(o => o.new).map(o => o.label);
+    log('new', `<b>${esc(d.location)}</b> · ${d.objects.length} seen` + (n.length ? ` · new: ${esc(n.join(', '))}` : '') + (d.missed.length ? ` · <span class="k-miss">missed: ${esc(d.missed.map(m => m.label + (m.status === 'possibly_gone' ? ' (possibly gone)' : '')).join(', '))}</span>` : '') + ` — ${esc(d.summary)}`);
+    await syncGraph();
+    d.objects.forEach(o => glow(o.id, o.new ? css('--new') : css('--seen')));
+    d.missed.forEach(m => glow(m.id, css('--miss'), 2200));
+    d.relations.forEach(r => flashEdge(`${r.a}|${r.predicate}|${r.b}`, css('--new')));
+    glow('loc:' + d.location, css('--loc'));
+    refreshStats();
+  });
+  es.addEventListener('query', e => {
+    const d = JSON.parse(e.data);
+    log('ask', `agent used ${esc(d.tools.join(' → ') || 'no tools')} for “${esc(d.question)}”`);
+    d.ids.forEach(id => glow(id, css('--ask'), 3500));
+  });
+}
+
+/* ---------- controls / state ---------- */
+async function refreshStats() {
   const s = await api('/api/state');
   $('#loc').textContent = '📍 ' + s.location; $('#nams').textContent = 'NAMS ' + (s.nams ? 'on' : 'off');
   $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
-  $('#watch').textContent = s.watching ? 'Stop watching' : 'Start watching'; $('#watch').dataset.on = s.watching ? '1' : '0';
-  const c = s.current;
-  $('#current').innerHTML = c.observation ? `<div style="color:var(--mute)">${esc(c.ts)} · ${esc(c.summary)}</div><ul>` +
-    c.objects.map(o => `<li>${esc(o.color)} ${esc(o.label)} <span class="tag">${esc(o.zone)}</span> <span class="tag">${(o.confidence*100|0)}%</span></li>`).join('') + '</ul>' +
-    (c.relations.length ? '<div style="color:var(--mute);margin-top:6px">' + c.relations.map(r => `${esc(r.subject)} <b>${esc(r.predicate)}</b> ${esc(r.object)}`).join('<br>') + '</div>' : '')
-    : '<i>No observations yet.</i>';
-  $('#recent').innerHTML = s.recent.length ? '<ul>' + s.recent.map(r => r.error ? `<li>⚠ ${esc(r.error)}</li>` : r.skipped ? `<li>⏭ ${esc(r.skipped)}</li>` :
-    `<li>${esc((r.ts||'').slice(11,19))} new: ${esc((r.new_objects||[]).map(x=>x.split(' (')[0]).join(', ')||'–')} · missed: ${esc((r.missed||[]).map(m=>m.label).join(', ')||'–')}</li>`).join('') + '</ul>' : '<i>Nothing yet.</i>';
-  $('#timeline').innerHTML = '<ul>' + s.timeline.map(t => `<li>${esc(t.ts.slice(0,19))} · ${esc(t.location)} · ${esc(t.summary)}</li>`).join('') + '</ul>';
-  const g = await api('/api/graph');
-  const col = {Object:'#4fb3ff', Location:'#3fb950', Robot:'#d29922'};
-  const nodes = g.nodes.map(n => ({id:n.id, label:n.label, color: n.status==='possibly_gone' ? '#888' : col[n.kind], font:{color:'#fff'}, shape: n.kind==='Object' ? 'dot' : 'box'}));
-  const edges = g.edges.map(e => ({from:e.source, to:e.target, label:e.type, arrows:'to', font:{size:9, color:'#8b98a5'}}));
-  if (!net) net = new vis.Network($('#graph'), {nodes:new vis.DataSet(nodes), edges:new vis.DataSet(edges)}, {physics:{stabilization:true}, nodes:{size:14}});
-  else net.setData({nodes:new vis.DataSet(nodes), edges:new vis.DataSet(edges)});
+  $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
+  if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
 }
-refresh(); setInterval(refresh, 8000);
+$('#watch').onclick = async () => { const on = $('#watch').dataset.on === '1'; await post('/api/watch/' + (on ? 'stop' : 'start')); setTimeout(refreshStats, 1200); };
+$('#demo').onclick = () => post('/api/demo/replay?delay=4').then(() => log('new', 'demo replay started'));
+$('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); refreshStats(); } };
+
+(async () => { await syncGraph(); await refreshStats(); connect(); setInterval(refreshStats, 5000); })();
 </script>
 </body>
 </html>
