@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .brain import Brain
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="puppy-mind", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=STATIC), name="static")  # served locally: the robot's Wi-Fi has no internet
 
 
 def _push(r: dict) -> None:
