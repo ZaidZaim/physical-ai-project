@@ -310,6 +310,8 @@ async function refreshDrive() {
   try {
     const s = await api('/api/drive/state');
     $('#rstate').textContent = s.robot_online ? 'robot online' : 'robot offline'; $('#rstate').style.color = s.robot_online ? 'var(--new)' : '';
+    if (armed && !s.robot_online) $('#dwarn').textContent = 'Robot is not polling this computer, so nothing will move. Start puppy_drive.py on the robot (the command is in the terminal where you ran robot-test).';
+    else if ($('#dwarn').textContent.startsWith('Robot is not polling')) $('#dwarn').textContent = '';
     const v = $('#vstat');
     if (s.moving) v.textContent = 'moving: analysis paused'; else if (v.textContent.startsWith('moving')) v.textContent = '';
   } catch (e) {}
