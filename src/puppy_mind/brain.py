@@ -7,6 +7,7 @@ change is published on `bus` (served as Server-Sent Events) so the UI can animat
 from __future__ import annotations
 
 import os
+import collections
 import queue
 import re
 import threading
@@ -69,6 +70,8 @@ class Brain:
         self.location = self.s.default_location
         self.frame: bytes | None = None
         self.frame_id = 0
+        self._ftimes: collections.deque = collections.deque(maxlen=120)
+        self._src: FrameSource | None = None
         self._last_hash: dict[str, int] = {}
         self._last_perceive = 0.0
         self._busy = threading.Lock()
@@ -82,10 +85,16 @@ class Brain:
             self.perception = Perception(self.s)
             self.agent = Agent(self.s, self.mem, self.nams)
 
+    @property
+    def fps(self) -> float:
+        now = time.monotonic()
+        return round(sum(1 for t in tuple(self._ftimes) if now - t <= 2.0) / 2.0, 1)
+
     # ---- live frames
     def submit_frame(self, jpeg: bytes, *, source: str = "camera", location: str | None = None) -> bool:
         """Show the frame immediately; start perception if due and idle. Returns True if perception started."""
         self.frame, self.frame_id = jpeg, self.frame_id + 1
+        self._ftimes.append(time.monotonic())
         if self.drive.moving:  # blurry + viewpoint changing: don't analyse, don't learn from it
             self._moved = True
             return False
@@ -148,7 +157,8 @@ class Brain:
         return res
 
     # ---- continuous watching
-    def watch(self, source: FrameSource, interval: float, on_result=None, fps: float = 8.0) -> None:
+    def watch(self, source: FrameSource, interval: float, on_result=None, fps: float = 40.0) -> None:
+        self._src = source
         folder = isinstance(source, FolderSource)  # replay: perceive every frame, no live-video pacing
 
         def loop() -> None:
@@ -173,6 +183,9 @@ class Brain:
         self._stop.set()
         if self._watch:
             self._watch.join(timeout=5)
+        if self._src:
+            self._src.close()
+            self._src = None
 
     @property
     def watching(self) -> bool:

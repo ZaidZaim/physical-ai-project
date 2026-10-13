@@ -169,6 +169,8 @@ def state():
         "location": brain.location,
         "watching": brain.watching,
         "has_frame": brain.frame is not None,
+        "fps": brain.fps,
+        "camera_error": getattr(brain._src, "error", "") if brain._src else "",
         "nams": brain.nams.enabled,
         "stats": brain.mem.stats(),
         "current": brain.mem.current_view(),

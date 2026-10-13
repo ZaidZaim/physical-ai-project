@@ -61,7 +61,7 @@
 <main>
   <div class="col">
     <section>
-      <h2><span>Live camera</span><span id="vstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <h2><span>Live camera</span><span><span id="fps" style="text-transform:none;letter-spacing:0;margin-right:10px"></span><span id="vstat" style="text-transform:none;letter-spacing:0"></span></span></h2>
       <div id="video">
         <img id="vimg" alt="" hidden>
         <div id="novid">No frames yet.<br>Press “Start camera”, or run the robot streamer.</div>
@@ -241,6 +241,7 @@ async function refreshStats() {
   $('#loc').textContent = '📍 ' + s.location; $('#nams').textContent = 'NAMS ' + (s.nams ? 'on' : 'off');
   $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
   $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
+  $('#fps').textContent = s.watching || s.fps ? `${s.fps} fps` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
   if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
 }
 $('#watch').onclick = async () => { const on = $('#watch').dataset.on === '1'; await post('/api/watch/' + (on ? 'stop' : 'start')); setTimeout(refreshStats, 1200); };
@@ -322,7 +323,7 @@ async function refreshDrive() {
 }
 paintPad(); setInterval(refreshDrive, 1500);
 
-(async () => { await syncGraph(); await refreshStats(); connect(); setInterval(refreshStats, 5000); })();
+(async () => { await syncGraph(); await refreshStats(); connect(); setInterval(refreshStats, 2000); })();
 </script>
 </body>
 </html>

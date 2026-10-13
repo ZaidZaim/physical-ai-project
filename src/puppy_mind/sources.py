@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import io
+import threading
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -32,6 +34,9 @@ class FrameSource:
     def read(self) -> bytes | None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def close(self) -> None:
+        pass
+
 
 class CvSource(FrameSource):
     def __init__(self, target: str | int, name: str):
@@ -46,6 +51,65 @@ class CvSource(FrameSource):
             return None
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
         return buf.tobytes() if ok else None
+
+
+class MjpegSource(FrameSource):
+    """Pulls an MJPEG-over-HTTP stream on a background thread and keeps ONLY the newest JPEG.
+
+    Why not cv2.VideoCapture: it hands out frames in order, so if we read slower than the robot sends,
+    frames queue up and the picture lags further behind every second. Here the reader never falls behind,
+    old frames are dropped, and the JPEG bytes pass through untouched (no decode/re-encode, low CPU).
+    """
+
+    SOI, EOI = b"\xff\xd8", b"\xff\xd9"
+
+    def __init__(self, url: str, name: str = "puppypi-mjpeg"):
+        self.url, self.name = url, name
+        self._latest: bytes | None = None
+        self._seq = self._seen = 0
+        self.error = ""
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True, name="mjpeg-reader")
+        self._t.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                with urllib.request.urlopen(self.url, timeout=6) as r:
+                    buf = b""
+                    while not self._stop.is_set():
+                        chunk = r.read1(65536)  # whatever has arrived; read(n) would wait to fill n bytes and batch frames
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while True:
+                            a = buf.find(self.SOI)
+                            if a < 0:
+                                buf = b""
+                                break
+                            b = buf.find(self.EOI, a + 2)
+                            if b < 0:
+                                buf = buf[a:]
+                                break
+                            self._latest = buf[a : b + 2]
+                            self._seq += 1
+                            buf = buf[b + 2 :]
+                        if len(buf) > 4_000_000:  # never grow unbounded on garbage
+                            buf = b""
+                    self.error = "stream ended"
+            except Exception as e:
+                self.error = f"{type(e).__name__}: {e}"[:160]
+            self._stop.wait(1.0)  # reconnect
+
+    def read(self) -> bytes | None:
+        """Newest frame if it is new since the last call, else None."""
+        if self._seq == self._seen:
+            return None
+        self._seen = self._seq
+        return self._latest
+
+    def close(self) -> None:
+        self._stop.set()
 
 
 class FolderSource(FrameSource):
@@ -68,5 +132,5 @@ def open_source(spec: str) -> FrameSource:
     if spec.startswith("folder:"):
         return FolderSource(spec.split(":", 1)[1])
     if spec.startswith("http"):
-        return CvSource(spec, "puppypi-mjpeg")
+        return MjpegSource(spec)
     raise ValueError(f"unknown camera source: {spec}")
