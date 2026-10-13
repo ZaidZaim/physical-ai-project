@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PuppyPi Mind</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+  :root { --bg:#0f1419; --panel:#182028; --ink:#e6edf3; --mute:#8b98a5; --accent:#4fb3ff; --ok:#3fb950; --warn:#d29922; --line:#26323d; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f6f8fa; --panel:#fff; --ink:#1f2328; --mute:#656d76; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --line:#d0d7de; } }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,sans-serif }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  header h1 { font-size:16px; margin:0 } .pill { padding:2px 8px; border-radius:99px; background:var(--panel); border:1px solid var(--line); color:var(--mute); font-size:12px }
+  main { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 16px }
+  @media (max-width:860px){ main{grid-template-columns:1fr} }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0 }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 8px }
+  #chat { height:340px; overflow:auto; display:flex; flex-direction:column; gap:8px }
+  .m { padding:8px 10px; border-radius:8px; max-width:92%; white-space:pre-wrap } .u { background:var(--accent); color:#fff; align-self:flex-end } .a { background:var(--bg); border:1px solid var(--line) }
+  details { font-size:12px; color:var(--mute); margin-top:4px } pre { overflow:auto; max-height:200px }
+  form { display:flex; gap:8px; margin-top:8px } input[type=text] { flex:1; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+  button { padding:8px 12px; border-radius:6px; border:1px solid var(--line); background:var(--accent); color:#fff; cursor:pointer } button.ghost { background:var(--panel); color:var(--ink) }
+  #graph { height:320px; border:1px solid var(--line); border-radius:6px } ul { margin:0; padding-left:18px } li { margin:2px 0 }
+  .tag { font-size:11px; padding:1px 6px; border-radius:4px; background:var(--bg); border:1px solid var(--line) } .present{color:var(--ok)} .possibly_gone{color:var(--warn)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🐕 PuppyPi Mind</h1>
+  <span class="pill" id="loc"></span><span class="pill" id="stats"></span><span class="pill" id="nams"></span>
+  <span style="flex:1"></span>
+  <input type="text" id="locin" placeholder="Set location" style="max-width:160px;flex:none">
+  <button class="ghost" id="setloc">Set</button>
+  <button id="watch">Start watching</button>
+</header>
+<main>
+  <section>
+    <h2>Talk with the environment</h2>
+    <div id="chat"></div>
+    <form id="f"><input type="text" id="q" placeholder="What do you see? What changed since the beginning?" autocomplete="off"><button>Ask</button></form>
+  </section>
+  <section>
+    <h2>Right now (latest observation)</h2>
+    <div id="current"></div>
+    <h2 style="margin-top:14px">Memory graph</h2>
+    <div id="graph"></div>
+  </section>
+  <section><h2>Recent ingests</h2><div id="recent"></div></section>
+  <section><h2>Observation timeline</h2><div id="timeline"></div></section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let net;
+async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+
+function add(cls, text, evidence) {
+  const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text;
+  if (evidence && evidence.length) {
+    const e = document.createElement('details');
+    e.innerHTML = '<summary>Evidence: ' + evidence.map(t => esc(t.tool)).join(' → ') + '</summary><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>';
+    d.appendChild(e);
+  }
+  $('#chat').appendChild(d); $('#chat').scrollTop = 1e9;
+}
+$('#f').onsubmit = async e => {
+  e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; $('#q').value = '';
+  add('u', q); add('a', '…');
+  try { const r = await api('/api/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q}) });
+    $('#chat').lastChild.remove(); add('a', r.answer, r.evidence); }
+  catch (err) { $('#chat').lastChild.textContent = 'Error: ' + err.message; }
+};
+$('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await api('/api/location', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:n})}); refresh(); } };
+$('#watch').onclick = async () => { const w = $('#watch').dataset.on === '1'; await api('/api/watch/' + (w ? 'stop' : 'start'), {method:'POST'}); refresh(); };
+
+async function refresh() {
+  const s = await api('/api/state');
+  $('#loc').textContent = '📍 ' + s.location; $('#nams').textContent = 'NAMS ' + (s.nams ? 'on' : 'off');
+  $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
+  $('#watch').textContent = s.watching ? 'Stop watching' : 'Start watching'; $('#watch').dataset.on = s.watching ? '1' : '0';
+  const c = s.current;
+  $('#current').innerHTML = c.observation ? `<div style="color:var(--mute)">${esc(c.ts)} · ${esc(c.summary)}</div><ul>` +
+    c.objects.map(o => `<li>${esc(o.color)} ${esc(o.label)} <span class="tag">${esc(o.zone)}</span> <span class="tag">${(o.confidence*100|0)}%</span></li>`).join('') + '</ul>' +
+    (c.relations.length ? '<div style="color:var(--mute);margin-top:6px">' + c.relations.map(r => `${esc(r.subject)} <b>${esc(r.predicate)}</b> ${esc(r.object)}`).join('<br>') + '</div>' : '')
+    : '<i>No observations yet.</i>';
+  $('#recent').innerHTML = s.recent.length ? '<ul>' + s.recent.map(r => r.error ? `<li>⚠ ${esc(r.error)}</li>` : r.skipped ? `<li>⏭ ${esc(r.skipped)}</li>` :
+    `<li>${esc((r.ts||'').slice(11,19))} new: ${esc((r.new_objects||[]).map(x=>x.split(' (')[0]).join(', ')||'–')} · missed: ${esc((r.missed||[]).map(m=>m.label).join(', ')||'–')}</li>`).join('') + '</ul>' : '<i>Nothing yet.</i>';
+  $('#timeline').innerHTML = '<ul>' + s.timeline.map(t => `<li>${esc(t.ts.slice(0,19))} · ${esc(t.location)} · ${esc(t.summary)}</li>`).join('') + '</ul>';
+  const g = await api('/api/graph');
+  const col = {Object:'#4fb3ff', Location:'#3fb950', Robot:'#d29922'};
+  const nodes = g.nodes.map(n => ({id:n.id, label:n.label, color: n.status==='possibly_gone' ? '#888' : col[n.kind], font:{color:'#fff'}, shape: n.kind==='Object' ? 'dot' : 'box'}));
+  const edges = g.edges.map(e => ({from:e.source, to:e.target, label:e.type, arrows:'to', font:{size:9, color:'#8b98a5'}}));
+  if (!net) net = new vis.Network($('#graph'), {nodes:new vis.DataSet(nodes), edges:new vis.DataSet(edges)}, {physics:{stabilization:true}, nodes:{size:14}});
+  else net.setData({nodes:new vis.DataSet(nodes), edges:new vis.DataSet(edges)});
+}
+refresh(); setInterval(refresh, 8000);
+</script>
+</body>
+</html>

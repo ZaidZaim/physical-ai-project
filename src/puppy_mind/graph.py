@@ -1,0 +1,428 @@
+"""Neo4j (Aura) contextual memory: ingestion with entity matching + temporal queries.
+
+Model
+  (Robot)-[:OBSERVED]->(Object)
+  (Observation)-[:CAPTURED_BY]->(Robot), -[:IN_SESSION]->(Session), -[:AT]->(Location)
+  (Observation)-[:DETECTED {confidence, zone}]->(Object)
+  (Observation)-[:MISSED]->(Object)           evidence of absence (not proof of removal)
+  (Object)-[:LOCATED_AT {first_seen,last_seen,count}]->(Location)
+  (Object)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,last_confirmed}]->(Object)
+
+Object.status: present | possibly_gone (>= MISS_THRESHOLD consecutive misses at the same location)
+"""
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from neo4j import GraphDatabase, RoutingControl
+
+from .config import Settings
+from .matching import Known, Seen, assign
+from .models import EXCLUSIVE_PREDICATES, PREDICATES, Scene
+
+REL_ALT = "|".join(PREDICATES)
+_WRITE_WORDS = re.compile(
+    r"\b(create|merge|delete|detach|set|remove|drop|load|foreach|call\s+(apoc|dbms))\b", re.I
+)
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class Memory:
+    def __init__(self, s: Settings):
+        self.s = s
+        self.driver = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password))
+        self.db = s.neo4j_database
+
+    def close(self) -> None:
+        self.driver.close()
+
+    # ---- plumbing
+    def _read(self, q: str, **p) -> list[dict[str, Any]]:
+        recs, _, _ = self.driver.execute_query(
+            q, p, database_=self.db, routing_=RoutingControl.READ
+        )
+        return [r.data() for r in recs]
+
+    def _write(self, q: str, **p) -> list[dict[str, Any]]:
+        recs, _, _ = self.driver.execute_query(q, p, database_=self.db)
+        return [r.data() for r in recs]
+
+    # ---- setup
+    def init_schema(self) -> None:
+        for q in [
+            "CREATE CONSTRAINT object_id IF NOT EXISTS FOR (n:Object) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT obs_id IF NOT EXISTS FOR (n:Observation) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT location_name IF NOT EXISTS FOR (n:Location) REQUIRE n.name IS UNIQUE",
+            "CREATE CONSTRAINT robot_name IF NOT EXISTS FOR (n:Robot) REQUIRE n.name IS UNIQUE",
+            "CREATE INDEX object_label IF NOT EXISTS FOR (n:Object) ON (n.label)",
+            "CREATE INDEX obs_ts IF NOT EXISTS FOR (n:Observation) ON (n.ts)",
+        ]:
+            self._write(q)
+        self._write("MERGE (:Robot {name:$n})", n=self.s.robot_name)
+
+    def reset(self) -> None:
+        """Delete all memory this app owns. Never touches other labels."""
+        for lbl in ("Observation", "Object", "Session", "Location", "Robot"):
+            self._write(f"MATCH (n:{lbl}) DETACH DELETE n")
+
+    def start_session(self, session_id: str | None = None) -> str:
+        sid = session_id or f"session-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+        self._write(
+            "MERGE (r:Robot {name:$r}) "
+            "MERGE (s:Session {id:$sid}) ON CREATE SET s.started_at=datetime($ts) "
+            "MERGE (r)-[:RAN]->(s)",
+            sid=sid, ts=now_iso(), r=self.s.robot_name,
+        )
+        return sid
+
+    # ---- ingestion
+    def ingest(
+        self,
+        scene: Scene,
+        *,
+        session_id: str,
+        location: str | None = None,
+        source: str = "camera",
+        ts: str | None = None,
+        image_ref: str | None = None,
+    ) -> dict[str, Any]:
+        ts = ts or now_iso()
+        location = location or self.s.default_location
+        obs_id = f"obs-{uuid.uuid4().hex[:10]}"
+
+        dets = {d.idx: d for d in scene.objects if d.confidence >= self.s.min_confidence}
+        rels = [
+            r for r in scene.relations
+            if r.subject in dets and r.object in dets and r.subject != r.object
+            and r.predicate in PREDICATES and r.confidence >= self.s.min_confidence
+        ]
+
+        # 1) known objects at this location (+ their active relations as identity anchors)
+        rows = self._read(
+            """
+            MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
+            OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active
+            RETURN o.id AS id, o.label AS label, coalesce(o.color,'unknown') AS color,
+                   coalesce(o.last_zone,'unknown') AS zone,
+                   collect(DISTINCT [type(r), b.label]) AS anchors
+            """,
+            loc=location, preds=list(PREDICATES),
+        )
+        seen_anchor: dict[int, set] = {i: set() for i in dets}
+        for r in rels:
+            seen_anchor[r.subject].add((r.predicate, dets[r.object].label.lower()))
+        knowns = [
+            Known(
+                id=r["id"], label=r["label"], color=r["color"], zone=r["zone"],
+                anchors=frozenset((p, l) for p, l in r["anchors"] if p and l),
+            )
+            for r in rows
+        ]
+        seens = [
+            Seen(
+                idx=i, label=d.label.lower(), color=d.color.lower(), zone=d.zone,
+                confidence=d.confidence, anchors=frozenset(seen_anchor[i]),
+            )
+            for i, d in dets.items()
+        ]
+        mapping = assign(knowns, seens)
+
+        # 2) resolve ids (unmatched detections become new objects)
+        obj_id: dict[int, str] = {}
+        new_ids: set[str] = set()
+        for i in dets:
+            if mapping[i]:
+                obj_id[i] = mapping[i]  # type: ignore[assignment]
+            else:
+                obj_id[i] = f"obj-{uuid.uuid4().hex[:8]}"
+                new_ids.add(obj_id[i])
+
+        det_rows = [
+            {
+                "id": obj_id[i], "label": d.label.lower(), "color": d.color.lower(),
+                "description": d.description, "zone": d.zone, "conf": d.confidence,
+                "new": obj_id[i] in new_ids,
+            }
+            for i, d in dets.items()
+        ]
+
+        # 3) observation + objects + evidence edges
+        self._write(
+            """
+            MERGE (l:Location {name:$loc})
+            MERGE (r:Robot {name:$robot})
+            MERGE (s:Session {id:$sid}) ON CREATE SET s.started_at = datetime($ts)
+            CREATE (ob:Observation {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
+                                    image_ref:$img, n_objects:$n})
+            MERGE (ob)-[:CAPTURED_BY]->(r)
+            MERGE (ob)-[:IN_SESSION]->(s)
+            MERGE (ob)-[:AT]->(l)
+            WITH ob, l, r
+            UNWIND $dets AS d
+            MERGE (o:Object {id:d.id})
+              ON CREATE SET o.label=d.label, o.first_seen=datetime($ts), o.seen_count=0, o.miss_count=0
+            SET o.color = CASE WHEN d.color IN ['unknown',''] THEN coalesce(o.color,'unknown') ELSE d.color END,
+                o.description = CASE WHEN d.description='' THEN o.description ELSE d.description END,
+                o.last_seen=datetime($ts), o.last_zone=d.zone, o.last_confidence=d.conf,
+                o.seen_count=o.seen_count+1, o.miss_count=0, o.status='present'
+            MERGE (ob)-[:DETECTED {confidence:d.conf, zone:d.zone}]->(o)
+            MERGE (r)-[ro:OBSERVED]->(o) ON CREATE SET ro.first=datetime($ts)
+            SET ro.last=datetime($ts)
+            MERGE (o)-[la:LOCATED_AT]->(l)
+              ON CREATE SET la.first_seen=datetime($ts), la.count=0
+            SET la.last_seen=datetime($ts), la.count=la.count+1
+            """,
+            loc=location, robot=self.s.robot_name, sid=session_id, ts=ts, obs=obs_id,
+            summary=scene.summary, source=source, img=image_ref, n=len(det_rows), dets=det_rows,
+        )
+
+        # 4) spatial relations (one query per predicate: Cypher can't parametrise rel types;
+        #    the predicate is whitelisted by the Literal type + PREDICATES filter above)
+        by_pred: dict[str, list[dict]] = {}
+        for r in rels:
+            by_pred.setdefault(r.predicate, []).append(
+                {"a": obj_id[r.subject], "b": obj_id[r.object], "conf": r.confidence}
+            )
+        for pred, items in by_pred.items():
+            self._write(
+                f"""
+                UNWIND $items AS it
+                MATCH (a:Object {{id:it.a}}), (b:Object {{id:it.b}})
+                MERGE (a)-[r:{pred}]->(b)
+                  ON CREATE SET r.since=datetime($ts), r.count=0
+                SET r.active=true, r.until=null, r.last_confirmed=datetime($ts),
+                    r.count=r.count+1, r.confidence=it.conf, r.last_obs=$obs
+                """,
+                items=items, ts=ts, obs=obs_id,
+            )
+        visible = list(obj_id.values())
+        # containment is exclusive: a newly confirmed ON/INSIDE supersedes older ones of that subject
+        for pred in EXCLUSIVE_PREDICATES:
+            self._write(
+                f"""
+                MATCH (a:Object)-[old:{pred}]->(:Object)
+                WHERE a.id IN $vis AND old.active AND old.last_obs <> $obs
+                  AND EXISTS {{ (a)-[cur:{pred}]->(:Object) WHERE cur.last_obs = $obs }}
+                SET old.active=false, old.until=datetime($ts)
+                """,
+                vis=visible, ts=ts, obs=obs_id,
+            )
+        # a relation between two visible objects that was not re-seen has ended
+        self._write(
+            f"""
+            MATCH (a:Object)-[r:{REL_ALT}]->(b:Object)
+            WHERE a.id IN $vis AND b.id IN $vis AND r.active AND r.last_obs <> $obs
+            SET r.active=false, r.until=datetime($ts)
+            """,
+            vis=visible, ts=ts, obs=obs_id,
+        )
+
+        # 5) misses: expected here but not detected. One miss never means "gone".
+        missed = self._write(
+            """
+            MATCH (ob:Observation {id:$obs})
+            MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
+            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone']
+            SET o.miss_count = coalesce(o.miss_count,0)+1
+            SET o.status = CASE WHEN o.miss_count >= $thr THEN 'possibly_gone' ELSE o.status END
+            MERGE (ob)-[:MISSED]->(o)
+            RETURN o.id AS id, o.label AS label, o.miss_count AS misses, o.status AS status
+            """,
+            loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold,
+        )
+        return {
+            "observation_id": obs_id,
+            "ts": ts,
+            "location": location,
+            "new_objects": sorted(f"{d['label']} ({d['id']})" for d in det_rows if d["new"]),
+            "matched_objects": sorted(f"{d['label']} ({d['id']})" for d in det_rows if not d["new"]),
+            "missed": missed,
+            "relations": len(rels),
+        }
+
+    # ---- read tools (also exposed to the Q&A agent)
+    def current_view(self, location: str | None = None) -> dict[str, Any]:
+        rows = self._read(
+            """
+            MATCH (ob:Observation) WHERE $loc IS NULL OR (ob)-[:AT]->(:Location {name:$loc})
+            WITH ob ORDER BY ob.ts DESC LIMIT 1
+            OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Object)
+            OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.last_obs = ob.id
+            RETURN ob.id AS observation, toString(ob.ts) AS ts, ob.summary AS summary,
+                   [x IN collect(DISTINCT {id:o.id, label:o.label, color:o.color, zone:d.zone,
+                                           confidence:d.confidence}) WHERE x.id IS NOT NULL] AS objects,
+                   [x IN collect(DISTINCT {subject:o.label+' '+o.id, predicate:type(r),
+                                           object:b.label+' '+b.id}) WHERE x.predicate IS NOT NULL] AS relations
+            """,
+            loc=location, preds=list(PREDICATES),
+        )
+        return rows[0] if rows and rows[0]["observation"] else {"observation": None}
+
+    def find_object(self, label: str, color: str | None = None, limit: int = 10) -> list[dict]:
+        return self._read(
+            """
+            MATCH (o:Object) WHERE toLower(o.label) CONTAINS toLower($label)
+              AND ($color IS NULL OR toLower(coalesce(o.color,'')) = toLower($color))
+            OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Location)
+            WITH o, l, la ORDER BY la.last_seen DESC
+            WITH o, head(collect(l.name)) AS location
+            OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active
+            RETURN o.id AS id, o.label AS label, o.color AS color, o.description AS description,
+                   o.status AS status, o.miss_count AS consecutive_misses, o.seen_count AS times_seen,
+                   toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
+                   o.last_zone AS last_zone, location,
+                   [x IN collect({predicate:type(r), target:b.label+' '+b.id, since:toString(r.since)})
+                    WHERE x.predicate IS NOT NULL] AS active_relations
+            ORDER BY o.last_seen DESC LIMIT $limit
+            """,
+            label=label, color=color, preds=list(PREDICATES), limit=limit,
+        )
+
+    def related_objects(self, target_label: str, predicate: str = "ON", include_ended: bool = False) -> list[dict]:
+        predicate = predicate.upper()
+        if predicate not in PREDICATES:
+            return [{"error": f"predicate must be one of {PREDICATES}"}]
+        return self._read(
+            f"""
+            MATCH (a:Object)-[r:{predicate}]->(b:Object)
+            WHERE toLower(b.label) CONTAINS toLower($t) AND ($ended OR r.active)
+            RETURN a.id AS id, a.label AS label, a.color AS color, b.label+' '+b.id AS target,
+                   r.active AS currently, a.status AS status,
+                   toString(r.since) AS since, toString(r.last_confirmed) AS last_confirmed,
+                   toString(r.until) AS until, r.count AS times_confirmed
+            ORDER BY r.last_confirmed DESC LIMIT 30
+            """,
+            t=target_label, ended=include_ended,
+        )
+
+    def object_history(self, object_id: str, limit: int = 25) -> dict[str, Any]:
+        obs = self._read(
+            """
+            MATCH (o:Object {id:$id})
+            OPTIONAL MATCH (ob:Observation)-[d:DETECTED]->(o)
+            OPTIONAL MATCH (ob)-[:AT]->(l:Location)
+            WITH o, ob, d, l ORDER BY ob.ts DESC LIMIT $limit
+            RETURN o.label AS label, o.color AS color,
+                   collect({observation:ob.id, ts:toString(ob.ts), location:l.name,
+                            confidence:d.confidence, zone:d.zone}) AS sightings
+            """,
+            id=object_id, limit=limit,
+        )
+        rels = self._read(
+            f"""
+            MATCH (o:Object {{id:$id}})-[r:{REL_ALT}]-(x:Object)
+            RETURN type(r) AS predicate, startNode(r).id = $id AS outgoing, x.label+' '+x.id AS other,
+                   r.active AS currently, toString(r.since) AS since, toString(r.until) AS until
+            ORDER BY r.since DESC LIMIT 30
+            """,
+            id=object_id,
+        )
+        return {"object": obs[0] if obs else None, "relations": rels}
+
+    def first_observation(self, location: str | None = None) -> dict[str, Any]:
+        rows = self._read(
+            """
+            MATCH (ob:Observation) WHERE $loc IS NULL OR (ob)-[:AT]->(:Location {name:$loc})
+            WITH ob ORDER BY ob.ts ASC LIMIT 1
+            OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Object)
+            OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.last_obs = ob.id
+            RETURN ob.id AS observation, toString(ob.ts) AS ts, ob.summary AS summary,
+                   [x IN collect(DISTINCT {label:o.label, color:o.color, id:o.id}) WHERE x.id IS NOT NULL] AS objects,
+                   [x IN collect(DISTINCT {subject:o.label+' '+o.id, predicate:type(r),
+                                           object:b.label+' '+b.id}) WHERE x.predicate IS NOT NULL] AS relations
+            """,
+            loc=location, preds=list(PREDICATES),
+        )
+        return rows[0] if rows and rows[0]["observation"] else {"observation": None}
+
+    def changes_since(self, since_iso: str, location: str | None = None) -> dict[str, Any]:
+        new = self._read(
+            """
+            MATCH (o:Object) WHERE o.first_seen > datetime($since)
+              AND ($loc IS NULL OR (o)-[:LOCATED_AT]->(:Location {name:$loc}))
+            RETURN o.id AS id, o.label AS label, o.color AS color,
+                   toString(o.first_seen) AS first_seen, o.status AS status
+            """,
+            since=since_iso, loc=location,
+        )
+        gone = self._read(
+            """
+            MATCH (o:Object) WHERE o.status='possibly_gone'
+              AND ($loc IS NULL OR (o)-[:LOCATED_AT]->(:Location {name:$loc}))
+            RETURN o.id AS id, o.label AS label, o.color AS color,
+                   toString(o.last_seen) AS last_seen, o.miss_count AS consecutive_misses
+            """,
+            since=since_iso, loc=location,
+        )
+        moved = self._read(
+            f"""
+            MATCH (a:Object)-[r:{REL_ALT}]->(b:Object)
+            WHERE r.since > datetime($since) OR r.until > datetime($since)
+            RETURN a.label+' '+a.id AS subject, type(r) AS predicate, b.label+' '+b.id AS object,
+                   r.active AS currently, toString(r.since) AS since, toString(r.until) AS until
+            ORDER BY coalesce(r.until, r.since) DESC LIMIT 40
+            """,
+            since=since_iso,
+        )
+        return {"since": since_iso, "new_objects": new, "possibly_gone": gone, "relation_changes": moved}
+
+    def timeline(self, limit: int = 20) -> list[dict]:
+        return self._read(
+            """
+            MATCH (ob:Observation)
+            OPTIONAL MATCH (ob)-[:AT]->(l:Location)
+            RETURN ob.id AS id, toString(ob.ts) AS ts, l.name AS location, ob.summary AS summary,
+                   ob.n_objects AS n
+            ORDER BY ob.ts DESC LIMIT $limit
+            """,
+            limit=limit,
+        )
+
+    def read_cypher(self, query: str) -> list[dict]:
+        """Agent escape hatch: read-only (enforced by routing AND a keyword guard)."""
+        if _WRITE_WORDS.search(query):
+            return [{"error": "write operations are not allowed"}]
+        if not re.search(r"\blimit\b", query, re.I):
+            query += "\nLIMIT 50"
+        try:
+            return self._read(query)
+        except Exception as e:  # surface syntax errors so the model can retry
+            return [{"error": str(e)[:300]}]
+
+    def stats(self) -> dict[str, Any]:
+        return self._read(
+            """
+            RETURN count { (:Object) } AS objects, count { (:Observation) } AS observations,
+                   count { (:Location) } AS locations, count { (:Session) } AS sessions,
+                   count { (:Object {status:'present'}) } AS present,
+                   count { (:Object {status:'possibly_gone'}) } AS possibly_gone
+            """
+        )[0]
+
+    def graph_snapshot(self, limit: int = 300) -> dict[str, Any]:
+        nodes = self._read(
+            """
+            MATCH (n) WHERE n:Object OR n:Location OR n:Robot
+            RETURN elementId(n) AS id, labels(n)[0] AS kind,
+                   coalesce(n.label, n.name) AS label, n.color AS color, n.status AS status
+            LIMIT $limit
+            """,
+            limit=limit,
+        )
+        edges = self._read(
+            """
+            MATCH (a)-[r]->(b) WHERE (a:Object OR a:Robot) AND (b:Object OR b:Location)
+              AND type(r) IN $types AND coalesce(r.active, true)
+            RETURN elementId(a) AS source, elementId(b) AS target, type(r) AS type
+            LIMIT $limit
+            """,
+            types=list(PREDICATES) + ["LOCATED_AT", "OBSERVED"], limit=limit * 3,
+        )
+        return {"nodes": nodes, "edges": edges}
