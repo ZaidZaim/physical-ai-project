@@ -85,6 +85,13 @@ driving away never makes objects look "possibly gone".
 `src/puppy_mind/` brain (perception, graph, matching, agent, nams, server, cli) · `robot/` on-robot streamer ·
 `eval/` scenarios + 20 questions · `tests/` · `docs/`.
 
+## Milestone: robot test stage (2026-10-13)
+Verified on the real PuppyPi by the owner: live camera over the robot's Wi-Fi, keyboard drive through the robot's rosbridge
+(forward/back/turn, arm switch, speed levels). Known-good settings: stock gait restored on connect, turn capped at 25 deg/s,
+commands sent on change only, no forward+turn mixing. Not yet verified on hardware: perception/memory/Q&A (needs a working
+Aura login and an OpenAI key), `robot/puppy_drive.py` on the robot, the lighter 320x240 camera stream.
+Run it: `uv run puppy-mind robot-test` while joined to the robot's HW... Wi-Fi.
+
 ## Status / honest limits
 * Graph logic and matching are unit-tested (matching) and designed against Aura; the Aura-backed ingestion/queries have NOT yet been executed against a live instance (connection was failing when this was written).
 * Single camera, no pose: spatial relations are qualitative and "location" is a name you set (`/api/location`).
