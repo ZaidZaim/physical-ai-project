@@ -29,7 +29,14 @@ async def lifespan(app: FastAPI):
     global brain
     brain = Brain()
     brain.mem.init_schema()
+    url = os.getenv("ROSBRIDGE_URL")
+    if url:  # drive through the robot's own rosbridge: nothing to run on the robot
+        from .rosbridge import RosbridgeDriver
+
+        brain.rosbridge = RosbridgeDriver(url, brain.drive).start()
     yield
+    if getattr(brain, "rosbridge", None):
+        brain.rosbridge.close()
     brain.close()
 
 
@@ -257,4 +264,7 @@ def drive_cmd(ax: float | None = None, ay: float | None = None, ayaw: float | No
 
 @app.get("/api/drive/state")
 def drive_state():
-    return brain.drive.status()
+    st = brain.drive.status()
+    rb = getattr(brain, "rosbridge", None)
+    st["rosbridge"] = rb.status() if rb else None
+    return st

@@ -44,6 +44,14 @@ objects "disappear".
 Keep the robot still while it observes (stand/sit pose), steady lighting, camera at the area you want remembered.
 `WATCH_INTERVAL_S=5` with near-duplicate frame skipping keeps OpenAI cost low.
 
+## 0b. Drive without touching the robot (rosbridge mode)
+`puppy-mind robot-test` checks whether the robot serves rosbridge (port 9090, the same gateway its phone app uses). If so,
+the laptop drives it directly and nothing needs to be installed or run on the robot. Manual form:
+`uv run puppy-mind serve --robot-test --rosbridge ws://192.168.149.1:9090 --camera "<camera url>"`.
+Trade-off: the dead-man runs on the laptop (zero is sent on key release, expiry, disarm, exit), so if the laptop crashes or
+Wi-Fi drops mid-walk the robot is not told to stop. `robot/puppy_drive.py` on the robot does not have this weakness.
+Verified only against a simulated rosbridge; the real message type is read from the robot via `/rosapi/topic_type`.
+
 ## 4a. Getting a terminal on the robot (from Hiwonder docs, section 3)
 1. Join the robot's `HW...` Wi-Fi (password `hiwonder`).
 2. Install and open **VNC Viewer**, connect to `192.168.149.1`, login `pi` / `raspberrypi`. (Black screen: reboot the robot.)

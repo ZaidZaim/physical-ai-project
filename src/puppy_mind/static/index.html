@@ -309,9 +309,13 @@ document.querySelectorAll('#pad button[data-k]').forEach(b => {          // mous
 async function refreshDrive() {
   try {
     const s = await api('/api/drive/state');
-    $('#rstate').textContent = s.robot_online ? 'robot online' : 'robot offline'; $('#rstate').style.color = s.robot_online ? 'var(--new)' : '';
-    if (armed && !s.robot_online) $('#dwarn').textContent = 'Robot is not polling this computer, so nothing will move. Start puppy_drive.py on the robot (the command is in the terminal where you ran robot-test).';
-    else if ($('#dwarn').textContent.startsWith('Robot is not polling')) $('#dwarn').textContent = '';
+    const rb = s.rosbridge;
+    $('#rstate').textContent = rb ? (rb.connected ? 'robot connected (rosbridge)' : 'robot not reachable') : (s.robot_online ? 'robot online' : 'robot offline');
+    $('#rstate').style.color = (rb ? rb.connected : s.robot_online) ? 'var(--new)' : '';
+    const hint = rb ? (rb.connected ? '' : 'Cannot reach the rosbridge of the robot (' + rb.url + '): ' + (rb.error || 'connecting...') + '. Is the laptop on the Wi-Fi of the robot?')
+                    : 'Robot is not polling this computer, so nothing will move. Start puppy_drive.py on the robot (see the terminal where you ran robot-test).';
+    const bad = armed && (rb ? !rb.connected : !s.robot_online);
+    if (bad) $('#dwarn').textContent = hint; else if (/^(Robot is not polling|Cannot reach)/.test($('#dwarn').textContent)) $('#dwarn').textContent = '';
     const v = $('#vstat');
     if (s.moving) v.textContent = 'moving: analysis paused'; else if (v.textContent.startsWith('moving')) v.textContent = '';
   } catch (e) {}

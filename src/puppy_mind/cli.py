@@ -21,7 +21,7 @@ def _robot_test(robot_ip: str, port: int) -> int:
 
     import uvicorn
 
-    from .robotcheck import camera_url, check, local_ips
+    from .robotcheck import _open, camera_url, check, local_ips
 
     prefix = robot_ip.rsplit(".", 1)[0] + "."
     mine = [i for i in local_ips() if i.startswith(prefix)]
@@ -35,22 +35,28 @@ def _robot_test(robot_ip: str, port: int) -> int:
     code = check(robot_ip)
     cam = camera_url(robot_ip) if code == 0 else None
     os.environ["PUPPY_FAKE_MEMORY"] = "1"
+    bridge = _open(robot_ip, 9090, 2.0)
+    if bridge:
+        os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
     if cam:
         os.environ["CAMERA_SOURCE"] = cam
     base = f"http://{laptop}:{port}"
-    print(f"""
-=========== ON THE ROBOT: open VNC Viewer -> 192.168.149.1 (user pi / password raspberrypi), then in the
-=========== desktop terminal ENTER THE DOCKER CONTAINER (ROS lives inside it):
- docker exec -it -u ubuntu -w /home/ubuntu puppypi /bin/zsh
- echo $ROS_DISTRO                       # noetic = ROS1, humble = ROS2: the script handles both
- python3 -c "import urllib.request as u; u.urlretrieve('{base}/robot/puppy_drive.py','puppy_drive.py')"
- python3 puppy_drive.py --brain {base} --dry-run     # step 1: prints commands, moves nothing
- python3 puppy_drive.py --brain {base}               # step 2: real movement (dog held off the ground first!)
-===========================================================================
- In the page: [Start camera] for video, [Enable keyboard drive], then W/S forward-back, A/D turn, Space=stop, 1/2/3=speed.
- (Q/E sideways is not supported by the stock PuppyPi firmware.)
- Camera: {cam or 'NOT FOUND (driving can still be tested)'}
- Windows may ask to allow Python through the firewall: choose PRIVATE networks.
+    if bridge:
+        print(f"""
+ DRIVING: the robot's rosbridge is reachable (ws://{robot_ip}:9090), so NOTHING needs to run on the robot.
+ In the page: [Start camera], [Enable keyboard drive], then W/S forward-back, A/D turn, Space=stop, 1/2/3=speed.
+ Start on speed 1 with the dog held off the ground. Keep a hand on it / the power switch: if this laptop
+ crashes or Wi-Fi drops mid-walk the robot is NOT told to stop (the dead-man runs on the laptop).
+ Camera: {cam or 'NOT FOUND'}
+""")
+    else:
+        print(f"""
+ The robot's rosbridge (port 9090) is NOT reachable, so keyboard driving needs a small script ON the robot:
+   open VNC/SSH, enter the docker container, then run puppy_drive.py (see docs/ROBOT_SETUP.md section 4a), e.g.
+     python3 -c "import urllib.request as u; u.urlretrieve('{base}/robot/puppy_drive.py','puppy_drive.py')"
+     python3 puppy_drive.py --brain {base} --dry-run
+ Without that you still get the live camera. Hiwonder's phone app / handle can move the robot meanwhile.
+ Camera: {cam or 'NOT FOUND'}
 """)
     threading.Timer(2.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     uvicorn.run("puppy_mind.server:app", host="0.0.0.0", port=port)
@@ -81,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--robot-test", action="store_true",
                     help="no Aura/OpenAI needed: live camera + keyboard drive only (memory is in-RAM)")
+    sv.add_argument("--rosbridge", help="drive via the robot's rosbridge, e.g. ws://192.168.149.1:9090 (no robot terminal needed)")
     sv.add_argument("--camera", help="camera source for the Start camera button (overrides CAMERA_SOURCE)")
     rt = sub.add_parser("robot-test", help="one command: find robot on its hotspot, start server+camera, print robot commands")
     rt.add_argument("--robot-ip", default="192.168.149.1")
@@ -107,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
             print("ROBOT TEST MODE: memory is in-RAM and nothing is saved to Aura.")
         if args.camera:
             os.environ["CAMERA_SOURCE"] = args.camera
+        if args.rosbridge:
+            os.environ["ROSBRIDGE_URL"] = args.rosbridge
 
         uvicorn.run("puppy_mind.server:app", host=args.host, port=args.port)
         return 0
