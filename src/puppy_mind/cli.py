@@ -40,8 +40,7 @@ def _robot_test(robot_ip: str, port: int, light: bool = True, combine: bool = Fa
     bridge = _open(robot_ip, 9090, 2.0)
     if bridge:
         os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
-    if cam:
-        os.environ["CAMERA_SOURCE"] = cam
+    os.environ["CAMERA_SOURCE"] = cam or ""  # never fall back to a laptop webcam while testing the robot
     base = f"http://{laptop}:{port}"
     if bridge:
         print(f"""
@@ -142,7 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "watch":
             from .sources import open_source
 
-            src = open_source(args.source or s.camera_source)
+            spec = args.source or s.camera_source
+            if not spec:
+                print("No camera set. Use --source or CAMERA_SOURCE (webcam:0, http://<robot>:8080/stream?topic=..., folder:./frames).")
+                return 2
+            src = open_source(spec)
             interval = args.interval or s.watch_interval_s
             print(f"watching {src.name} every {interval}s - Ctrl+C to stop")
             brain.watch(src, interval, lambda r: print(json.dumps(r, default=str)[:400]))

@@ -170,6 +170,7 @@ def state():
         "watching": brain.watching,
         "has_frame": brain.frame is not None,
         "fps": brain.fps,
+        "camera_name": getattr(brain._src, "name", "") if brain._src else "",
         "camera_error": getattr(brain._src, "error", "") if brain._src else "",
         "nams": brain.nams.enabled,
         "stats": brain.mem.stats(),
@@ -188,7 +189,10 @@ def set_location(body: Loc):
 @app.post("/api/watch/{action}")
 def watch(action: str):
     if action == "start" and not brain.watching:
-        brain.watch(open_source(os.getenv("CAMERA_SOURCE") or brain.s.camera_source), brain.s.watch_interval_s, _push)
+        spec = os.environ.get("CAMERA_SOURCE", brain.s.camera_source)
+        if not spec:
+            raise HTTPException(400, "No camera configured. The robot camera was not found: check the Camera line printed by robot-test, or pass --camera <url>.")
+        brain.watch(open_source(spec), brain.s.watch_interval_s, _push)
     elif action == "stop":
         brain.stop_watch()
     return {"watching": brain.watching}

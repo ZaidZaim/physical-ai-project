@@ -241,10 +241,17 @@ async function refreshStats() {
   $('#loc').textContent = '📍 ' + s.location; $('#nams').textContent = 'NAMS ' + (s.nams ? 'on' : 'off');
   $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
   $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
-  $('#fps').textContent = s.watching || s.fps ? `${s.fps} fps` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
+  const lap = (s.camera_name || '').startsWith('webcam');
+  $('#fps').textContent = s.watching || s.fps ? `${lap ? 'LAPTOP WEBCAM' : (s.camera_name ? 'robot camera' : '')} · ${s.fps} fps` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
+  $('#fps').style.color = lap ? '#f85149' : '';
   if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
 }
-$('#watch').onclick = async () => { const on = $('#watch').dataset.on === '1'; await post('/api/watch/' + (on ? 'stop' : 'start')); setTimeout(refreshStats, 1200); };
+$('#watch').onclick = async () => {
+  const on = $('#watch').dataset.on === '1';
+  try { await post('/api/watch/' + (on ? 'stop' : 'start')); $('#vstat').textContent = ''; }
+  catch (e) { let m = e.message; try { m = JSON.parse(m).detail || m; } catch (_) {} $('#vstat').textContent = m; log('miss', '⚠ ' + esc(m)); }
+  setTimeout(refreshStats, 1200);
+};
 $('#demo').onclick = () => post('/api/demo/replay?delay=4').then(() => log('new', 'demo replay started'));
 $('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); refreshStats(); } };
 

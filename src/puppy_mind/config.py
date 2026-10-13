@@ -28,7 +28,7 @@ class Settings:
 
     robot_name: str = os.getenv("ROBOT_NAME", "PuppyPi")
     default_location: str = os.getenv("DEFAULT_LOCATION", "Demo Area")
-    camera_source: str = os.getenv("CAMERA_SOURCE", "webcam:0")
+    camera_source: str = os.getenv("CAMERA_SOURCE", "")
     watch_interval_s: float = float(os.getenv("WATCH_INTERVAL_S", "5"))
     brain_token: str = os.getenv("BRAIN_TOKEN", "")
 
