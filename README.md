@@ -60,6 +60,17 @@ With the robot: see [docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md).
 * **`Demo replay`** plays a scripted booth day (`eval/scenarios/booth.json`) so you can watch the graph build without a robot.
 * **Dev only:** `PUPPY_FAKE_MEMORY=1` swaps Aura for an in-memory stand-in (nothing persists) to try the UI offline.
 
+## Keyboard drive
+Click **Enable keyboard drive** (nothing moves until you arm it). Hold keys, release to stop:
+`W/S` forward/back · `A/D` turn · `Q/E` strafe · `Space` stop · `H` stand/home · `1 2 3` speed · `Esc` disarm
+(arrow keys and the on-screen pad work too). On the robot run `python3 robot/puppy_drive.py --brain http://<laptop-ip>:8000`;
+add `--dry-run` first to see the commands without any movement.
+
+Safety: the robot *pulls* commands (the brain never connects in); commands expire after 0.4 s of silence; closing the tab,
+losing focus or a network drop stops and disarms; speed caps live on the robot; driving from another machine requires
+`BRAIN_TOKEN`. While the robot moves, perception pauses and the first observation afterwards does **not** count misses, so
+driving away never makes objects look "possibly gone".
+
 ## Memory rules that matter
 * **One missed detection never deletes anything.** Objects carry `miss_count`; only after `MISS_THRESHOLD`
   consecutive misses *at the same location* do they become `possibly_gone`, and answers say "not seen", never "removed".

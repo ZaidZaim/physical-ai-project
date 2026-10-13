@@ -23,7 +23,7 @@ class FakeMemory:
     def init_schema(self): ...
     def start_session(self, session_id=None): return session_id or "fake-session"
 
-    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None) -> dict[str, Any]:
+    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True) -> dict[str, Any]:
         ts, loc = ts or now_iso(), location or self.s.default_location
         dets = {d.idx: d for d in scene.objects if d.confidence >= self.s.min_confidence}
         anchors = {i: set() for i in dets}
@@ -58,7 +58,7 @@ class FakeMemory:
             if r["active"] and (a, p, b) not in cur and a in vis and b in vis:
                 r["active"], r["until"] = False, ts
         missed = []
-        for o in self.objs.values():
+        for o in (self.objs.values() if count_misses else []):
             if o["loc"] == loc and o["id"] not in vis and o["status"] in ("present", "possibly_gone"):
                 o["miss"] += 1
                 if o["miss"] >= self.s.miss_threshold:

@@ -92,6 +92,7 @@ class Memory:
         source: str = "camera",
         ts: str | None = None,
         image_ref: str | None = None,
+        count_misses: bool = True,
     ) -> dict[str, Any]:
         ts = ts or now_iso()
         location = location or self.s.default_location
@@ -225,7 +226,8 @@ class Memory:
         )
 
         # 5) misses: expected here but not detected. One miss never means "gone".
-        missed = self._write(
+        # (skipped right after the robot moved: absent objects are probably just out of the new view)
+        missed = [] if not count_misses else self._write(
             """
             MATCH (ob:Observation {id:$obs})
             MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})

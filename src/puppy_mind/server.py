@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -178,3 +178,68 @@ def changes(since: str):
 @app.get("/api/graph")
 def graph():
     return brain.mem.graph_snapshot()
+
+
+# ---------------------------------------------------------------- keyboard drive
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def _drive_event() -> None:
+    brain.bus.publish("drive", brain.drive.status())
+
+
+@app.websocket("/api/drive/ws")
+async def drive_ws(ws: WebSocket, token: str = ""):
+    """Browser keyboard -> drive state. Local-only unless BRAIN_TOKEN is set and supplied."""
+    host = ws.client.host if ws.client else ""
+    ok = host in LOOPBACK or (brain.s.brain_token and secrets.compare_digest(token, brain.s.brain_token))
+    await ws.accept()
+    if not ok:
+        await ws.send_json({"error": "Driving from another machine needs BRAIN_TOKEN (set it in .env and pass ?token=)."})
+        await ws.close(code=4403)
+        return
+    d = brain.drive
+    try:
+        while True:
+            m = await ws.receive_json()
+            if "arm" in m:
+                d.arm(bool(m["arm"]))
+                _drive_event()
+            if "speed" in m:
+                d.set_speed(int(m["speed"]))
+                _drive_event()
+            if m.get("stop"):
+                d.stop()
+                _drive_event()
+            if m.get("home"):
+                d.go_home()
+                brain._moved = True
+            c = m.get("cmd")
+            if c:
+                was = d.moving
+                d.command(float(c.get("x", 0)), float(c.get("y", 0)), float(c.get("yaw", 0)))
+                if d.moving:
+                    brain._moved = True
+                if d.moving != was:
+                    _drive_event()
+    except WebSocketDisconnect:
+        pass
+    finally:  # controller gone => stop and disarm, always
+        d.arm(False)
+        _drive_event()
+
+
+@app.get("/api/drive/cmd")
+def drive_cmd(ax: float | None = None, ay: float | None = None, ayaw: float | None = None,
+              x_brain_token: str | None = Header(None)):
+    """Polled by robot/puppy_drive.py (the robot pulls; the brain never connects in)."""
+    if brain.s.brain_token and not secrets.compare_digest(x_brain_token or "", brain.s.brain_token):
+        raise HTTPException(401, "bad token")
+    if ax is not None:
+        brain.drive.robot_report({"x": ax, "y": ay or 0.0, "yaw": ayaw or 0.0})
+    return brain.drive.current()
+
+
+@app.get("/api/drive/state")
+def drive_state():
+    return brain.drive.status()

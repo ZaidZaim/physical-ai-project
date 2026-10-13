@@ -16,6 +16,7 @@ from typing import Any
 
 from .agent import Agent
 from .config import Settings, get_settings
+from .drive import DriveState
 from .graph import Memory
 from .models import Scene
 from .nams import Nams
@@ -62,6 +63,8 @@ class Brain:
             self.mem = Memory(self.s)
         self.nams = Nams(self.s)
         self.bus = Bus()
+        self.drive = DriveState()
+        self._moved = False  # robot moved since the last observation
         self.session = self.mem.start_session()
         self.location = self.s.default_location
         self.frame: bytes | None = None
@@ -83,6 +86,9 @@ class Brain:
     def submit_frame(self, jpeg: bytes, *, source: str = "camera", location: str | None = None) -> bool:
         """Show the frame immediately; start perception if due and idle. Returns True if perception started."""
         self.frame, self.frame_id = jpeg, self.frame_id + 1
+        if self.drive.moving:  # blurry + viewpoint changing: don't analyse, don't learn from it
+            self._moved = True
+            return False
         if (
             self.perception
             and time.monotonic() - self._last_perceive >= self.s.watch_interval_s
@@ -127,7 +133,9 @@ class Brain:
             Path(image_ref).write_bytes(jpeg)
         loc = location or self.location
         res = self.mem.ingest(scene, session_id=self.session, location=loc, source=source,
-                              ts=ts, image_ref=image_ref)
+                              ts=ts, image_ref=image_ref, count_misses=not self._moved)
+        res["misses_counted"] = not self._moved
+        self._moved = False
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {

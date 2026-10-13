@@ -32,6 +32,16 @@ objects "disappear".
 Keep the robot still while it observes (stand/sit pose), steady lighting, camera at the area you want remembered.
 `WATCH_INTERVAL_S=5` with near-duplicate frame skipping keeps OpenAI cost low.
 
+## 4b. Keyboard drive (verified against the Hiwonder `ros2` branch source, not yet run on your unit)
+`robot/puppy_drive.py` publishes `puppy_control_msgs/Velocity{x cm/s, y cm/s, yaw_rate rad/s}` to `/puppy_control/velocity`,
+sets the Trot gait/pose like Hiwonder's `puppy_demo.py`, and calls `/puppy_control/go_home` for the H key.
+1. `python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run` and press keys in the UI: confirm the printed values.
+2. Run it without `--dry-run` with the dog held off the ground, then in open space on the lowest speed (key `1`).
+3. If strafe or turn is mirrored on your unit, add `--invert-y` / `--invert-yaw`. Tune `--max-x/--max-y/--max-yaw`.
+4. Needs the ROS2 (Humble) image with the stock `puppy_control` node running. On the ROS1 image the package/message
+   names differ; switch images (docs 3.4) or adapt the imports. Keep a hand near the power switch for first runs.
+5. To drive from another PC than the brain's own, set `BRAIN_TOKEN` in `.env` and open the UI as `/?token=<value>`.
+
 ## 5. Later (Phase 5, not implemented)
 The Hiwonder repo (`ros2` branch: `puppy_control`, `puppy_navigation`, `puppy_slam`) exposes motion/navigation. Safe
 "go to where you last saw X" needs: LiDAR SLAM pose per observation (store as `Observation.x,y,theta`), reachability

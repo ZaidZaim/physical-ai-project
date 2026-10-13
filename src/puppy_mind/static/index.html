@@ -30,6 +30,10 @@
   .chip.new { border-color:var(--new); background:rgba(26,127,55,.85) } @keyframes pop { from { transform:scale(.4); opacity:0 } to { transform:scale(1); opacity:1 } }
   #scan { position:absolute; left:0; right:0; height:3px; top:0; background:linear-gradient(90deg,transparent,var(--obj),transparent); opacity:0; box-shadow:0 0 14px var(--obj) }
   #scan.on { opacity:1; animation:scan 1.4s linear infinite } @keyframes scan { from { top:0 } to { top:calc(100% - 3px) } }
+  #padrow { display:flex; gap:14px; align-items:center; flex-wrap:wrap }
+  #pad { display:grid; grid-template-columns:repeat(3,44px); gap:4px } #pad button { padding:0; height:40px; font-size:18px; background:var(--bg); color:var(--ink); user-select:none; touch-action:none }
+  #pad button.on, #pad button:active { background:var(--obj); color:#fff } #pad button.stop { color:#f85149 } #pad button[disabled] { opacity:.35; cursor:not-allowed }
+  #drive.armed { border-color:var(--miss); box-shadow:0 0 0 1px var(--miss) } #dinfo { font-size:12px; flex:1; min-width:200px }
   #chat { flex:1; min-height:120px; overflow:auto; display:flex; flex-direction:column; gap:6px }
   .m { padding:7px 10px; border-radius:8px; max-width:94%; white-space:pre-wrap } .u { background:var(--obj); color:#fff; align-self:flex-end } .a { background:var(--bg); border:1px solid var(--line) }
   details { font-size:12px; color:var(--mute); margin-top:4px } pre { overflow:auto; max-height:180px; margin:4px 0 0 }
@@ -62,6 +66,22 @@
         <div id="novid">No frames yet.<br>Press “Start camera”, or run the robot streamer.</div>
         <div class="zones"><div class="zone" id="z-left"></div><div class="zone" id="z-center"></div><div class="zone" id="z-right"></div></div>
         <div id="scan"></div>
+      </div>
+    </section>
+    <section id="drive">
+      <h2><span>Drive <span id="dstate" class="pill" style="text-transform:none;letter-spacing:0">disarmed</span> <span id="rstate" class="pill" style="text-transform:none;letter-spacing:0">robot offline</span></span>
+        <button class="ghost" id="arm" style="padding:3px 9px">Enable keyboard drive</button></h2>
+      <div id="padrow">
+        <div id="pad">
+          <button data-k="q" title="Strafe left (Q)">⤺</button><button data-k="w" title="Forward (W / ↑)">▲</button><button data-k="e" title="Strafe right (E)">⤻</button>
+          <button data-k="a" title="Turn left (A / ←)">↶</button><button data-k=" " class="stop" title="Stop (Space)">■</button><button data-k="d" title="Turn right (D / →)">↷</button>
+          <span></span><button data-k="s" title="Back (S / ↓)">▼</button><span></span>
+        </div>
+        <div id="dinfo">
+          <div>Speed <span id="spd" class="pill">2 · medium</span> <span style="color:var(--mute)">keys 1 2 3</span></div>
+          <div style="color:var(--mute);margin-top:6px"><b>W/S</b> forward/back · <b>A/D</b> turn · <b>Q/E</b> strafe<br><b>Space</b> stop · <b>H</b> stand/home · <b>Esc</b> disarm<br>Arrow keys also work. Hold to move; release to stop.</div>
+          <div id="dwarn" style="color:var(--miss);margin-top:6px"></div>
+        </div>
       </div>
     </section>
     <section style="flex:1">
@@ -204,6 +224,9 @@ function connect() {
     glow('loc:' + d.location, css('--loc'));
     refreshStats();
   });
+  es.addEventListener('drive', e => {
+    const d = JSON.parse(e.data); log('ask', `drive: ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
+  });
   es.addEventListener('query', e => {
     const d = JSON.parse(e.data);
     log('ask', `agent used ${esc(d.tools.join(' → ') || 'no tools')} for “${esc(d.question)}”`);
@@ -222,6 +245,75 @@ async function refreshStats() {
 $('#watch').onclick = async () => { const on = $('#watch').dataset.on === '1'; await post('/api/watch/' + (on ? 'stop' : 'start')); setTimeout(refreshStats, 1200); };
 $('#demo').onclick = () => post('/api/demo/replay?delay=4').then(() => log('new', 'demo replay started'));
 $('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); refreshStats(); } };
+
+/* ---------- keyboard drive ---------- */
+const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast' };
+const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right', q:'sl', e:'sr' };
+const held = new Set(); let ws = null, armed = false, speed = 2, loopT = null;
+const vec = () => ({
+  x: (held.has('fwd') ? 1 : 0) - (held.has('back') ? 1 : 0),
+  y: (held.has('sl') ? 1 : 0) - (held.has('sr') ? 1 : 0),
+  yaw: (held.has('left') ? 1 : 0) - (held.has('right') ? 1 : 0),
+});
+const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+function paintPad() {
+  document.querySelectorAll('#pad button[data-k]').forEach(b => { const a = KEYMAP[b.dataset.k]; b.classList.toggle('on', !!a && held.has(a)); b.disabled = !armed; });
+  $('#drive').classList.toggle('armed', armed);
+  $('#dstate').textContent = armed ? 'ARMED' : 'disarmed'; $('#dstate').style.color = armed ? 'var(--miss)' : '';
+  $('#arm').textContent = armed ? 'Disarm (Esc)' : 'Enable keyboard drive'; $('#spd').textContent = SPEEDS[speed];
+}
+function stopAll() { held.clear(); send({ stop:true }); send({ cmd:{ x:0, y:0, yaw:0 } }); paintPad(); }
+function connectDrive() {
+  return new Promise((res, rej) => {
+    const tok = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('brain_token') || '';
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/drive/ws' + (tok ? '?token=' + encodeURIComponent(tok) : ''));
+    ws.onopen = () => res();
+    ws.onerror = () => rej(new Error('drive connection failed'));
+    ws.onmessage = e => { const m = JSON.parse(e.data); if (m.error) { $('#dwarn').textContent = m.error; setArmed(false, true); } };
+    ws.onclose = () => { if (armed) { $('#dwarn').textContent = 'Drive connection lost: robot stopped.'; setArmed(false, true); } };
+  });
+}
+async function setArmed(on, fromServer) {
+  if (on && !armed) {
+    $('#dwarn').textContent = '';
+    try { await connectDrive(); } catch (e) { $('#dwarn').textContent = e.message; return; }
+    send({ arm:true }); send({ speed });
+    armed = true; clearInterval(loopT); loopT = setInterval(() => send({ cmd:vec() }), 100);   // 10 Hz heartbeat; server deadman = 0.4 s
+  } else if (!on && armed) {
+    armed = false; clearInterval(loopT); held.clear();
+    if (!fromServer) { send({ stop:true }); send({ arm:false }); }
+    try { ws && ws.close(); } catch (e) {}
+  }
+  paintPad();
+}
+$('#arm').onclick = () => setArmed(!armed);
+const typing = () => /^(input|textarea|select)$/i.test(document.activeElement?.tagName || '');
+addEventListener('keydown', e => {
+  if (!armed || typing() || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (KEYMAP[k]) { e.preventDefault(); held.add(KEYMAP[k]); paintPad(); }
+  else if (k === ' ') { e.preventDefault(); stopAll(); }
+  else if (k === 'escape') { setArmed(false); }
+  else if (k === 'h') { stopAll(); send({ home:true }); log('ask', 'stand / go home'); }
+  else if (['1','2','3'].includes(k)) { speed = +k; send({ speed }); paintPad(); }
+});
+addEventListener('keyup', e => { const a = KEYMAP[e.key.toLowerCase()]; if (a && held.delete(a)) paintPad(); });
+addEventListener('blur', () => armed && stopAll());                       // lose focus => stop
+document.addEventListener('visibilitychange', () => document.hidden && armed && stopAll());
+document.querySelectorAll('#pad button[data-k]').forEach(b => {          // mouse / touch pad
+  const k = b.dataset.k, a = KEYMAP[k];
+  b.addEventListener('pointerdown', e => { e.preventDefault(); if (!armed) return; if (k === ' ') stopAll(); else { held.add(a); paintPad(); } });
+  ['pointerup','pointerleave','pointercancel'].forEach(ev => b.addEventListener(ev, () => a && held.delete(a) && paintPad()));
+});
+async function refreshDrive() {
+  try {
+    const s = await api('/api/drive/state');
+    $('#rstate').textContent = s.robot_online ? 'robot online' : 'robot offline'; $('#rstate').style.color = s.robot_online ? 'var(--new)' : '';
+    const v = $('#vstat');
+    if (s.moving) v.textContent = 'moving: analysis paused'; else if (v.textContent.startsWith('moving')) v.textContent = '';
+  } catch (e) {}
+}
+paintPad(); setInterval(refreshDrive, 1500);
 
 (async () => { await syncGraph(); await refreshStats(); connect(); setInterval(refreshStats, 5000); })();
 </script>
