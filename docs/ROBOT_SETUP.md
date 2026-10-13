@@ -44,6 +44,15 @@ objects "disappear".
 Keep the robot still while it observes (stand/sit pose), steady lighting, camera at the area you want remembered.
 `WATCH_INTERVAL_S=5` with near-duplicate frame skipping keeps OpenAI cost low.
 
+## 4a. Getting a terminal on the robot (from Hiwonder docs, section 3)
+1. Join the robot's `HW...` Wi-Fi (password `hiwonder`).
+2. Install and open **VNC Viewer**, connect to `192.168.149.1`, login `pi` / `raspberrypi`. (Black screen: reboot the robot.)
+3. Click the terminal icon at the top-left of the robot's desktop.
+4. ROS runs inside a Docker container named `puppypi`. Enter it: `docker exec -it -u ubuntu -w /home/ubuntu puppypi /bin/zsh`
+5. `echo $ROS_DISTRO` tells you the image: `noetic` = ROS1, `humble` = ROS2. `puppy_drive.py` supports both.
+6. Check the motion node is up: `rostopic list | grep puppy` (ROS1) or `ros2 topic list | grep puppy` (ROS2) should list `/puppy_control/velocity`.
+Stock firmware has no lateral (sideways) walking; Q/E do nothing unless you raise `--max-y`.
+
 ## 4b. Keyboard drive (verified against the Hiwonder `ros2` branch source, not yet run on your unit)
 `robot/puppy_drive.py` publishes `puppy_control_msgs/Velocity{x cm/s, y cm/s, yaw_rate rad/s}` to `/puppy_control/velocity`,
 sets the Trot gait/pose like Hiwonder's `puppy_demo.py`, and calls `/puppy_control/go_home` for the H key.

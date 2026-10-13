@@ -39,12 +39,16 @@ def _robot_test(robot_ip: str, port: int) -> int:
         os.environ["CAMERA_SOURCE"] = cam
     base = f"http://{laptop}:{port}"
     print(f"""
-=================== ON THE ROBOT (SSH or VNC terminal) ===================
- wget -O puppy_drive.py {base}/robot/puppy_drive.py
- python3 puppy_drive.py --brain {base} --dry-run      # step 1: prints commands, moves nothing
- python3 puppy_drive.py --brain {base}                # step 2: real movement (dog held off the ground first!)
+=========== ON THE ROBOT: open VNC Viewer -> 192.168.149.1 (user pi / password raspberrypi), then in the
+=========== desktop terminal ENTER THE DOCKER CONTAINER (ROS lives inside it):
+ docker exec -it -u ubuntu -w /home/ubuntu puppypi /bin/zsh
+ echo $ROS_DISTRO                       # noetic = ROS1, humble = ROS2: the script handles both
+ python3 -c "import urllib.request as u; u.urlretrieve('{base}/robot/puppy_drive.py','puppy_drive.py')"
+ python3 puppy_drive.py --brain {base} --dry-run     # step 1: prints commands, moves nothing
+ python3 puppy_drive.py --brain {base}               # step 2: real movement (dog held off the ground first!)
 ===========================================================================
- In the page: [Start camera] for video, [Enable keyboard drive], then W A S D Q E, Space=stop, 1/2/3=speed.
+ In the page: [Start camera] for video, [Enable keyboard drive], then W/S forward-back, A/D turn, Space=stop, 1/2/3=speed.
+ (Q/E sideways is not supported by the stock PuppyPi firmware.)
  Camera: {cam or 'NOT FOUND (driving can still be tested)'}
  Windows may ask to allow Python through the firewall: choose PRIVATE networks.
 """)
