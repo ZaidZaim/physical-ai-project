@@ -30,6 +30,30 @@ def _first_jpeg(url: str, t: float = 6.0) -> bool:
         return False
 
 
+def local_ips() -> list[str]:
+    try:
+        return sorted({a[4][0] for a in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)})
+    except OSError:
+        return []
+
+
+def camera_url(ip: str) -> str | None:
+    """Best working MJPEG URL on the robot's web_video_server, or None."""
+    topics: list[str] = []
+    try:
+        with urllib.request.urlopen(f"http://{ip}:8080/", timeout=4) as r:
+            html = r.read().decode("utf-8", "replace")
+        topics = list(dict.fromkeys(re.findall(r"topic=([^&\"'<> ]+)", html)))
+    except Exception:
+        pass
+    cands = sorted(topics, key=lambda t: next((i for i, p in enumerate(PREFER) if p in t), 99)) or ["/usb_cam/image_raw"]
+    for t in cands[:4]:
+        url = f"http://{ip}:8080/stream?topic={t}"
+        if _first_jpeg(url):
+            return url
+    return None
+
+
 def check(ip: str) -> int:
     print(f"Probing {ip} ...")
     up = {p: _open(ip, p) for p in PORTS}

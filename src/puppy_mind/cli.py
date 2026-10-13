@@ -14,6 +14,45 @@ def _p(x) -> None:
     print(json.dumps(x, indent=2, default=str, ensure_ascii=False))
 
 
+def _robot_test(robot_ip: str, port: int) -> int:
+    import os
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from .robotcheck import camera_url, check, local_ips
+
+    prefix = robot_ip.rsplit(".", 1)[0] + "."
+    mine = [i for i in local_ips() if i.startswith(prefix)]
+    if not mine:
+        print(f"This laptop has no address on {prefix}x, so it is not on the robot's Wi-Fi.")
+        print("Join the robot's HW... Wi-Fi first (Windows may jump back to home Wi-Fi: turn off 'connect automatically' there).")
+        return 1
+    laptop = mine[0]
+    print(f"Laptop on robot network: {laptop}")
+    print()
+    code = check(robot_ip)
+    cam = camera_url(robot_ip) if code == 0 else None
+    os.environ["PUPPY_FAKE_MEMORY"] = "1"
+    if cam:
+        os.environ["CAMERA_SOURCE"] = cam
+    base = f"http://{laptop}:{port}"
+    print(f"""
+=================== ON THE ROBOT (SSH or VNC terminal) ===================
+ wget -O puppy_drive.py {base}/robot/puppy_drive.py
+ python3 puppy_drive.py --brain {base} --dry-run      # step 1: prints commands, moves nothing
+ python3 puppy_drive.py --brain {base}                # step 2: real movement (dog held off the ground first!)
+===========================================================================
+ In the page: [Start camera] for video, [Enable keyboard drive], then W A S D Q E, Space=stop, 1/2/3=speed.
+ Camera: {cam or 'NOT FOUND (driving can still be tested)'}
+ Windows may ask to allow Python through the firewall: choose PRIVATE networks.
+""")
+    threading.Timer(2.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+    uvicorn.run("puppy_mind.server:app", host="0.0.0.0", port=port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="puppy-mind")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -39,9 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--robot-test", action="store_true",
                     help="no Aura/OpenAI needed: live camera + keyboard drive only (memory is in-RAM)")
     sv.add_argument("--camera", help="camera source for the Start camera button (overrides CAMERA_SOURCE)")
+    rt = sub.add_parser("robot-test", help="one command: find robot on its hotspot, start server+camera, print robot commands")
+    rt.add_argument("--robot-ip", default="192.168.149.1")
+    rt.add_argument("--port", type=int, default=8000)
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
+
+    if args.cmd == "robot-test":
+        return _robot_test(args.robot_ip, args.port)
 
     if args.cmd == "robot-check":
         from .robotcheck import check, scan

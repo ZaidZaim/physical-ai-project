@@ -141,6 +141,18 @@ def ask(body: Ask):
     return brain.ask(body.question)
 
 
+ROBOT_FILES = {"puppy_drive.py", "puppy_streamer.py"}
+
+
+@app.get("/robot/{name}")
+def robot_script(name: str):
+    """So the robot can `wget http://<laptop>:8000/robot/puppy_drive.py` (whitelisted files only)."""
+    p = Path(__file__).parents[2] / "robot" / name
+    if name not in ROBOT_FILES or not p.is_file():
+        raise HTTPException(404)
+    return FileResponse(p, media_type="text/x-python")
+
+
 @app.get("/api/state")
 def state():
     return {
