@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import secrets
 import threading
@@ -164,7 +165,7 @@ def set_location(body: Loc):
 @app.post("/api/watch/{action}")
 def watch(action: str):
     if action == "start" and not brain.watching:
-        brain.watch(open_source(brain.s.camera_source), brain.s.watch_interval_s, _push)
+        brain.watch(open_source(os.getenv("CAMERA_SOURCE") or brain.s.camera_source), brain.s.watch_interval_s, _push)
     elif action == "stop":
         brain.stop_watch()
     return {"watching": brain.watching}

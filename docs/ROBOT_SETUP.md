@@ -2,6 +2,18 @@
 
 Goal for Phases 1-4: the robot is *just a camera on the network*. No movement code is needed.
 
+## 0. Robot-only smoke test (no Aura, no OpenAI)
+```
+uv run puppy-mind robot-check auto            # scans your home LAN (192.168.x / 10.x only, never VPN ranges)
+uv run puppy-mind robot-check <robot-ip>      # prints the camera URL that actually returns frames
+uv run puppy-mind serve --robot-test --camera "<that url>"
+```
+Open http://localhost:8000 -> **Start camera** (live video) -> **Enable keyboard drive**. On the robot (over SSH/VNC):
+`python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run`, then without `--dry-run`.
+Getting the robot reachable: either put it in LAN mode on your home Wi-Fi (Hiwonder app / docs 3.5-3.6, then read its IP),
+or join its own hotspot (AP mode, usually 192.168.149.1; the laptop loses internet while joined). If you use Cloudflare WARP,
+exclude your local subnet or pause WARP, otherwise LAN traffic to the robot may be blocked.
+
 ## 1. Network
 Put the PuppyPi and the laptop on the same Wi-Fi (Hiwonder docs: network configuration + LAN mode, sections 3.5/3.6).
 Find the robot IP (app, router, or `hostname -I` over VNC/SSH). Find the laptop IP (`ipconfig`).

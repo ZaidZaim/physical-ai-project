@@ -36,10 +36,28 @@ def main(argv: list[str] | None = None) -> int:
     sv = sub.add_parser("serve", help="web UI + robot ingest API")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--robot-test", action="store_true",
+                    help="no Aura/OpenAI needed: live camera + keyboard drive only (memory is in-RAM)")
+    sv.add_argument("--camera", help="camera source for the Start camera button (overrides CAMERA_SOURCE)")
+    rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
+    rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
 
+    if args.cmd == "robot-check":
+        from .robotcheck import check, scan
+
+        return scan(args.ip.split(":", 1)[1] if args.ip.startswith("auto:") else None) if args.ip.startswith("auto") else check(args.ip)
+
     if args.cmd == "serve":
+        import os
+
         import uvicorn
+
+        if args.robot_test:
+            os.environ["PUPPY_FAKE_MEMORY"] = "1"
+            print("ROBOT TEST MODE: memory is in-RAM and nothing is saved to Aura.")
+        if args.camera:
+            os.environ["CAMERA_SOURCE"] = args.camera
 
         uvicorn.run("puppy_mind.server:app", host=args.host, port=args.port)
         return 0
