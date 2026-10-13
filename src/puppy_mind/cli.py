@@ -14,7 +14,7 @@ def _p(x) -> None:
     print(json.dumps(x, indent=2, default=str, ensure_ascii=False))
 
 
-def _robot_test(robot_ip: str, port: int) -> int:
+def _robot_test(robot_ip: str, port: int, light: bool = True, combine: bool = False) -> int:
     import os
     import threading
     import webbrowser
@@ -33,7 +33,9 @@ def _robot_test(robot_ip: str, port: int) -> int:
     print(f"Laptop on robot network: {laptop}")
     print()
     code = check(robot_ip)
-    cam = camera_url(robot_ip) if code == 0 else None
+    cam = camera_url(robot_ip, light=light) if code == 0 else None
+    if combine:
+        os.environ["DRIVE_COMBINE"] = "1"
     os.environ["PUPPY_FAKE_MEMORY"] = "1"
     bridge = _open(robot_ip, 9090, 2.0)
     if bridge:
@@ -92,12 +94,14 @@ def main(argv: list[str] | None = None) -> int:
     rt = sub.add_parser("robot-test", help="one command: find robot on its hotspot, start server+camera, print robot commands")
     rt.add_argument("--robot-ip", default="192.168.149.1")
     rt.add_argument("--port", type=int, default=8000)
+    rt.add_argument("--full-camera", action="store_true", help="full-size camera stream instead of the lighter 320x240")
+    rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
 
     if args.cmd == "robot-test":
-        return _robot_test(args.robot_ip, args.port)
+        return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine)
 
     if args.cmd == "robot-check":
         from .robotcheck import check, scan

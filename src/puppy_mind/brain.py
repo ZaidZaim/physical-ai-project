@@ -64,7 +64,7 @@ class Brain:
             self.mem = Memory(self.s)
         self.nams = Nams(self.s)
         self.bus = Bus()
-        self.drive = DriveState()
+        self.drive = DriveState(allow_combine=os.getenv("DRIVE_COMBINE") == "1")
         self._moved = False  # robot moved since the last observation
         self.session = self.mem.start_session()
         self.location = self.s.default_location

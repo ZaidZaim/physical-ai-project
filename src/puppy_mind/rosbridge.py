@@ -116,6 +116,7 @@ class RosbridgeDriver:
 
     def _loop(self) -> None:
         last, last_pub, last_home = None, 0.0, self.drive.current()["home_seq"]
+        zero_again = False
         while not self._stop.is_set():
             t0 = time.monotonic()
             c = self.drive.current()
@@ -133,9 +134,14 @@ class RosbridgeDriver:
                 self._call("/puppy_control/go_home")
                 want = dict(ZERO)
             moving = any(want.values())
-            if want != last or (moving and t0 - last_pub > 0.5) or (not moving and t0 - last_pub > 1.0):
+            # Publish ONLY on change: the robot re-applies its stance on every velocity message, so a keep-alive
+            # stream makes the dog flex. A stop is sent twice (now and 0.3 s later) in case one is lost.
+            if want != last:
                 self._publish("/puppy_control/velocity", {"x": want["x"], "y": want["y"], "yaw_rate": want["yaw"]})
-                last, last_pub = dict(want), t0
+                last, last_pub, zero_again = dict(want), t0, not moving
+            elif zero_again and t0 - last_pub > 0.3:
+                self._publish("/puppy_control/velocity", {"x": 0.0, "y": 0.0, "yaw_rate": 0.0})
+                zero_again = False
             self.drive.robot_report(want)  # makes the UI show "robot online"
             try:  # drain replies/errors so a closed socket is noticed
                 while True:

@@ -75,7 +75,7 @@ class MjpegSource(FrameSource):
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                with urllib.request.urlopen(self.url, timeout=6) as r:
+                with urllib.request.urlopen(self.url, timeout=3) as r:
                     buf = b""
                     while not self._stop.is_set():
                         chunk = r.read1(65536)  # whatever has arrived; read(n) would wait to fill n bytes and batch frames
@@ -93,6 +93,7 @@ class MjpegSource(FrameSource):
                                 break
                             self._latest = buf[a : b + 2]
                             self._seq += 1
+                            self.error = ""
                             buf = buf[b + 2 :]
                         if len(buf) > 4_000_000:  # never grow unbounded on garbage
                             buf = b""

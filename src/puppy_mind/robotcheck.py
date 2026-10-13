@@ -37,8 +37,11 @@ def local_ips() -> list[str]:
         return []
 
 
-def camera_url(ip: str) -> str | None:
-    """Best working MJPEG URL on the robot's web_video_server, or None."""
+LIGHT = "&width=320&height=240&quality=50"  # web_video_server rescales/recompresses: far less for the Pi and Wi-Fi
+
+
+def camera_url(ip: str, light: bool = True) -> str | None:
+    """Best working MJPEG URL on the robot's web_video_server, or None. Tries a lighter stream first."""
     topics: list[str] = []
     try:
         with urllib.request.urlopen(f"http://{ip}:8080/", timeout=4) as r:
@@ -49,6 +52,8 @@ def camera_url(ip: str) -> str | None:
     cands = sorted(topics, key=lambda t: next((i for i, p in enumerate(PREFER) if p in t), 99)) or ["/usb_cam/image_raw"]
     for t in cands[:4]:
         url = f"http://{ip}:8080/stream?topic={t}"
+        if light and _first_jpeg(url + LIGHT):
+            return url + LIGHT
         if _first_jpeg(url):
             return url
     return None

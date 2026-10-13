@@ -88,3 +88,19 @@ def test_go_home_calls_service_and_robot_reported_online():
         assert drive.status()["robot_online"]
     finally:
         d.close(); fb.close()
+
+
+def test_no_keepalive_republish_while_holding_a_key():
+    """Re-sending the same velocity re-applies the robot's stance and makes it flex: send on change only."""
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        drive.arm(True)
+        end = time.time() + 1.5
+        while time.time() < end:  # browser-like 10 Hz heartbeat with an unchanged command
+            drive.command(1, 0, 0)
+            time.sleep(0.1)
+        moving = [v for v in fb.vels() if v["x"] != 0.0]
+        assert len(moving) == 1, moving
+    finally:
+        d.close(); fb.close()

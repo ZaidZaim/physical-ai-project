@@ -21,7 +21,10 @@ def _clamp(v: float) -> float:
 
 
 class DriveState:
-    def __init__(self) -> None:
+    def __init__(self, allow_combine: bool = False) -> None:
+        # Hiwonder's own teleop never mixes forward and turn, and mixing made the dog flex and nearly flip,
+        # so by default turning takes priority over walking (turn in place, then resume).
+        self.allow_combine = allow_combine
         self._lock = threading.Lock()
         self.armed = False
         self.speed = 2  # 1 slow, 2 medium, 3 fast (scaled on the robot)
@@ -68,6 +71,8 @@ class DriveState:
         with self._lock:
             fresh = self.armed and (time.monotonic() - self._stamp) <= DEADMAN_S
             x, y, yaw = (self._x, self._y, self._yaw) if fresh else (0.0, 0.0, 0.0)
+            if not self.allow_combine and x and yaw:
+                x = 0.0
             return {"x": x, "y": y, "yaw": yaw, "speed": self.speed, "armed": self.armed,
                     "home_seq": self.home_seq}
 
