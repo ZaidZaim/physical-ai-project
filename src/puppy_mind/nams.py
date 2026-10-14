@@ -84,6 +84,7 @@ class Nams:
             self._load_links()
             self._thread = threading.Thread(target=self._work, daemon=True, name="nams-sync")
             self._thread.start()
+            self._submit(self._req, "GET", "/v1/status")  # validates the key now: 401 flips auth to 'invalid'
 
     # ------------------------------------------------------------------ plumbing
     def _req(self, method: str, path: str, body: dict | None = None, params: dict | None = None) -> Any | None:

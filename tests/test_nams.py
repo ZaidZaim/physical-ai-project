@@ -26,6 +26,8 @@ class FakeNams:
         if self.mode == "500":
             return httpx.Response(500, text="boom")
         path, body = req.url.path, (json.loads(req.content) if req.content else {})
+        if path == "/v1/status":
+            return httpx.Response(200, json={"status": "ok"})
         self.calls.append((req.method, path, body))
         if path == "/v1/conversations":
             return httpx.Response(201, json={"id": self._id("conv"), "metadata": body.get("metadata")})
