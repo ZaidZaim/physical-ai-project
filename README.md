@@ -92,6 +92,12 @@ commands sent on change only, no forward+turn mixing. Not yet verified on hardwa
 Aura login and an OpenAI key), `robot/puppy_drive.py` on the robot, the lighter 320x240 camera stream.
 Run it: `uv run puppy-mind robot-test` while joined to the robot's HW... Wi-Fi.
 
+## Aura verification
+`uv run puppy-mind reset --yes && uv run puppy-mind seed && uv run python eval/verify_graph.py` replays the scripted booth day into
+your Aura instance and checks 17 facts (what is on the table, what changed, which object is possibly gone, history, read-only Cypher
+guard). Passed against a live AuraDB Professional instance on 2026-10-14. This found and fixed a real Cypher bug in `find_object`.
+Note: `.env` now overrides shell/Windows `NEO4J_*` variables (a stale `NEO4J_URI` from another project had silently redirected the app).
+
 ## Status / honest limits
 * Graph logic and matching are unit-tested (matching) and designed against Aura; the Aura-backed ingestion/queries have NOT yet been executed against a live instance (connection was failing when this was written).
 * Single camera, no pose: spatial relations are qualitative and "location" is a name you set (`/api/location`).

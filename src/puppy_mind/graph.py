@@ -36,7 +36,7 @@ def now_iso() -> str:
 class Memory:
     def __init__(self, s: Settings):
         self.s = s
-        self.driver = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password))
+        self.driver = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password), notifications_min_severity="OFF")
         self.db = s.neo4j_database
 
     def close(self) -> None:
@@ -287,16 +287,16 @@ class Memory:
             """
             MATCH (o:Object) WHERE toLower(o.label) CONTAINS toLower($label)
               AND ($color IS NULL OR toLower(coalesce(o.color,'')) = toLower($color))
-            OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Location)
-            WITH o, l, la ORDER BY la.last_seen DESC
-            WITH o, head(collect(l.name)) AS location
-            OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active
+            CALL (o) {
+              OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Location)
+              RETURN l.name AS location ORDER BY la.last_seen DESC LIMIT 1
+            }
             RETURN o.id AS id, o.label AS label, o.color AS color, o.description AS description,
                    o.status AS status, o.miss_count AS consecutive_misses, o.seen_count AS times_seen,
                    toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
                    o.last_zone AS last_zone, location,
-                   [x IN collect({predicate:type(r), target:b.label+' '+b.id, since:toString(r.since)})
-                    WHERE x.predicate IS NOT NULL] AS active_relations
+                   [(o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active |
+                      {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations
             ORDER BY o.last_seen DESC LIMIT $limit
             """,
             label=label, color=color, preds=list(PREDICATES), limit=limit,

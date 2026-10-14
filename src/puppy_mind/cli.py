@@ -107,7 +107,7 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
             print(f"\nAura is NOT reachable ({why}). Using in-RAM memory for now: nothing will be saved.")
             os.environ["PUPPY_FAKE_MEMORY"] = "1"
         else:
-            print("\nAura connected: observations will be saved to your graph.")
+            print(f"\nAura connected ({s.neo4j_uri}): observations will be saved to your graph.")
             if not s.openai_api_key:
                 print("OPENAI_API_KEY is not set: camera frames will NOT be analysed yet (video and driving still work).")
     else:
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "init":
             brain.mem.init_schema()
-            _p({"connected": True, "stats": brain.mem.stats(), "nams": brain.nams.enabled})
+            _p({"connected": True, "database": s.neo4j_uri, "stats": brain.mem.stats(), "nams": brain.nams.enabled})
         elif args.cmd == "stats":
             _p(brain.mem.stats())
         elif args.cmd == "observe":

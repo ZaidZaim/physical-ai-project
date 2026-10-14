@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# The project's .env must WIN over variables already in the shell/Windows environment: a stale NEO4J_URI from another
+# project silently pointed this app at a different database. (Set env vars explicitly in .env to change behaviour.)
+load_dotenv(override=True)
 
 
 def _bool(name: str, default: bool) -> bool:
