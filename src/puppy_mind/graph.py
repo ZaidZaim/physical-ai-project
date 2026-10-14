@@ -64,6 +64,7 @@ class Memory:
         (they carry n_objects and source) are touched.
         """
         self._write("MATCH (n:Observation) WHERE n.n_objects IS NOT NULL AND n.source IS NOT NULL SET n:Sighting REMOVE n:Observation")
+        self._write("MATCH (l:Location) WHERE l.id IS NULL SET l.id = 'plc-' + substring(randomUUID(), 0, 8)")  # every place gets a stable id
         for q in ("DROP CONSTRAINT obs_id IF EXISTS", "DROP INDEX obs_ts IF EXISTS"):
             try:
                 self._write(q)
@@ -78,6 +79,7 @@ class Memory:
             "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT location_name IF NOT EXISTS FOR (n:Location) REQUIRE n.name IS UNIQUE",
             "CREATE CONSTRAINT robot_name IF NOT EXISTS FOR (n:Robot) REQUIRE n.name IS UNIQUE",
+            "CREATE CONSTRAINT location_id IF NOT EXISTS FOR (n:Location) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT dialogue_id IF NOT EXISTS FOR (n:Dialogue) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT utterance_id IF NOT EXISTS FOR (n:Utterance) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT reasoning_step_id IF NOT EXISTS FOR (n:ReasoningStep) REQUIRE n.id IS UNIQUE",
@@ -118,6 +120,9 @@ class Memory:
         ts: str | None = None,
         image_ref: str | None = None,
         count_misses: bool = True,
+        room_type: str | None = None,
+        place_confidence: float | None = None,
+        heading: float | None = None,
     ) -> dict[str, Any]:
         ts = ts or now_iso()
         location = location or self.s.default_location
@@ -136,7 +141,7 @@ class Memory:
             MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
             OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active
             RETURN o.id AS id, o.label AS label, coalesce(o.color,'unknown') AS color,
-                   coalesce(o.last_zone,'unknown') AS zone,
+                   coalesce(o.last_zone,'unknown') AS zone, o.status AS status,
                    collect(DISTINCT [type(r), b.label]) AS anchors
             """,
             loc=location, preds=list(PREDICATES),
@@ -159,6 +164,19 @@ class Memory:
             for i, d in dets.items()
         ]
         mapping = assign(knowns, seens)
+
+        # view overlap: how much of what is known (and present) HERE is in this frame. A frame of another wall, or of one corner,
+        # says nothing about objects that are simply out of view, so it must not count as evidence of absence.
+        matched_ids = {v for v in mapping.values() if v}
+        present_known = [r for r in rows if r["status"] != "possibly_gone"]
+        overlap = (sum(1 for r in present_known if r["id"] in matched_ids) / len(present_known)) if present_known else 1.0
+        # Partial view (half the room or less): an absence only counts for objects whose spatial ANCHOR is in view. A laptop that
+        # was ON the table is missed if the table is in the frame; a stove out of frame is simply out of frame.
+        partial = overlap <= self.s.min_overlap
+        seen_labels = {d.label.lower() for d in dets.values()}
+        eligible = [r["id"] for r in rows if any(lab in seen_labels for _t, lab in r["anchors"] if lab)] if partial else []
+        if partial and not eligible:
+            count_misses = False
 
         # 2) resolve ids (unmatched detections become new objects)
         obj_id: dict[int, str] = {}
@@ -183,10 +201,13 @@ class Memory:
         self._write(
             """
             MERGE (l:Location {name:$loc})
+              ON CREATE SET l.id = 'plc-' + substring(randomUUID(), 0, 8), l.room_type = coalesce($room, 'unknown'), l.provisional = false,
+                            l.created_at = datetime($ts), l.visits = 0
             MERGE (r:Robot {name:$robot})
             MERGE (s:Session {id:$sid}) ON CREATE SET s.started_at = datetime($ts)
             CREATE (ob:Sighting {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
-                                    image_ref:$img, n_objects:$n})
+                                    image_ref:$img, n_objects:$n, room_type:$room, overlap:$overlap,
+                                    place_confidence:$pc, heading:$heading})
             MERGE (ob)-[:CAPTURED_BY]->(r)
             MERGE (ob)-[:IN_SESSION]->(s)
             MERGE (ob)-[:AT]->(l)
@@ -207,6 +228,7 @@ class Memory:
             """,
             loc=location, robot=self.s.robot_name, sid=session_id, ts=ts, obs=obs_id,
             summary=scene.summary, source=source, img=image_ref, n=len(det_rows), dets=det_rows,
+            room=room_type, overlap=round(overlap, 3), pc=place_confidence, heading=heading,
         )
 
         # 4) spatial relations (one query per predicate: Cypher can't parametrise rel types;
@@ -256,13 +278,13 @@ class Memory:
             """
             MATCH (ob:Sighting {id:$obs})
             MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
-            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone']
+            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone'] AND (NOT $partial OR o.id IN $elig)
             SET o.miss_count = coalesce(o.miss_count,0)+1
             SET o.status = CASE WHEN o.miss_count >= $thr THEN 'possibly_gone' ELSE o.status END
             MERGE (ob)-[:MISSED]->(o)
             RETURN o.id AS id, o.label AS label, o.miss_count AS misses, o.status AS status
             """,
-            loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold,
+            loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold, partial=partial, elig=eligible,
         )
         # a possibly-gone object no longer "is on" anything: end its relations (history is kept)
         gone_ids = [m["id"] for m in missed if m["status"] == "possibly_gone"]
@@ -275,7 +297,11 @@ class Memory:
                 """,
                 gone=gone_ids, ts=ts,
             )
+        moved = self._link_moved(sorted(new_ids), location, ts)
         return {
+            "overlap": round(overlap, 2),
+            "misses_counted": count_misses,
+            "moved_hypotheses": moved,
             "observation_id": obs_id,
             "ts": ts,
             "location": location,
@@ -329,6 +355,10 @@ class Memory:
                    o.last_zone AS last_zone, location,
                    [(o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active |
                       {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations,
+                   [(o)-[mv:POSSIBLY_MOVED_FROM]->(c:Object) | {object: coalesce(c.color, 'unknown') + ' ' + c.label, id: c.id,
+                      place: head([(c)-[:LOCATED_AT]->(pl:Location) | pl.name]), confidence: mv.confidence}] AS maybe_moved_from,
+                   [(n:Object)-[mv2:POSSIBLY_MOVED_FROM]->(o) | {object: coalesce(n.color, 'unknown') + ' ' + n.label, id: n.id,
+                      place: head([(n)-[:LOCATED_AT]->(pl2:Location) | pl2.name]), confidence: mv2.confidence}] AS maybe_moved_to,
                    [(o)-[h]->(hb:Object) WHERE type(h) IN $preds |
                       {predicate: type(h), target: hb.label + ' ' + hb.id, currently: h.active,
                        last_seen_so: toString(h.last_confirmed), ended_by: h.ended_by}][..8] AS relation_history
@@ -517,6 +547,139 @@ class Memory:
             return self._read(query)
         except Exception as e:  # surface syntax errors so the model can retry
             return [{"error": str(e)[:300]}]
+
+    # ------------------------------------------------------------------ spatial memory: places
+    def list_places(self) -> list[dict[str, Any]]:
+        """Every place with what is known to live there: input for the place resolver."""
+        return self._read(
+            """
+            MATCH (l:Location)
+            CALL (l) {
+              OPTIONAL MATCH (o:Object)-[:LOCATED_AT]->(l)
+              RETURN collect(CASE WHEN o IS NULL THEN NULL ELSE
+                {label: o.label, color: coalesce(o.color, 'unknown'), seen: o.seen_count, status: o.status} END) AS objects
+            }
+            RETURN l.name AS name, coalesce(l.room_type, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
+                   coalesce(l.visits, 0) AS visits, objects
+            ORDER BY l.name
+            """
+        )
+
+    def ensure_place(self, name: str, room_type: str = "unknown", provisional: bool = False) -> str:
+        rows = self._write(
+            """
+            MERGE (l:Location {name: $name})
+              ON CREATE SET l.id = 'plc-' + substring(randomUUID(), 0, 8), l.room_type = $room, l.provisional = $prov,
+                            l.created_at = datetime($ts), l.visits = 0
+            RETURN l.id AS id
+            """,
+            name=name, room=room_type or "unknown", prov=provisional, ts=now_iso(),
+        )
+        return rows[0]["id"]
+
+    def touch_place(self, name: str, room_type: str | None = None) -> None:
+        """The robot is (now) in this place: count the visit; learn the room type if we did not know it."""
+        self._write(
+            """
+            MATCH (l:Location {name: $name})
+            SET l.visits = coalesce(l.visits, 0) + 1, l.last_visit = datetime($ts),
+                l.room_type = CASE WHEN coalesce(l.room_type, 'unknown') IN ['unknown', 'other'] AND NOT coalesce($room, 'unknown') IN ['unknown', 'other', '']
+                                   THEN $room ELSE coalesce(l.room_type, 'unknown') END
+            """,
+            name=name, room=room_type, ts=now_iso(),
+        )
+
+    def note_transition(self, a: str, b: str) -> None:
+        """The robot went from a to b: they are adjacent (stored once per pair; the direction is just alphabetical)."""
+        x, y = sorted((a, b))
+        self._write(
+            """
+            MATCH (x:Location {name: $x}), (y:Location {name: $y}) WHERE x <> y
+            MERGE (x)-[r:ADJACENT_TO]->(y)
+              ON CREATE SET r.first_seen = datetime($ts), r.count = 0
+            SET r.count = r.count + 1, r.last_seen = datetime($ts)
+            """,
+            x=x, y=y, ts=now_iso(),
+        )
+
+    def rename_place(self, old: str, new: str) -> bool:
+        if old == new or self._read("MATCH (l:Location {name: $n}) RETURN count(l) AS c", n=new)[0]["c"]:
+            return False
+        rows = self._write("MATCH (l:Location {name: $old}) SET l.name = $new, l.provisional = false RETURN count(l) AS c", old=old, new=new)
+        return bool(rows and rows[0]["c"])
+
+    def merge_places(self, src: str, dst: str) -> bool:
+        """Fold place src into dst (e.g. two provisional views of the same kitchen). Objects keep their ids; look-alikes may remain
+        as duplicates and are tidied by normal matching over time."""
+        ok = self._read("MATCH (s:Location {name: $s}), (d:Location {name: $d}) WHERE s <> d RETURN count(*) AS c", s=src, d=dst)[0]["c"]
+        if not ok:
+            return False
+        self._write(
+            """
+            MATCH (o:Object)-[r:LOCATED_AT]->(s:Location {name: $s}), (d:Location {name: $d})
+            MERGE (o)-[r2:LOCATED_AT]->(d)
+              ON CREATE SET r2.first_seen = r.first_seen, r2.last_seen = r.last_seen, r2.count = r.count
+            DELETE r
+            """, s=src, d=dst)
+        self._write("MATCH (x:Sighting)-[r:AT]->(s:Location {name: $s}), (d:Location {name: $d}) MERGE (x)-[:AT]->(d) DELETE r", s=src, d=dst)
+        self._write(
+            """
+            MATCH (s:Location {name: $s})-[r:ADJACENT_TO]-(n:Location), (d:Location {name: $d}) WHERE n <> d AND n <> s
+            WITH d, n, sum(r.count) AS c
+            WITH d, n, c, CASE WHEN d.name < n.name THEN [d, n] ELSE [n, d] END AS ordered
+            WITH ordered[0] AS x, ordered[1] AS y, c
+            MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.first_seen = datetime(), a.count = 0
+            SET a.count = a.count + c
+            """, s=src, d=dst)
+        self._write("MATCH (s:Location {name: $s}) DETACH DELETE s", s=src)
+        return True
+
+    def places_overview(self) -> list[dict[str, Any]]:
+        return self._read(
+            """
+            MATCH (l:Location)
+            CALL (l) {
+              OPTIONAL MATCH (o:Object)-[:LOCATED_AT]->(l)
+              RETURN count(o) AS objects, sum(CASE WHEN o.status = 'present' THEN 1 ELSE 0 END) AS present,
+                     sum(CASE WHEN o.status = 'possibly_gone' THEN 1 ELSE 0 END) AS possibly_gone
+            }
+            CALL (l) {
+              OPTIONAL MATCH (s:Sighting)-[:AT]->(l)
+              RETURN count(s) AS sightings, toString(max(s.ts)) AS last_seen
+            }
+            CALL (l) {
+              OPTIONAL MATCH (l)-[r:ADJACENT_TO]-(n:Location)
+              RETURN collect(CASE WHEN n IS NULL THEN NULL ELSE {place: n.name, times: r.count} END) AS adjacent
+            }
+            RETURN l.id AS id, l.name AS name, coalesce(l.room_type, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
+                   coalesce(l.visits, 0) AS visits, objects, present, possibly_gone, sightings, last_seen, adjacent
+            ORDER BY sightings DESC, name
+            """
+        )
+
+    def _link_moved(self, new_ids: list[str], place: str, ts: str) -> list[dict]:
+        """HYPOTHESES, never facts: a new object here that looks exactly like an object that stopped being seen in ANOTHER place
+        may be the same thing, moved. Recorded as (new)-[:POSSIBLY_MOVED_FROM {confidence}]->(old)."""
+        if not new_ids:
+            return []
+        return self._write(
+            """
+            UNWIND $ids AS nid
+            MATCH (n:Object {id: nid})
+            MATCH (c:Object) WHERE c.id <> n.id AND c.label = n.label AND c.status = 'possibly_gone'
+              AND coalesce(c.color, 'unknown') = coalesce(n.color, 'unknown')
+              AND NOT EXISTS { (c)-[:LOCATED_AT]->(l:Location {name: $place}) }
+            WITH n, collect(c) AS cands
+            UNWIND cands AS c
+            WITH n, c, size(cands) AS k, CASE WHEN coalesce(n.color, 'unknown') = 'unknown' THEN 0.5 ELSE 1.0 END AS f
+            MERGE (n)-[r:POSSIBLY_MOVED_FROM]->(c)
+              ON CREATE SET r.since = datetime($ts)
+            SET r.confidence = round(100.0 * f * (CASE WHEN k = 1 THEN 0.6 ELSE 0.6 / k END)) / 100.0,
+                r.basis = 'same kind and colour, and the original stopped being seen elsewhere'
+            RETURN n.id AS new_id, c.id AS old_id, n.label AS label, r.confidence AS confidence
+            """,
+            ids=new_ids, place=place, ts=ts,
+        )
 
     def clear_nams_links(self) -> int:
         """Forget which NAMS entity mirrors each object (used before a rebuild). Touches only our Object nodes."""

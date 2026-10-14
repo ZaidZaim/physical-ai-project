@@ -35,6 +35,12 @@ Rules:
 - "What changed" / "what new objects appeared" (no time given) means since the FIRST observation: call what_changed WITHOUT `since`
   and narrate every line of its `summary` (new objects, possibly gone, relation changes). "Summarise what you remember": location_summary.
 - Place names are matched case-insensitively.
+- SPATIAL MEMORY: the robot moves between places (rooms). Object identity is scoped to a place: a chair in the kitchen and a chair in
+  the living room are DIFFERENT objects. If asked about "the chair" and several exist in different places, list them by place.
+  `possibly_gone` is per place: something missing in the kitchen says nothing about the living room.
+  A `maybe_moved_from` / `maybe_moved_to` entry is only a HYPOTHESIS (look-alike appeared elsewhere): say "might be the same X that was in ..." and
+  give the confidence; never state it as fact. Use current_place for "where are you", places_overview for "which rooms do you know / what is in the
+  kitchen / how do rooms connect". Rooms named "Unnamed area N" were discovered automatically and can be renamed by the user.
 - recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
   where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
 - For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
@@ -77,6 +83,14 @@ TOOLS = [
         "description": "Semantic search of the long-term agent memory (NAMS): past conversations (what visitors asked or said, earlier answers), the narrative log of observations, and known entities. Use for 'what did someone ask earlier', 'what do you remember about X', or when graph tools return nothing. NOT the source of truth for where things are or when they changed: use the graph tools for that.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}}},
     {"type": "function", "function": {
+        "name": "current_place",
+        "description": "Where the robot is right now: place name, how sure it is, the kind of room, and whether it is in automatic mode.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "places_overview",
+        "description": "Every place the robot knows: kind of room, how many objects are present or possibly gone, how many sightings, when last seen, and which places connect (adjacent). Use for 'which rooms do you know', 'what is in the kitchen', 'how do the rooms connect'.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
         "name": "location_summary",
         "description": "Everything remembered about a place in one call: every object with first/last seen, status, relations and the observation time span. Use for 'summarise what you remember'.",
         "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}},
@@ -95,6 +109,7 @@ class Agent:
     def __init__(self, s: Settings, mem: Memory, nams: Nams):
         self.s, self.mem, self.nams = s, mem, nams
         self.client = OpenAI(api_key=s.openai_api_key)
+        self.place_fn = None  # set by Brain: returns where the robot is now
         self.history: dict[str, list[dict]] = {}  # per-session short-term turns (also mirrored to NAMS)
 
     def _call(self, name: str, a: dict) -> Any:
@@ -109,6 +124,8 @@ class Agent:
             "what_changed": lambda: m.changes_since(a.get("since"), a.get("location")),
             "timeline": lambda: m.timeline(int(a.get("limit", 10))),
             "location_summary": lambda: m.location_summary(a.get("location")),
+            "current_place": lambda: (self.place_fn() if self.place_fn else {"error": "place tracking is not available"}),
+            "places_overview": lambda: m.places_overview(),
             "recall_memory": lambda: self.nams.recall(a["query"], int(a.get("limit", 5))),
             "read_cypher": lambda: m.read_cypher(a["query"]),
         }[name]()

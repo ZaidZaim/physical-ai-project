@@ -32,7 +32,12 @@ class Relation(BaseModel):
     confidence: float
 
 
+ROOM_TYPES = ("kitchen", "living room", "dining room", "bedroom", "bathroom", "hallway", "office", "garage", "outdoor", "other", "unknown")
+
+
 class Scene(BaseModel):
     summary: str = Field(description="One or two sentence description of the scene")
+    room_type: str = Field(description="Kind of place this view shows: kitchen, living room, dining room, bedroom, bathroom, hallway, office, garage, outdoor, other, or unknown")
+    room_confidence: float = Field(description="0.0-1.0 certainty about room_type; low when the view shows only a wall or floor")
     objects: list[Detection]
     relations: list[Relation]

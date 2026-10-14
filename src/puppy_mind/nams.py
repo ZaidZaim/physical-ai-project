@@ -208,6 +208,32 @@ class Nams:
         return self._fixed.get(key)
 
     @staticmethod
+    @staticmethod
+    def _place_name(name: str, place_id: str | None) -> str:
+        """'Kitchen 4f2a1b': like objects, places need a distinctive name or NAMS merges 'Unnamed area 1' with 'Unnamed area 2'."""
+        return f"{name} {place_id[-6:]}" if place_id else name
+
+    def submit_transition(self, a: str, a_id: str | None, b: str, b_id: str | None) -> None:
+        self._submit(self._transition, a, a_id, b, b_id)
+
+    def _transition(self, a: str, a_id: str | None, b: str, b_id: str | None) -> None:
+        ea = self._fixed_entity("place", self._place_name(a, a_id), T_PLACE, "Place observed by the robot")
+        eb = self._fixed_entity("place", self._place_name(b, b_id), T_PLACE, "Place observed by the robot")
+        if ea and eb:
+            self._relationships([{"relationshipType": "ADJACENT_TO", "sourceId": ea, "targetId": eb,
+                                  "properties": {"learned_from": "robot moved between them"}}])
+
+    def submit_rename(self, old: str, new: str, place_id: str | None) -> None:
+        self._submit(self._rename, old, new, place_id)
+
+    def _rename(self, old: str, new: str, place_id: str | None) -> None:
+        old_full, new_full = self._place_name(old, place_id), self._place_name(new, place_id)
+        eid = self._fixed.pop(("place", old_full), None)
+        if eid:
+            self._req("PUT", f"/v1/entities/{eid}", {"name": new_full})
+            self._fixed[("place", new_full)] = eid
+
+    @staticmethod
     def _instance_name(label: str, color: str, object_id: str, salt: str = "") -> str:
         """Readable AND unique: 'black chair 3f2a9c'. Colour + a short id keep NAMS from merging distinct look-alikes
         (measured live: 'chair 3f2a9c' without the colour merged; 'black chair 3f2a9c' stayed separate)."""
@@ -295,7 +321,7 @@ class Nams:
 
     def _sync_observation(self, p: dict) -> None:
         robot = self._fixed_entity("robot", p["robot"], T_ROBOT, "Hiwonder PuppyPi quadruped robot")
-        place = self._fixed_entity("place", p["location"], T_PLACE, f"Place observed by {p['robot']}")
+        place = self._fixed_entity("place", self._place_name(p["location"], p.get("place_id")), T_PLACE, f"Place observed by {p['robot']}")
         for o in p["objects"]:
             self._info[o["id"]] = {"label": o["label"], "color": o["color"]}
         self._ensure_objects(p["objects"], p["location"], p["ts"])

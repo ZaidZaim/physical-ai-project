@@ -48,6 +48,10 @@ class Settings:
     strict_vocab: bool = _bool("STRICT_VOCAB", False)
     min_confidence: float = float(os.getenv("MIN_CONFIDENCE", "0.5"))
     miss_threshold: int = int(os.getenv("MISS_THRESHOLD", "3"))
+    # a frame only counts as evidence of absence if it shares at least this fraction of the objects known (present) at the place
+    min_overlap: float = float(os.getenv("MIN_OVERLAP", "0.5"))
+    auto_place: bool = _bool("AUTO_PLACE", True)
+    place_confirm_frames: int = int(os.getenv("PLACE_CONFIRM_FRAMES", "2"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)
     store_images: bool = _bool("STORE_IMAGES", False)

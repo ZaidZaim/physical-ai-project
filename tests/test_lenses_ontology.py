@@ -44,7 +44,7 @@ def make_fake():
     m = FakeMemory(s)
     from puppy_mind.models import Detection, Relation, Scene
     d = lambda i, l, c: Detection(idx=i, label=l, color=c, description="", zone="center", confidence=0.9)
-    m.ingest(Scene(summary="t", objects=[d(0, "table", "brown"), d(1, "bottle", "blue")], relations=[Relation(subject=1, predicate="ON", object=0, confidence=0.9)]),
+    m.ingest(Scene(summary="t", room_type="unknown", room_confidence=0.0, objects=[d(0, "table", "brown"), d(1, "bottle", "blue")], relations=[Relation(subject=1, predicate="ON", object=0, confidence=0.9)]),
              session_id="s", location="Booth")
     oid = next(o["id"] for o in m.objs.values() if o["label"] == "bottle")
     m.record_exchange("s", "what is on the table?", "a bottle", [{"tool": "related_objects", "args": {}, "result": {}}], [oid])

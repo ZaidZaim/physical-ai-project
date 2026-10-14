@@ -22,15 +22,15 @@ def test_observation_flows_to_nams_and_missing_objects_become_possibly_gone(monk
     client = httpx.Client(transport=httpx.MockTransport(fake.handler), base_url="https://nams.test")
     brain.nams = Nams(dataclasses.replace(s, nams_api_key="k"), memory=brain.mem, client=client)
     try:
-        full = Scene(summary="table, laptop", objects=[D(0, "table", "brown"), D(1, "laptop", "silver")],
+        full = Scene(summary="table, laptop", room_type="unknown", room_confidence=0.0, objects=[D(0, "table", "brown"), D(1, "laptop", "silver")],
                      relations=[Relation(subject=1, predicate="ON", object=0, confidence=0.9)])
         brain.observe_scene(full, location="Booth")
-        empty_table = Scene(summary="table only", objects=[D(0, "table", "brown")], relations=[])
+        empty_table = Scene(summary="table only", room_type="unknown", room_confidence=0.0, objects=[D(0, "table", "brown")], relations=[])
         brain.observe_scene(empty_table, location="Booth")
         brain.observe_scene(empty_table, location="Booth")  # laptop missed twice => possibly gone
         assert brain.nams.flush(5)
         types = {(e["name"], e["type"]) for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"]}
-        assert any(n.startswith("silver laptop ") and t == "Object" for n, t in types) and ("Booth", "Location") in types and ("PuppyPi", "Agent") in types
+        assert any(n.startswith("silver laptop ") and t == "Object" for n, t in types) and any(n.startswith("Booth ") and t == "Location" for n, t in types) and ("PuppyPi", "Agent") in types
         rels = [r["relationshipType"] for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
         assert "ON" in rels and "OBSERVED" in rels
         descs = [b["description"] for m, p, b in fake.calls if m == "PUT"]

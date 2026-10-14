@@ -13,7 +13,7 @@ from openai import OpenAI
 from PIL import Image
 
 from .config import Settings
-from .models import Scene
+from .models import ROOM_TYPES, Scene
 
 PROMPT = """You are the perception module of a small quadruped robot with a single low camera.
 Describe ONLY what is clearly visible in the frame as structured data.
@@ -31,6 +31,9 @@ Rules:
   IN_FRONT_OF, BEHIND. Subject/object are idx values. Prefer ON/INSIDE/NEXT_TO over NEAR.
 - The camera has no depth sense: do not claim distances in metres.
 - People: output a single entry with label "person". {people_rule}
+- room_type: what kind of place this view shows, judged from fixtures and furniture (fridge, stove, sofa, bed, toilet, stairs...)
+  not from the objects you list. Use one of: kitchen, living room, dining room, bedroom, bathroom, hallway, office, garage,
+  outdoor, other, unknown. A view of only a wall or floor is "unknown" with low room_confidence.
 - If the image is blurry, dark, or empty, return few/no objects and say so in the summary.
 """
 
@@ -102,4 +105,7 @@ class Perception:
             for r in scene.relations
             if r.subject in remap and r.object in remap
         ]
-        return Scene(summary=scene.summary, objects=keep, relations=rels)
+        room = (scene.room_type or "unknown").strip().lower()
+        room = room if room in ROOM_TYPES else "other"
+        return Scene(summary=scene.summary, room_type=room, room_confidence=max(0.0, min(1.0, scene.room_confidence)),
+                     objects=keep, relations=rels)

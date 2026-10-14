@@ -19,13 +19,15 @@ class FakeMemory:
         self.rels: dict[tuple, dict] = {}
         self.obs: list[dict] = []
         self.msgs: list[dict] = []
+        self.places: dict[str, dict] = {}
+        self.adj: dict[tuple, int] = {}
         self.steps: list[dict] = []
 
     def close(self): ...
     def init_schema(self): ...
     def start_session(self, session_id=None): return session_id or "fake-session"
 
-    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True) -> dict[str, Any]:
+    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True, room_type=None, place_confidence=None, heading=None) -> dict[str, Any]:
         ts, loc = ts or now_iso(), location or self.s.default_location
         dets = {d.idx: d for d in scene.objects if d.confidence >= self.s.min_confidence}
         anchors = {i: set() for i in dets}
@@ -38,6 +40,15 @@ class FakeMemory:
             for o in self.objs.values() if o["loc"] == loc
         ]
         mp = assign(knowns, [Seen(i, d.label, d.color, d.zone, d.confidence, frozenset(anchors[i])) for i, d in dets.items()])
+        self._place(loc, room_type or "unknown")
+        present = [o for o in self.objs.values() if o["loc"] == loc and o["status"] != "possibly_gone"]
+        matched = {v for v in mp.values() if v}
+        overlap = (sum(1 for o in present if o["id"] in matched) / len(present)) if present else 1.0
+        partial = overlap <= self.s.min_overlap
+        seen_labels = {d.label.lower() for d in dets.values()}
+        eligible = {o["id"] for o in present if any(a == o["id"] and r["active"] and self.objs[b]["label"] in seen_labels for (a, p, b), r in self.rels.items())} if partial else set()
+        if partial and not eligible:
+            count_misses = False
         ids, rows = {}, []
         for i, d in dets.items():
             new = mp[i] is None
@@ -61,7 +72,7 @@ class FakeMemory:
                 r["active"], r["until"] = False, ts
         missed = []
         for o in (self.objs.values() if count_misses else []):
-            if o["loc"] == loc and o["id"] not in vis and o["status"] in ("present", "possibly_gone"):
+            if o["loc"] == loc and o["id"] not in vis and o["status"] in ("present", "possibly_gone") and (not partial or o["id"] in eligible):
                 o["miss"] += 1
                 if o["miss"] >= self.s.miss_threshold:
                     o["status"] = "possibly_gone"
@@ -72,10 +83,70 @@ class FakeMemory:
                 r["active"], r["until"] = False, ts
         oid = f"obs-{uuid.uuid4().hex[:10]}"
         self.obs.insert(0, {"id": oid, "ts": ts, "location": loc, "summary": scene.summary, "n": len(rows)})
-        return {"observation_id": oid, "ts": ts, "location": loc, "missed": missed, "objects": rows,
+        return {"overlap": round(overlap, 2), "misses_counted": count_misses, "moved_hypotheses": [],
+                "observation_id": oid, "ts": ts, "location": loc, "missed": missed, "objects": rows,
                 "new_objects": [f"{r['label']} ({r['id']})" for r in rows if r["new"]],
                 "matched_objects": [f"{r['label']} ({r['id']})" for r in rows if not r["new"]],
                 "relations": len(cur), "relation_list": [{"a": a, "predicate": p, "b": b} for a, p, b in cur]}
+
+    # ---- spatial memory (RAM mirror of graph.Memory's place API)
+    def _place(self, name, room="unknown", provisional=False):
+        return self.places.setdefault(name, {"id": "plc-" + uuid.uuid4().hex[:8], "room_type": room or "unknown", "provisional": provisional, "visits": 0})
+
+    def ensure_place(self, name, room_type="unknown", provisional=False):
+        return self._place(name, room_type, provisional)["id"]
+
+    def touch_place(self, name, room_type=None):
+        p = self._place(name)
+        p["visits"] += 1
+        if p["room_type"] in ("unknown", "other") and room_type not in (None, "", "unknown", "other"):
+            p["room_type"] = room_type
+
+    def note_transition(self, a, b):
+        key = tuple(sorted((a, b)))
+        self.adj[key] = self.adj.get(key, 0) + 1
+
+    def rename_place(self, old, new):
+        if old == new or new in self.places or old not in self.places:
+            return False
+        self.places[new] = self.places.pop(old)
+        self.places[new]["provisional"] = False
+        for o in self.objs.values():
+            if o["loc"] == old:
+                o["loc"] = new
+        self.adj = {tuple(sorted(new if x == old else x for x in k)): v for k, v in self.adj.items()}
+        return True
+
+    def merge_places(self, src, dst):
+        if src == dst or src not in self.places or dst not in self.places:
+            return False
+        for o in self.objs.values():
+            if o["loc"] == src:
+                o["loc"] = dst
+        del self.places[src]
+        self.adj = {tuple(sorted(dst if x == src else x for x in k)): v for k, v in self.adj.items() if len({dst if x == src else x for x in k}) == 2}
+        return True
+
+    def list_places(self):
+        names = set(self.places) | {o["loc"] for o in self.objs.values()}
+        out = []
+        for n in sorted(names):
+            p = self._place(n)
+            out.append({"name": n, "room_type": p["room_type"], "provisional": p["provisional"], "visits": p["visits"],
+                        "objects": [{"label": o["label"], "color": o["color"], "seen": 1, "status": o["status"]} for o in self.objs.values() if o["loc"] == n]})
+        return out
+
+    def places_overview(self):
+        out = []
+        for p in self.list_places():
+            adj = [{"place": (set(k) - {p["name"]}).pop(), "times": v} for k, v in self.adj.items() if p["name"] in k]
+            sight = sum(1 for o in self.obs if o["location"] == p["name"])
+            objs = p["objects"]
+            out.append({"id": self.places.get(p["name"], {}).get("id"), "name": p["name"], "room_type": p["room_type"], "provisional": p["provisional"],
+                        "visits": p["visits"], "objects": len(objs), "present": sum(o["status"] == "present" for o in objs),
+                        "possibly_gone": sum(o["status"] == "possibly_gone" for o in objs), "sightings": sight,
+                        "last_seen": next((o["ts"] for o in self.obs if o["location"] == p["name"]), None), "adjacent": adj})
+        return out
 
     def stats(self):
         return {"objects": len(self.objs), "observations": len(self.obs), "locations": len({o["loc"] for o in self.objs.values()}),

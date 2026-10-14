@@ -30,7 +30,8 @@ def _scene(step: dict) -> Scene:
     for r in step.get("relations", []):
         a, pred, b = r.split()
         rels.append(Relation(subject=int(a), predicate=pred, object=int(b), confidence=0.9))
-    return Scene(summary=step.get("summary", ""), objects=objs, relations=rels)
+    return Scene(summary=step.get("summary", ""), room_type=step.get("room", "unknown"), room_confidence=float(step.get("room_conf", 0.9 if step.get("room") else 0.0)),
+                 objects=objs, relations=rels)
 
 
 def replay(brain, path: str) -> list[dict]:
