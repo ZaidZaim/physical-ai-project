@@ -14,6 +14,67 @@ def _p(x) -> None:
     print(json.dumps(x, indent=2, default=str, ensure_ascii=False))
 
 
+def _nams_cmd(args, s) -> int:
+    """nams-check / nams-setup / nams-sync. Talks to NAMS (and Aura for sync); never needs the robot."""
+    from pathlib import Path
+
+    from .nams import Nams
+
+    if not s.nams_api_key:
+        print("NAMS_API_KEY is not set in .env")
+        return 2
+    n = Nams(s)
+    try:
+        if args.cmd == "nams-check":
+            for title, path in (("status", "/v1/status"), ("workspace", "/v1/workspace"),
+                                ("active ontology", "/v1/ontologies/active"), ("entity count", "/v1/entities/count")):
+                r = n._req("GET", path)
+                if r is None and n.auth == "invalid":
+                    print(f"{title}: REJECTED - {n.stats['last_error']}")
+                    return 1
+                text = json.dumps(r, default=str, ensure_ascii=False)
+                print(f"{title}: {text[:600] + (' ...' if len(text) > 600 else '') if r is not None else 'unavailable (' + n.stats['last_error'] + ')'}")
+            print(f"\nworkspace header: {s.nams_workspace_id or '(none)'}   base: {s.nams_base_url}")
+            return 0
+        if args.cmd == "nams-setup":
+            spec = json.loads(Path("ontology/puppy_pi.json").read_text(encoding="utf-8"))
+            for obj in s.vocab:  # let NAMS extraction map common nouns in observation text to PhysicalObject
+                spec["ontology"]["extraction_aliases"].setdefault(obj, "PhysicalObject")
+            spec["ontology"]["extraction_aliases"].update({"puppypi": "Robot", "robot": "Robot", "visitor": "Person"})
+            r = n._req("POST", "/v1/ontologies", spec)
+            if r is None:
+                print("create failed:", n.stats["last_error"])
+                return 1
+            print("created ontology version:", json.dumps({k: r.get(k) for k in ("id", "ontology_id", "revision", "semver_tag", "validation_mode")}))
+            if args.activate:
+                a = n._req("POST", "/v1/ontologies/active", {"version_id": r["id"]})
+                print("activated" if a is not None else "activation failed: " + n.stats["last_error"])
+                return 0 if a is not None else 1
+            print("NOT activated (this changes how your workspace extracts entities). Re-run with --activate to switch to it.")
+            return 0
+        if args.cmd == "nams-sync":
+            from .graph import Memory
+
+            mem = Memory(s)
+            n.mem = mem
+            n._load_links()
+            snap = mem.export_for_nams(args.location)
+            by_loc: dict[str, list] = {}
+            for o in snap["objects"]:
+                by_loc.setdefault(o["location"], []).append(o)
+            for loc, objs in by_loc.items():
+                ids = {o["id"] for o in objs}
+                rels = [r for r in snap["relations"] if r["a"] in ids and r["b"] in ids]
+                print(loc, n.sync_snapshot(objs, rels, loc, s.robot_name))
+            n.flush(60)
+            print("done:", n.status())
+            mem.close()
+            return 0 if n.auth != "invalid" else 1
+    finally:
+        n.close()
+    return 1
+
+
 def _aura_reachable(s) -> str:
     """'' if the Aura login works, otherwise a short reason. Never raises."""
     if not (s.neo4j_uri and s.neo4j_password):
@@ -159,10 +220,12 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--evidence", action="store_true")
     sd = sub.add_parser("seed", help="replay a scripted scenario (no camera/OpenAI needed)")
     sd.add_argument("scenario", nargs="?", default="eval/scenarios/booth.json")
+    sd.add_argument("--nams", action="store_true", help="also write the scripted data to NAMS (off by default: it is fake test data)")
     sub.add_parser("stats")
     sub.add_parser("reset").add_argument("--yes", action="store_true")
     e = sub.add_parser("eval", help="run the question set against current memory")
     e.add_argument("questions", nargs="?", default="eval/questions.json")
+    e.add_argument("--nams", action="store_true", help="also record the eval Q&A in NAMS (off by default)")
     sv = sub.add_parser("serve", help="web UI + robot ingest API")
     sv.add_argument("--host", default="0.0.0.0")
     sv.add_argument("--port", type=int, default=8000)
@@ -176,6 +239,11 @@ def main(argv: list[str] | None = None) -> int:
     rt.add_argument("--full-camera", action="store_true", help="full-size camera stream instead of the lighter 320x240")
     rt.add_argument("--real-memory", action="store_true", help="save observations to Aura (and analyse frames with OpenAI) instead of in-RAM memory")
     rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
+    sub.add_parser("nams-check", help="test the NAMS key/workspace and show the active ontology")
+    ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS (add --activate to switch to it)")
+    ns.add_argument("--activate", action="store_true")
+    nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
+    nc.add_argument("--location")
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
@@ -205,11 +273,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     s = get_settings()
+    if args.cmd.startswith("nams-"):
+        return _nams_cmd(args, s)
     need_ai = args.cmd in {"observe", "watch", "ask", "eval"}
     if need_ai and not s.openai_api_key:
         print("OPENAI_API_KEY is not set (put it in .env)", file=sys.stderr)
         return 2
     brain = Brain(s, need_openai=need_ai)
+    if args.cmd in ("seed", "eval") and not getattr(args, "nams", False):
+        brain.nams.enabled = False  # scripted/test activity must not pollute the real NAMS workspace
     try:
         if args.cmd == "init":
             brain.mem.init_schema()

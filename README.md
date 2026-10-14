@@ -107,6 +107,12 @@ checker is substring-based; the model is non-deterministic, so re-run `eval` aft
 Privacy: camera frames go to OpenAI only when frame analysis is on (`--real-memory` with Aura reachable, or `serve`). Driving
 tests (`robot-test` without `--real-memory`) set `PERCEPTION=off`, so frames stay on the computer.
 
+## Memory: Aura + NAMS
+Aura is the authoritative, time-aware world model; NAMS holds entities/relationships, a narrative log, Q&A with reasoning traces
+and semantic recall. Design, data flow, setup commands and verification status: [docs/MEMORY.md](docs/MEMORY.md).
+NAMS code is tested against a fake server built from its OpenAPI spec; **not yet verified against the live service** (the key supplied
+on 2026-10-14 was rejected with 401).
+
 ## Status / honest limits
 * Graph logic and matching are unit-tested (matching) and designed against Aura; the Aura-backed ingestion/queries have NOT yet been executed against a live instance (connection was failing when this was written).
 * Single camera, no pose: spatial relations are qualitative and "location" is a name you set (`/api/location`).

@@ -238,7 +238,7 @@ function connect() {
 /* ---------- controls / state ---------- */
 async function refreshStats() {
   const s = await api('/api/state');
-  $('#loc').textContent = '📍 ' + s.location; $('#nams').textContent = 'NAMS ' + (s.nams ? 'on' : 'off');
+  $('#loc').textContent = '📍 ' + s.location; const ns = s.nams_status || {}; $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS: key rejected' : (s.nams ? `NAMS on · ${ns.synced_observations || 0} synced${ns.failed ? ' · ' + ns.failed + ' errors' : ''}` : 'NAMS off'); $('#nams').title = ns.last_error || ''; $('#nams').style.color = ns.auth === 'invalid' ? '#f85149' : '';
   $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
   $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
   const lap = (s.camera_name || '').startsWith('webcam');

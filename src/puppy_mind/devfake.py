@@ -80,6 +80,8 @@ class FakeMemory:
                 "sessions": 1, "present": sum(o["status"] == "present" for o in self.objs.values()),
                 "possibly_gone": sum(o["status"] == "possibly_gone" for o in self.objs.values())}
 
+    def nams_links(self): return {}
+    def set_nams_links(self, links): ...
     def current_view(self, location=None): return {"observation": None}
     def timeline(self, limit=20): return self.obs[:limit]
 

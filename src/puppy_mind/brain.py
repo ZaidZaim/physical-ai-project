@@ -62,7 +62,7 @@ class Brain:
             self.mem = FakeMemory(self.s)
         else:
             self.mem = Memory(self.s)
-        self.nams = Nams(self.s)
+        self.nams = Nams(self.s, memory=self.mem)
         self.bus = Bus()
         self.drive = DriveState(allow_combine=os.getenv("DRIVE_COMBINE") == "1")
         self._moved = False  # robot moved since the last observation
@@ -154,9 +154,11 @@ class Brain:
             "id": res["observation_id"], "ts": res["ts"], "location": loc, "summary": scene.summary,
             "objects": res["objects"], "relations": res["relation_list"], "missed": res["missed"],
         })
-        for d in res["objects"]:  # mirror new objects into NAMS long-term memory (best effort)
-            if d["new"]:
-                self.nams.remember_object(d["label"], d["color"], loc, d["id"])
+        self.nams.submit_observation({  # background: never blocks the robot
+            "session": self.session, "ts": res["ts"], "location": loc, "summary": scene.summary,
+            "robot": self.s.robot_name, "observation_id": res["observation_id"],
+            "objects": res["objects"], "relations": res["relation_list"], "missed": [dict(m) for m in res["missed"]],
+        })
         return res
 
     # ---- continuous watching
@@ -203,4 +205,5 @@ class Brain:
 
     def close(self) -> None:
         self.stop_watch()
+        self.nams.close()
         self.mem.close()

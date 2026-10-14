@@ -34,6 +34,8 @@ Rules:
 - "What changed" / "what new objects appeared" (no time given) means since the FIRST observation: call what_changed WITHOUT `since`
   and narrate every line of its `summary` (new objects, possibly gone, relation changes). "Summarise what you remember": location_summary.
 - Place names are matched case-insensitively.
+- recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
+  where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
 - For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
   may have changed, and earlier answers may not have covered this object. "No observation" is only valid after a tool returned nothing.
 - For "what changed", call what_changed with a sensible `since` (e.g. the session start or the
@@ -70,6 +72,10 @@ TOOLS = [
         "description": "What changed versus a baseline: new objects, possibly-gone objects, relation changes, plus ready-made `summary` sentences. Omit `since` to compare with the FIRST observation (the default for 'what changed' / 'what new objects appeared').",
         "parameters": {"type": "object", "properties": {"since": {"type": "string", "description": "optional ISO-8601 UTC timestamp"}, "location": {"type": "string"}}}}},
     {"type": "function", "function": {
+        "name": "recall_memory",
+        "description": "Semantic search of the long-term agent memory (NAMS): past conversations (what visitors asked or said, earlier answers), the narrative log of observations, and known entities. Use for 'what did someone ask earlier', 'what do you remember about X', or when graph tools return nothing. NOT the source of truth for where things are or when they changed: use the graph tools for that.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}}},
+    {"type": "function", "function": {
         "name": "location_summary",
         "description": "Everything remembered about a place in one call: every object with first/last seen, status, relations and the observation time span. Use for 'summarise what you remember'.",
         "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}},
@@ -102,6 +108,7 @@ class Agent:
             "what_changed": lambda: m.changes_since(a.get("since"), a.get("location")),
             "timeline": lambda: m.timeline(int(a.get("limit", 10))),
             "location_summary": lambda: m.location_summary(a.get("location")),
+            "recall_memory": lambda: self.nams.recall(a["query"], int(a.get("limit", 5))),
             "read_cypher": lambda: m.read_cypher(a["query"]),
         }[name]()
 

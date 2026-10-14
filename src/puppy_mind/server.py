@@ -173,6 +173,7 @@ def state():
         "camera_name": getattr(brain._src, "name", "") if brain._src else "",
         "camera_error": getattr(brain._src, "error", "") if brain._src else "",
         "nams": brain.nams.enabled,
+        "nams_status": brain.nams.status(),
         "stats": brain.mem.stats(),
         "current": brain.mem.current_view(),
         "recent": recent,

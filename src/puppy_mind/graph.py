@@ -477,6 +477,33 @@ class Memory:
         except Exception as e:  # surface syntax errors so the model can retry
             return [{"error": str(e)[:300]}]
 
+    def nams_links(self) -> dict[str, dict]:
+        """object id -> {id, name} of the NAMS entity mirroring it (so a restart keeps identities)."""
+        rows = self._read("MATCH (o:Object) WHERE o.nams_id IS NOT NULL RETURN o.id AS id, o.nams_id AS nams_id, o.nams_name AS name")
+        return {r["id"]: {"id": r["nams_id"], "name": r["name"]} for r in rows}
+
+    def set_nams_links(self, links: list[dict]) -> None:
+        self._write("UNWIND $l AS x MATCH (o:Object {id:x.id}) SET o.nams_id = x.nams_id, o.nams_name = x.name", l=links)
+
+    def export_for_nams(self, location: str | None = None) -> dict[str, Any]:
+        objs = self._read(
+            """
+            MATCH (o:Object)-[:LOCATED_AT]->(l:Location)
+            WHERE $loc IS NULL OR toLower(l.name) = toLower($loc)
+            RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status,
+                   toString(o.last_seen) AS last_seen, l.name AS location
+            ORDER BY o.first_seen
+            """,
+            loc=location,
+        )
+        rels = self._read(
+            f"""
+            MATCH (a:Object)-[r:{REL_ALT}]->(b:Object) WHERE r.active
+            RETURN a.id AS a, type(r) AS predicate, b.id AS b, toString(r.since) AS since
+            """
+        )
+        return {"objects": objs, "relations": rels}
+
     def stats(self) -> dict[str, Any]:
         return self._read(
             """

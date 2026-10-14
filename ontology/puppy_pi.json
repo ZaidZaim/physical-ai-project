@@ -1,0 +1,68 @@
+{
+  "message": "puppy-mind: physical-world vocabulary for a PuppyPi robot (robot, places, objects, visitors) with spatial relationships",
+  "validation_mode": "permissive",
+  "ontology": {
+    "domain": {},
+    "entity_types": [
+      {
+        "label": "Robot",
+        "description": "The Hiwonder PuppyPi quadruped that observes and remembers.",
+        "pole_type": "OBJECT",
+        "subtype": "robot",
+        "color": "#6366F1",
+        "icon": "bot",
+        "pii_sensitive": false,
+        "properties": [{"name": "model", "type": "string", "required": false}]
+      },
+      {
+        "label": "PhysicalObject",
+        "description": "A physical thing the robot saw: table, laptop, chair, bottle, backpack. One entity per physically distinct instance; object_id links it to the Aura world model.",
+        "pole_type": "OBJECT",
+        "subtype": "physical_object",
+        "color": "#4FB3FF",
+        "icon": "box",
+        "pii_sensitive": false,
+        "properties": [
+          {"name": "object_id", "type": "string", "required": false},
+          {"name": "label", "type": "string", "required": false},
+          {"name": "color", "type": "string", "required": false},
+          {"name": "first_seen", "type": "string", "required": false},
+          {"name": "location", "type": "string", "required": false}
+        ]
+      },
+      {
+        "label": "Place",
+        "description": "A named area the robot observes, e.g. Demo Area, Booth, Booth Table.",
+        "pole_type": "LOCATION",
+        "subtype": "place",
+        "color": "#3FB950",
+        "icon": "map-pin",
+        "pii_sensitive": false,
+        "properties": []
+      },
+      {
+        "label": "Person",
+        "description": "A visitor. Stored ONLY with explicit consent; never identified from camera frames.",
+        "pole_type": "PERSON",
+        "subtype": "visitor",
+        "color": "#D29922",
+        "icon": "user",
+        "pii_sensitive": true,
+        "properties": []
+      }
+    ],
+    "extraction_aliases": {},
+    "relationships": [
+      {"type": "ON", "source": "PhysicalObject", "target": "PhysicalObject", "description": "Resting on top of"},
+      {"type": "INSIDE", "source": "PhysicalObject", "target": "PhysicalObject", "description": "Contained in"},
+      {"type": "NEXT_TO", "source": "PhysicalObject", "target": "PhysicalObject", "description": "Side by side"},
+      {"type": "NEAR", "source": "PhysicalObject", "target": "PhysicalObject", "description": "Close to, not touching"},
+      {"type": "IN_FRONT_OF", "source": "PhysicalObject", "target": "PhysicalObject", "description": "In front of, from the robot's view"},
+      {"type": "BEHIND", "source": "PhysicalObject", "target": "PhysicalObject", "description": "Behind, from the robot's view"},
+      {"type": "LOCATED_AT", "source": "PhysicalObject", "target": "Place", "description": "Seen at this place"},
+      {"type": "OBSERVED", "source": "Robot", "target": "PhysicalObject", "description": "The robot saw it (confidence = detection confidence)"},
+      {"type": "VISITED", "source": "Robot", "target": "Place", "description": "The robot was at this place"},
+      {"type": "INTERACTED_WITH", "source": "Robot", "target": "Person", "description": "Consented interaction"}
+    ]
+  }
+}

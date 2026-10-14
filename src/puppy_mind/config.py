@@ -27,6 +27,7 @@ class Settings:
 
     nams_api_key: str = os.getenv("NAMS_API_KEY", "")
     nams_base_url: str = os.getenv("NAMS_BASE_URL", "https://memory.neo4jlabs.com")
+    nams_workspace_id: str = os.getenv("NAMS_WORKSPACE_ID", "")
 
     robot_name: str = os.getenv("ROBOT_NAME", "PuppyPi")
     default_location: str = os.getenv("DEFAULT_LOCATION", "Demo Area")
