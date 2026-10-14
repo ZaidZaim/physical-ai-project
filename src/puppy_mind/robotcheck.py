@@ -132,3 +132,52 @@ def scan(prefix: str | None = None) -> int:
         likely = r[8080] or r[9090]
         print(f"  {ip:15s} " + " ".join(f"{p}:{'open' if o else '-'}" for p, o in r.items()) + ("   <-- likely PuppyPi" if likely else ""))
     return 0
+
+
+def is_web_video_server(ip: str, port: int = 8080, timeout: float = 2.0) -> bool:
+    """True if the host serves ROS web_video_server's index (it lists camera topics). Rules out printers, routers, NAS."""
+    try:
+        with urllib.request.urlopen(f"http://{ip}:{port}/", timeout=timeout) as r:
+            html = r.read(200_000).decode("utf-8", "replace")
+        return "topic=" in html
+    except Exception:
+        return False
+
+
+def find_robot(prefix: str | None = None) -> list[str]:
+    """PuppyPi candidates on the local /24: rosbridge (9090) open, or a real web_video_server on 8080."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    pre = prefix or local_prefix()
+    if not pre:
+        return []
+
+    def probe(i: int) -> str | None:
+        ip = f"{pre}.{i}"
+        if _open(ip, 9090, 0.6):
+            return ip
+        if _open(ip, 8080, 0.6) and is_web_video_server(ip):
+            return ip
+        return None
+
+    with ThreadPoolExecutor(64) as ex:
+        return [ip for ip in ex.map(probe, range(1, 255)) if ip]
+
+
+PI_OUIS = ("b8-27-eb", "dc-a6-32", "e4-5f-01", "d8-3a-dd", "2c-cf-67", "88-a2-9e", "28-cd-c1", "3a-35-41")
+
+
+def pi_like_hosts(prefix: str) -> list[tuple[str, str]]:
+    """Hosts on this LAN whose MAC belongs to Raspberry Pi hardware (best effort, from the ARP cache)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    hits = []
+    for ip, mac in re.findall(r"(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F:-]{17})", out):
+        mac = mac.lower().replace(":", "-")
+        if ip.startswith(prefix + ".") and mac.startswith(PI_OUIS):
+            hits.append((ip, mac))
+    return hits

@@ -14,29 +14,104 @@ def _p(x) -> None:
     print(json.dumps(x, indent=2, default=str, ensure_ascii=False))
 
 
-def _robot_test(robot_ip: str, port: int, light: bool = True, combine: bool = False) -> int:
+def _aura_reachable(s) -> str:
+    """'' if the Aura login works, otherwise a short reason. Never raises."""
+    if not (s.neo4j_uri and s.neo4j_password):
+        return "NEO4J_URI / NEO4J_PASSWORD are not set in .env"
+    try:
+        from neo4j import GraphDatabase
+
+        d = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password),
+                                 connection_timeout=8, max_transaction_retry_time=2)
+        try:
+            d.verify_connectivity()
+        finally:
+            d.close()
+        return ""
+    except Exception as e:
+        return f"{type(e).__name__}: {str(e)[:120]}"
+
+
+def _robot_test(robot_ip: str, port: int, light: bool = True, combine: bool = False,
+                real_memory: bool = False) -> int:
     import os
+    import socket
     import threading
     import webbrowser
 
     import uvicorn
 
-    from .robotcheck import _open, camera_url, check, local_ips
+    from .robotcheck import _open, camera_url, check, find_robot, local_ips, pi_like_hosts, local_prefix
+
+    ips = local_ips()
+    if robot_ip == "auto":
+        if any(i.startswith("192.168.149.") for i in ips):
+            robot_ip = "192.168.149.1"  # on the robot's own hotspot
+            print("Laptop is on the robot's own hotspot.")
+        else:
+            pre = local_prefix()
+            print(f"Looking for the PuppyPi on your network ({pre}.x) ...")
+            found = find_robot() if pre else []
+            if len(found) == 1:
+                robot_ip = found[0]
+                print(f"Found it: {robot_ip}\n")
+            elif len(found) > 1:
+                print("Several robots/cameras answered: " + ", ".join(found))
+                print("Re-run with --robot-ip <one of them>.")
+                return 1
+            else:
+                print("\nNo PuppyPi found on this network.")
+                pis = pi_like_hosts(pre) if pre else []
+                if pis:
+                    print("Devices here with a Raspberry Pi network chip (one may be the robot, e.g. with its camera/ROS services stopped):")
+                    for ip, mac in pis:
+                        print(f"   {ip}  {mac}")
+                    print("Try: uv run puppy-mind robot-check <that ip>")
+                else:
+                    print("None of the devices here look like a Raspberry Pi, so the robot has not joined this Wi-Fi.")
+                print("""
+Put the robot on your home Wi-Fi ("LAN mode"). Easiest: WonderPi phone app -> choose PuppyPi -> "+" -> LAN Mode ->
+home Wi-Fi password -> "Connect to Device Hotspot" (join HW..., password hiwonder) -> return. Success: robot icon in the app
+and the expansion-board LED stays on. Hold the robot icon in the app to read its IP, then:
+    uv run puppy-mind robot-test --robot-ip <that ip>
+Or join the robot's own hotspot (HW...) and run this command again.""")
+                return 1
+    else:
+        try:  # allow a hostname such as raspberrypi.fritz.box
+            robot_ip = socket.gethostbyname(robot_ip)
+        except OSError:
+            print(f"Cannot resolve {robot_ip}")
+            return 1
 
     prefix = robot_ip.rsplit(".", 1)[0] + "."
-    mine = [i for i in local_ips() if i.startswith(prefix)]
+    mine = [i for i in ips if i.startswith(prefix)]
     if not mine:
-        print(f"This laptop has no address on {prefix}x, so it is not on the robot's Wi-Fi.")
-        print("Join the robot's HW... Wi-Fi first (Windows may jump back to home Wi-Fi: turn off 'connect automatically' there).")
-        return 1
-    laptop = mine[0]
-    print(f"Laptop on robot network: {laptop}")
-    print()
+        print(f"Note: this laptop has no address on {prefix}x (laptop: {', '.join(i for i in ips if not i.startswith(('172.', '169.254.'))) or 'unknown'}).")
+        print("The robot is on a different network segment (guest Wi-Fi, repeater or other Wi-Fi?). Trying anyway.")
+        laptop = next((i for i in ips if i.startswith(("192.168.", "10."))), "<laptop-ip>")
+    else:
+        laptop = mine[0]
+    print(f"Robot: {robot_ip}   Laptop: {laptop}\n")
+
     code = check(robot_ip)
     cam = camera_url(robot_ip, light=light) if code == 0 else None
     if combine:
         os.environ["DRIVE_COMBINE"] = "1"
-    os.environ["PUPPY_FAKE_MEMORY"] = "1"
+
+    from .config import get_settings
+
+    s = get_settings()
+    if real_memory:
+        why = _aura_reachable(s)
+        if why:
+            print(f"\nAura is NOT reachable ({why}). Using in-RAM memory for now: nothing will be saved.")
+            os.environ["PUPPY_FAKE_MEMORY"] = "1"
+        else:
+            print("\nAura connected: observations will be saved to your graph.")
+            if not s.openai_api_key:
+                print("OPENAI_API_KEY is not set: camera frames will NOT be analysed yet (video and driving still work).")
+    else:
+        os.environ["PUPPY_FAKE_MEMORY"] = "1"
     bridge = _open(robot_ip, 9090, 2.0)
     if bridge:
         os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
@@ -91,16 +166,17 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--rosbridge", help="drive via the robot's rosbridge, e.g. ws://192.168.149.1:9090 (no robot terminal needed)")
     sv.add_argument("--camera", help="camera source for the Start camera button (overrides CAMERA_SOURCE)")
     rt = sub.add_parser("robot-test", help="one command: find robot on its hotspot, start server+camera, print robot commands")
-    rt.add_argument("--robot-ip", default="192.168.149.1")
+    rt.add_argument("--robot-ip", default="auto", help="robot IP or hostname; auto = its hotspot, else scan your home network")
     rt.add_argument("--port", type=int, default=8000)
     rt.add_argument("--full-camera", action="store_true", help="full-size camera stream instead of the lighter 320x240")
+    rt.add_argument("--real-memory", action="store_true", help="save observations to Aura (and analyse frames with OpenAI) instead of in-RAM memory")
     rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
 
     if args.cmd == "robot-test":
-        return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine)
+        return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine, real_memory=args.real_memory)
 
     if args.cmd == "robot-check":
         from .robotcheck import check, scan
