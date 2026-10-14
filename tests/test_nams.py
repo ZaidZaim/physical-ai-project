@@ -1,6 +1,7 @@
 """NAMS layer against a fake NAMS server that follows the real OpenAPI shapes (verified live separately)."""
 import dataclasses
 import json
+import time
 import re
 
 import httpx
@@ -258,4 +259,18 @@ def test_duplicate_flags_between_our_objects_are_rejected_but_foreign_pairs_are_
     decided = [(p, b) for m, p, b in fake.calls if m == "POST" and "/decision" in p]
     assert [p for p, _ in decided] == ["/v1/reviews/p1/decision"] and decided[0][1]["action"] == "reject"
     assert n.status()["rejected_flags"] == 1
+    n.close()
+
+
+def test_flags_raised_after_the_response_are_rejected_by_the_recheck():
+    fake = FakeNams()
+    n, _ = make(fake)
+    n.submit_observation(obs([O("w1", "cabinet", "white"), O("w2", "cabinet", "white")]))
+    assert n.flush(5)
+    ours = [v["id"] for v in n._links.values()]
+    fake.pairs = [{"pairId": "late", "sourceId": ours[0], "targetId": ours[1]}]  # appears only after the bulk call returned
+    n._recheck_flags_later(0.05)
+    time.sleep(0.4)
+    assert n.flush(5)
+    assert any("/reviews/late/decision" in p for m, p, b in fake.calls if m == "POST")
     n.close()

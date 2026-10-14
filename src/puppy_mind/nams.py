@@ -244,6 +244,8 @@ class Nams:
             pending = retry
             if not pending:
                 break
+        if links:
+            self._recheck_flags_later()
         if pending:
             self.stats["last_error"] = f"{len(pending)} object(s) could not be mirrored without being merged by NAMS"
         if links and self.mem is not None and hasattr(self.mem, "set_nams_links"):
@@ -253,10 +255,10 @@ class Nams:
                 log.warning("could not save NAMS links to Aura: %s", e)
         self._reject_flags()
 
-    def _reject_flags(self) -> None:
+    def _reject_flags(self, force: bool = False) -> None:
         """Our world model knows these objects are different instances: reject NAMS's 'possible duplicate' flags between them,
         so nobody merges them by accident in the review queue. Only pairs where BOTH sides are objects we mirror are touched."""
-        if not self._flagged:
+        if not self._flagged and not force:
             return
         mine = {v["id"] for v in self._links.values()}
         out = self._req("GET", "/v1/reviews", params={"status": "pending", "limit": 200})
@@ -267,6 +269,12 @@ class Nams:
                 if r is not None:
                     self.stats["rejected_flags"] = self.stats.get("rejected_flags", 0) + 1
         self._flagged.clear()
+
+    def _recheck_flags_later(self, seconds: float = 6.0) -> None:
+        """NAMS raises duplicate flags a moment AFTER the bulk response: look again shortly (never blocks the worker)."""
+        t = threading.Timer(seconds, lambda: self._submit(self._reject_flags, True))
+        t.daemon = True
+        t.start()
 
     def _link_mirrors(self) -> None:
         """Shared database: connect our Object nodes to the Entity nodes NAMS wrote for them (best effort, idempotent)."""
@@ -352,6 +360,7 @@ class Nams:
                              "properties": {"since": r.get("since") or ""}})
         self._relationships(rels)
         self._link_mirrors()
+        self._reject_flags(force=True)
         return {"objects": len(objs), "relationships": len(rels), "linked": sum(1 for o in objs if o["id"] in self._links)}
 
     # ------------------------------------------------------------------ conversations (async)
