@@ -98,7 +98,7 @@ class FakeMemory:
             if a in gone and r["active"]:
                 r["active"], r["until"] = False, ts
         oid = f"obs-{uuid.uuid4().hex[:10]}"
-        self.obs.insert(0, {"id": oid, "ts": ts, "location": loc, "summary": scene.summary, "n": len(rows)})
+        self.obs.insert(0, {"id": oid, "ts": ts, "location": loc, "summary": scene.summary, "n": len(rows), "room_type": room_type})
         return {"overlap": round(overlap, 2), "misses_counted": count_misses, "moved_hypotheses": [],
                 "observation_id": oid, "ts": ts, "location": loc, "missed": missed, "objects": rows,
                 "new_objects": [f"{r['label']} ({r['id']})" for r in rows if r["new"]],
@@ -132,6 +132,20 @@ class FakeMemory:
                 o["loc"] = new
         self.adj = {tuple(sorted(new if x == old else x for x in k)): v for k, v in self.adj.items()}
         return True
+
+    def learn_room_type(self, name, min_votes=2):
+        p = self.places.get(name)
+        if not p or p.get("room_type") not in (None, "unknown", "other", ""):
+            return None
+        votes: dict[str, int] = {}
+        for o in self.obs:
+            if o.get("location") == name and o.get("room_type") not in (None, "unknown", "other", ""):
+                votes[o["room_type"]] = votes.get(o["room_type"], 0) + 1
+        best = max(votes.items(), key=lambda kv: kv[1], default=None)
+        if best and best[1] >= min_votes:
+            p["room_type"] = best[0]
+            return best[0]
+        return None
 
     def merge_places(self, src, dst):
         if src == dst or src not in self.places or dst not in self.places:

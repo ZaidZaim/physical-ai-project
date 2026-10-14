@@ -153,3 +153,17 @@ def test_throwaway_memory_never_talks_to_a_real_nams(monkeypatch):
         assert b.nams.enabled is False and b.nams.http is None
     finally:
         b.close()
+
+
+def test_place_learns_its_room_type_from_its_own_frames():
+    from puppy_mind.devfake import FakeMemory
+    from puppy_mind.config import Settings
+
+    m = FakeMemory(Settings())
+    m.ensure_place("Spot", "unknown", provisional=True)
+    sc = view("hallway", ("door", "brown"))
+    m.ingest(sc, session_id="s", location="Spot", source="t", room_type="hallway")
+    assert m.learn_room_type("Spot") is None  # one frame is not enough
+    m.ingest(sc, session_id="s", location="Spot", source="t", room_type="hallway")
+    assert m.learn_room_type("Spot") == "hallway"
+    assert m.places["Spot"]["room_type"] == "hallway"

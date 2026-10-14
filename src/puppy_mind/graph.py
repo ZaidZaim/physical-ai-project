@@ -607,6 +607,20 @@ class Memory:
             name=name, room=room_type, ts=now_iso(),
         )
 
+    def learn_room_type(self, name: str, min_votes: int = 2) -> str | None:
+        """A place whose kind of room is still unknown takes the room type most of its own frames reported (needs min_votes frames).
+        Without this a place keeps 'unknown' forever and the resolver cannot tell it apart from other rooms by room type."""
+        rows = self._write(
+            """
+            MATCH (l:Location {name: $name}) WHERE coalesce(l.room_type, 'unknown') IN ['unknown', 'other', '']
+            MATCH (x:Sighting)-[:AT]->(l) WHERE x.room_type IS NOT NULL AND NOT x.room_type IN ['unknown', 'other', '']
+            WITH l, x.room_type AS rt, count(*) AS c ORDER BY c DESC
+            WITH l, collect({rt: rt, c: c}) AS votes WHERE votes[0].c >= $min
+            SET l.room_type = votes[0].rt
+            RETURN l.room_type AS rt
+            """, name=name, min=min_votes)
+        return rows[0]["rt"] if rows else None
+
     def note_transition(self, a: str, b: str) -> None:
         """The robot went from a to b: they are adjacent (stored once per pair; the direction is just alphabetical)."""
         x, y = sorted((a, b))
@@ -625,6 +639,44 @@ class Memory:
             return False
         rows = self._write("MATCH (l:Location {name: $old}) SET l.name = $new, l.provisional = false RETURN count(l) AS c", old=old, new=new)
         return bool(rows and rows[0]["c"])
+
+    def suggest_split(self, place: str, gap_s: float = 90.0) -> list[list[dict[str, Any]]]:
+        """Group a place's objects into runs of time: a new group starts when more than gap_s passes between two objects' last_seen.
+        A hint for splitting a place that mixed several rooms (the robot was carried between them under one name); the person confirms."""
+        rows = self._read(
+            "MATCH (o:Object)-[:LOCATED_AT]->(:Location {name: $p}) RETURN o.id AS id, o.label AS label, o.color AS color, "
+            "toString(o.last_seen) AS ts, o.last_seen.epochSeconds AS t ORDER BY o.last_seen", p=place)
+        groups: list[list[dict[str, Any]]] = []
+        for r in rows:
+            if not groups or r["t"] - groups[-1][-1]["t"] > gap_s:
+                groups.append([])
+            groups[-1].append(r)
+        return groups
+
+    def split_place(self, src: str, dst: str, object_ids: list[str], room_type: str | None = None) -> int:
+        """Move the given objects (and the sightings that only showed them) from src to a new/other place dst.
+        Their miss counters are reset: those misses were counted against a place the objects were never in."""
+        if not object_ids or src == dst:
+            return 0
+        self.ensure_place(dst, room_type or "unknown", provisional=True)
+        moved = self._write(
+            """
+            MATCH (s:Location {name: $s}), (d:Location {name: $d})
+            MATCH (o:Object)-[r:LOCATED_AT]->(s) WHERE o.id IN $ids
+            MERGE (o)-[r2:LOCATED_AT]->(d)
+              ON CREATE SET r2.first_seen = r.first_seen, r2.last_seen = r.last_seen, r2.count = r.count
+            DELETE r
+            SET o.status = 'present', o.miss_count = 0
+            RETURN count(o) AS c
+            """, s=src, d=dst, ids=object_ids)[0]["c"]
+        self._write(
+            """
+            MATCH (x:Sighting)-[a:AT]->(s:Location {name: $s}), (d:Location {name: $d})
+            WITH x, a, d, [(x)-[:DETECTED]->(o:Object) | o.id] AS seen
+            WHERE size(seen) > 0 AND all(i IN seen WHERE i IN $ids)
+            MERGE (x)-[:AT]->(d) DELETE a
+            """, s=src, d=dst, ids=object_ids)
+        return moved
 
     def merge_places(self, src: str, dst: str) -> bool:
         """Fold place src into dst (e.g. two provisional views of the same kitchen). Objects keep their ids; look-alikes may remain

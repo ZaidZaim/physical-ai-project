@@ -244,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("stats")
     pd = sub.add_parser("purge-demo", help="remove ONLY scripted/demo data (sources scenario/demo) from Aura; real observations are kept")
     pd.add_argument("--yes", action="store_true", help="actually delete (default is a dry run)")
+    sp = sub.add_parser("split-place", help="split a place that mixed several rooms into groups by time (dry run unless --yes)")
+    sp.add_argument("place")
+    sp.add_argument("--gap", type=float, default=90.0, help="seconds between objects' last_seen that start a new group")
+    sp.add_argument("--yes", action="store_true", help="apply: the first group stays, the others become 'PLACE 2', 'PLACE 3', ...")
     sub.add_parser("reset").add_argument("--yes", action="store_true")
     e = sub.add_parser("eval", help="run the question set against current memory")
     e.add_argument("questions", nargs="?", default="eval/questions.json")
@@ -333,6 +337,18 @@ def main(argv: list[str] | None = None) -> int:
                 print("Real observations are untouched. Re-run with --yes to delete.")
             else:
                 print("Deleted:", c)
+        elif args.cmd == "split-place":
+            groups = brain.mem.suggest_split(args.place, args.gap)
+            for i, g in enumerate(groups, 1):
+                name = args.place if i == 1 else f"{args.place} {i}"
+                print(f"group {i} -> {name}: " + ", ".join(f"{o['color']} {o['label']}" for o in g))
+            if len(groups) < 2:
+                print("nothing to split: one group only (try a smaller --gap)")
+            elif not args.yes:
+                print("DRY RUN. Re-run with --yes to apply; rename the new places in the Places tab.")
+            else:
+                for i, g in enumerate(groups[1:], 2):
+                    print(f"moved {brain.mem.split_place(args.place, f'{args.place} {i}', [o['id'] for o in g])} objects to '{args.place} {i}'")
         elif args.cmd == "seed":
             if not args.yes:
                 print("seed writes FAKE scripted data into the Aura database in .env (" + s.neo4j_uri + ").")

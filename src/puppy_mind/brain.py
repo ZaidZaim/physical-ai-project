@@ -184,6 +184,9 @@ class Brain:
             Path(image_ref).write_bytes(jpeg)
         res = self.mem.ingest(scene, session_id=self.session, location=loc, source=source, ts=ts, image_ref=image_ref,
                               count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading)
+        learned = self.mem.learn_room_type(loc) if hasattr(self.mem, "learn_room_type") else None
+        if learned:
+            self.bus.publish("place", {"name": loc, "learned_room_type": learned})
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {
