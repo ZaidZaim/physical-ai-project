@@ -43,6 +43,16 @@
   #graphwrap { flex:1; min-height:380px; position:relative } #graph { position:absolute; inset:0; border:1px solid var(--line); border-radius:8px }
   #legend { position:absolute; left:8px; bottom:8px; font-size:11px; color:var(--mute); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px 8px; display:flex; gap:10px; flex-wrap:wrap }
   #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
+  :root { --short:#3fb950; --long:#f0a020; --reasoning:#a371f7 }
+  @media (prefers-color-scheme: light) { :root { --short:#1a7f37; --long:#bc6c00; --reasoning:#8250df } }
+  .tabs { display:flex; gap:4px } .tab { background:transparent; color:var(--mute); border:0; border-bottom:2px solid transparent; border-radius:0; padding:2px 8px; text-transform:uppercase; letter-spacing:.07em; font-size:11px }
+  .tab.on { color:var(--ink); border-bottom-color:var(--obj) }
+  #lenses { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 8px } .lens { background:var(--bg); color:var(--ink); border:1px solid var(--line); padding:3px 10px; font-size:12px }
+  .lens small { color:var(--mute) } .lens.on { border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink) }
+  .lens[data-lens=long]::first-letter { color:var(--long) } .lens[data-lens=short]::first-letter { color:var(--short) } .lens[data-lens=reasoning]::first-letter { color:var(--reasoning) } .lens[data-lens=all]::first-letter { color:var(--ink) }
+  #ontowrap { flex:1; min-height:380px; position:relative; display:flex; flex-direction:column; gap:8px } #ontowrap[hidden], #graphwrap[hidden], #lenses[hidden] { display:none }
+  #onto { flex:1; min-height:300px; border:1px solid var(--line); border-radius:8px } #ontodetail { font-size:12px; border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--bg); max-height:150px; overflow:auto }
+  #ontolegend { font-size:11px; color:var(--mute); display:flex; gap:12px; flex-wrap:wrap } #ontolegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
   #log { height:120px; overflow:auto; font:12px/1.5 ui-monospace,monospace; color:var(--mute) } #log b { color:var(--ink) }
   .k-new { color:var(--new) } .k-miss { color:var(--miss) } .k-ask { color:var(--ask) }
 </style>
@@ -93,11 +103,23 @@
   </div>
   <div class="col">
     <section style="flex:1">
-      <h2><span>Memory graph (live)</span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <h2><span class="tabs"><button class="tab on" data-tab="graph">Memory graph (live)</button><button class="tab" data-tab="onto">Ontology</button></span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="lenses">
+        <button class="lens on" data-lens="long" title="Entities and facts: objects, places and how they relate">● Long-term <small id="c-long"></small></button>
+        <button class="lens" data-lens="short" title="What is happening now: the stream of observations and the conversation">● Short-term <small id="c-short"></small></button>
+        <button class="lens" data-lens="reasoning" title="How answers were reached: reasoning steps and the lookups they made">● Reasoning <small id="c-reasoning"></small></button>
+        <button class="lens" data-lens="all" title="All three memory types in one graph">● All</button>
+      </div>
       <div id="graphwrap"><div id="graph"></div>
-        <div id="legend"><span><i style="background:var(--obj)"></i>object</span><span><i style="background:var(--loc)"></i>location</span>
-          <span><i style="background:var(--gone)"></i>possibly gone</span><span><i style="background:var(--new)"></i>new</span>
-          <span><i style="background:var(--miss)"></i>missed</span><span><i style="background:var(--ask)"></i>consulted by agent</span></div></div>
+        <div id="legend"><span><i style="background:var(--long)"></i>long-term</span><span><i style="background:var(--short)"></i>short-term</span>
+          <span><i style="background:var(--reasoning)"></i>reasoning</span><span><i style="background:var(--gone)"></i>possibly gone</span>
+          <span><i style="border:2px solid var(--new);background:none"></i>new</span><span><i style="border:2px solid var(--miss);background:none"></i>missed</span>
+          <span><i style="border:2px solid var(--ask);background:none"></i>consulted by agent</span></div></div>
+      <div id="ontowrap" hidden>
+        <div id="onto"></div>
+        <div id="ontodetail"><b>Ontology</b><div style="color:var(--mute)">Click a type or relationship. Node size = how many exist in your graph right now.</div></div>
+        <div id="ontolegend"></div>
+      </div>
     </section>
     <section><h2>Event feed</h2><div id="log"></div></section>
   </div>
@@ -117,9 +139,14 @@ const net = new vis.Network($('#graph'), { nodes, edges }, {
   edges: { arrows:'to', smooth:{ type:'dynamic' }, font:{ size:10, color:css('--mute'), strokeWidth:0, align:'middle' }, width:1.5 },
   interaction: { hover:true },
 });
-const baseOf = n => n.kind === 'Location' ? { bg:css('--loc'), size:20, shape:'box' }
-  : n.status === 'possibly_gone' ? { bg:css('--gone'), size:14, shape:'dot' } : { bg:css('--obj'), size:16, shape:'dot' };
-const nodeLabel = n => n.kind === 'Location' ? '📍 ' + n.label : (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label;
+/* Colour = memory type (long-term orange, short-term green, reasoning purple); shape = kind of node. */
+let lens = 'long';
+const MEM = () => ({ short:css('--short'), long:css('--long'), reasoning:css('--reasoning') });
+const SHAPE = { Object:['dot',16], Location:['box',20], Sighting:['diamond',14], Utterance:['square',10], Dialogue:['database',11], ReasoningStep:['triangle',16], Lookup:['triangleDown',12] };
+const baseOf = n => { const [shape, size] = SHAPE[n.kind] || ['dot', 14];
+  return { bg: n.status === 'possibly_gone' ? css('--gone') : (MEM()[n.memory] || css('--obj')), size, shape }; };
+const nodeLabel = n => n.kind === 'Location' ? '📍 ' + n.label : n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label : n.label;
+const SOFT = new Set(['LOCATED_AT', 'THEN', 'FOLLOWED_BY', 'HAS_UTTERANCE', 'DETECTED']);  // structural links: dashed, unlabelled
 const edgeId = e => `${e.source}|${e.type}|${e.target}`;
 
 function tween(from, to, ms, step, done) {
@@ -142,7 +169,9 @@ function flashEdge(id, color) {
 let syncing = Promise.resolve(), known = { n: new Set(), e: new Set() };
 function syncGraph() {
   syncing = syncing.then(async () => {
-    const g = await api('/api/graph');
+    const asked = lens;
+    const g = await api('/api/graph?lens=' + asked);
+    if (asked !== lens) return;                                // the user switched lens while this was loading
     const seen = new Set();
     for (const n of g.nodes) {
       seen.add(n.id); const b = baseOf(n);
@@ -159,8 +188,8 @@ function syncGraph() {
     for (const e of g.edges) {
       const id = edgeId(e); eseen.add(id);
       if (!edges.get(id)) {
-        edges.add({ id, from:e.source, to:e.target, label:e.type === 'LOCATED_AT' ? '' : e.type, dashes:e.type === 'LOCATED_AT', color:{ color:css('--mute') }, width:1.5 });
-        if (e.type !== 'LOCATED_AT') flashEdge(id, css('--new'));
+        edges.add({ id, from:e.source, to:e.target, label:SOFT.has(e.type) ? '' : e.type, dashes:SOFT.has(e.type), color:{ color:css('--mute'), opacity:SOFT.has(e.type) ? .3 : 1 }, width:SOFT.has(e.type) ? 1 : 1.5 });
+        if (!SOFT.has(e.type) && e.memory === 'long') flashEdge(id, css('--new'));
       }
     }
     for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, '#f85149'); setTimeout(() => edges.remove(id), 900); }
@@ -232,6 +261,7 @@ function connect() {
   es.addEventListener('drive', e => {
     const d = JSON.parse(e.data); log('ask', `drive: ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
   });
+  es.addEventListener('memory', () => { refreshSummary(); if (lens !== 'long') syncGraph(); });  // a Q&A was just saved
   es.addEventListener('query', e => {
     const d = JSON.parse(e.data);
     log('ask', `agent used ${esc(d.tools.join(' → ') || 'no tools')} for “${esc(d.question)}”`);
@@ -249,6 +279,8 @@ async function refreshStats() {
   $('#fps').textContent = s.watching || s.fps ? `${lap ? 'LAPTOP WEBCAM' : (s.camera_name ? 'robot camera' : '')} · ${s.fps} fps` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
   $('#fps').style.color = lap ? '#f85149' : '';
   if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
+  $('#demo').hidden = s.memory !== 'fake';   // the scripted demo only exists on throwaway memory, never on your real graph
+  refreshSummary();
 }
 $('#watch').onclick = async () => {
   const on = $('#watch').dataset.on === '1';
@@ -258,6 +290,50 @@ $('#watch').onclick = async () => {
 };
 $('#demo').onclick = () => post('/api/demo/replay?delay=4').then(() => log('new', 'demo replay started'));
 $('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); refreshStats(); } };
+
+/* ---------- memory lenses + ontology tab ---------- */
+function paintLens() { document.querySelectorAll('.lens').forEach(b => b.classList.toggle('on', b.dataset.lens === lens)); }
+function setLens(l) { lens = l; paintLens(); nodes.clear(); edges.clear(); window._lastNodeCount = -1; syncGraph(); }
+document.querySelectorAll('.lens').forEach(b => b.onclick = () => setLens(b.dataset.lens));
+async function refreshSummary() {
+  try {
+    const m = await api('/api/memory/summary');
+    $('#c-short').textContent = `${m.short.observations} obs · ${m.short.messages} msgs`;
+    $('#c-long').textContent = `${m.long.objects} objects · ${m.long.relationships} facts`;
+    $('#c-reasoning').textContent = `${m.reasoning.steps} steps · ${m.reasoning.tool_calls} lookups`;
+  } catch (e) {}
+}
+let ontoNet = null, ontoLoaded = false;
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
+  const onto = b.dataset.tab === 'onto';
+  $('#graphwrap').hidden = onto; $('#lenses').hidden = onto; $('#ontowrap').hidden = !onto;
+  if (onto) loadOntology(); else setTimeout(() => net.fit(), 100);
+});
+async function loadOntology() {
+  const o = await api('/api/ontology'), M = MEM();
+  const sz = n => 18 + 7 * Math.log2(1 + (n.count || 0));
+  const N = o.nodes.map(n => ({ id:n.id, label:`${n.label}\n(${n.count})`, shape:'ellipse', size:sz(n), margin:10,
+    color:{ background:M[n.memory], border:M[n.memory] }, font:{ color:'#111', size:13, multi:false }, _n:n }));
+  const E = o.edges.map((e, i) => ({ id:'e' + i, from:e.source, to:e.target, label:e.type + (e.count != null ? ` (${e.count})` : ''), arrows:'to',
+    color:{ color:M[e.memory] }, font:{ size:10, color:css('--mute'), strokeWidth:0 }, smooth:{ type:'curvedCW', roundness:.2 }, _e:e }));
+  const data = { nodes:new vis.DataSet(N), edges:new vis.DataSet(E) };
+  if (ontoNet) ontoNet.destroy();
+  ontoNet = new vis.Network($('#onto'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-120, springLength:170, damping:.6 }, stabilization:{ iterations:200 } },
+    nodes:{ borderWidth:2 }, edges:{ width:1.5 }, interaction:{ hover:true } });
+  ontoNet.once('stabilizationIterationsDone', () => ontoNet.fit());
+  ontoNet.on('click', p => {
+    const box = $('#ontodetail');
+    if (p.nodes.length) { const n = data.nodes.get(p.nodes[0])._n;
+      box.innerHTML = `<b>${esc(n.label)}</b> <span class="tag">${esc(o.layers[n.memory])}</span>${n.pole ? ` <span class="tag">${esc(n.pole)}</span>` : ''}${n.pii ? ' <span class="tag">personal data</span>' : ''}<br>${esc(n.description)}<br>`
+        + `<span style="color:var(--mute)">Stored in Aura as :${esc(n.aura_label)} · ${n.count} now · properties: ${esc(n.properties.join(', ') || 'none')}</span>`; }
+    else if (p.edges.length) { const e = data.edges.get(p.edges[0])._e;
+      box.innerHTML = `<b>${esc(e.type)}</b> <span class="tag">${esc(o.layers[e.memory])}</span><br>(${esc(e.source)}) → (${esc(e.target)})<br>${esc(e.description || '')}${e.count != null ? `<br><span style="color:var(--mute)">${e.count} in your graph</span>` : ''}`; }
+  });
+  const nams = o.nams || {};
+  $('#ontolegend').innerHTML = Object.entries(o.layers).map(([k, v]) => `<span><i style="background:${M[k]}"></i>${esc(v)}</span>`).join('')
+    + `<span>source: ${esc(o.source)}</span><span>NAMS: ${nams.auth === 'ok' ? 'connected' : nams.auth === 'invalid' ? 'key rejected' : 'not checked'}</span>`;
+}
 
 /* ---------- keyboard drive ---------- */
 const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast' };

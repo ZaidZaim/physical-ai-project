@@ -220,8 +220,11 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--evidence", action="store_true")
     sd = sub.add_parser("seed", help="replay a scripted scenario (no camera/OpenAI needed)")
     sd.add_argument("scenario", nargs="?", default="eval/scenarios/booth.json")
+    sd.add_argument("--yes", action="store_true", help="confirm writing FAKE scripted data into the configured Aura database")
     sd.add_argument("--nams", action="store_true", help="also write the scripted data to NAMS (off by default: it is fake test data)")
     sub.add_parser("stats")
+    pd = sub.add_parser("purge-demo", help="remove ONLY scripted/demo data (sources scenario/demo) from Aura; real observations are kept")
+    pd.add_argument("--yes", action="store_true", help="actually delete (default is a dry run)")
     sub.add_parser("reset").add_argument("--yes", action="store_true")
     e = sub.add_parser("eval", help="run the question set against current memory")
     e.add_argument("questions", nargs="?", default="eval/questions.json")
@@ -303,7 +306,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"watching {src.name} every {interval}s - Ctrl+C to stop")
             brain.watch(src, interval, lambda r: print(json.dumps(r, default=str)[:400]))
             brain._watch.join()  # type: ignore[union-attr]
+        elif args.cmd == "purge-demo":
+            c = brain.mem.purge_demo(dry_run=not args.yes)
+            if not args.yes:
+                print(f"DRY RUN. Would delete: {c['observations']} demo/scenario observations and {c['objects']} objects seen only by them.")
+                print("Real observations are untouched. Re-run with --yes to delete.")
+            else:
+                print("Deleted:", c)
         elif args.cmd == "seed":
+            if not args.yes:
+                print("seed writes FAKE scripted data into the Aura database in .env (" + s.neo4j_uri + ").")
+                print("Re-run with --yes only on a disposable database; remove it later with: puppy-mind purge-demo --yes")
+                return 1
             from .scenario import replay
 
             brain.mem.init_schema()

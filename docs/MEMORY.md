@@ -9,6 +9,28 @@ Two graphs, each doing what it is best at, cross-linked.
 | Good at | Exact, temporal questions: *what is on the table now? what changed? where was X last seen?* | Meaning and recall: *what did a visitor ask earlier? what story did the day tell?* (NAMS builds Observations and Reflections from the narrative messages) |
 | Cannot | Fuzzy semantic recall | Update/delete relationships (create-only), update entity properties (name/description only), so it cannot be the time-aware truth |
 
+## Shared database: labels this app owns
+Your Aura instance also holds NAMS's own data (bring-your-own-database): it has `idx_entity_*`, `idx_message_*`, `idx_agentstep_*`,
+`idx_reflection_*`, `idx_skill_*`, vector indexes and a `PipelineMeta` label. NAMS owns `Entity`, `Conversation`, `Message`, `AgentStep`,
+`ToolCall`, `Observation`, `Reflection`, `Skill*`, `Alias`. To never collide, this app uses its own labels (a test enforces it):
+
+| Concept | Memory type | This app (Aura) | NAMS equivalent |
+|---|---|---|---|
+| Camera frame analysed | short-term | `Sighting` (was `Observation`; migrated 2026-10-14) | `Observation` (message summaries) |
+| One chat | short-term | `Dialogue`-[`HAS_UTTERANCE`]->`Utterance`-[`FOLLOWED_BY`]->`Utterance` | `Conversation`/`Message` |
+| Entities and facts | long-term | `Object`, `Location`, `Robot` + `ON`/`NEXT_TO`/... | `Entity` + relationships |
+| Why an answer | reasoning | `ReasoningStep`-[`MADE_LOOKUP`]->`Lookup`, `-[RELIED_ON]->Object`, `Utterance-[ABOUT]->Object` | `AgentStep`/`ToolCall`/`INFLUENCED` |
+
+`reset` only deletes this app's labels. Because both live in one database, linking our `Object` to NAMS's `Entity` can later be a plain
+Cypher relationship instead of an API round trip; reading NAMS's own conversations/reasoning into the lenses is a next step once the
+NAMS key works (not implemented: its exact property names are unverified).
+
+## Viewing memory by type
+The graph panel has lenses: **Long-term** (entities and facts), **Short-term** (recent sightings and the conversation), **Reasoning**
+(steps, lookups and the objects they relied on), and **All**. Colour = memory type (orange / green / purple); shape = kind of node.
+Each answer is stored (in the background) as Dialogue/Utterance + ReasoningStep/Lookup so the short-term and reasoning lenses fill up.
+The **Ontology** tab draws the schema itself: domain types from `ontology/puppy_pi.json` plus the memory types, sized by live counts.
+
 ## What flows where
 Every observation (after Aura ingestion succeeds), on a background thread:
 1. **Entities** (bulk; NAMS resolves duplicates by name+type): `Robot` (PuppyPi), `Place` (e.g. Booth), `PhysicalObject` per object instance.

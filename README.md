@@ -92,11 +92,14 @@ commands sent on change only, no forward+turn mixing. Not yet verified on hardwa
 Aura login and an OpenAI key), `robot/puppy_drive.py` on the robot, the lighter 320x240 camera stream.
 Run it: `uv run puppy-mind robot-test` while joined to the robot's HW... Wi-Fi.
 
-## Aura verification
-`uv run puppy-mind reset --yes && uv run puppy-mind seed && uv run python eval/verify_graph.py` replays the scripted booth day into
-your Aura instance and checks 17 facts (what is on the table, what changed, which object is possibly gone, history, read-only Cypher
-guard). Passed against a live AuraDB Professional instance on 2026-10-14. This found and fixed a real Cypher bug in `find_object`.
-Note: `.env` now overrides shell/Windows `NEO4J_*` variables (a stale `NEO4J_URI` from another project had silently redirected the app).
+## Aura verification (use a DISPOSABLE database only)
+`seed` writes FAKE scripted data and `verify_graph.py` / `eval` expect a database containing only that data, so run them on an empty
+throwaway database, never on the one holding real robot memory: `uv run puppy-mind reset --yes` erases everything this app stores.
+If fake data did get into the real graph, remove just that with `uv run puppy-mind purge-demo` (dry run) then `--yes`: it deletes only
+observations whose source is `scenario`/`demo` and objects seen only by them; real observations are kept.
+Passed against a live AuraDB Professional instance on 2026-10-14 (17+3 graph checks, eval 20/20). The Demo replay button exists only on
+throwaway in-RAM memory (`PUPPY_FAKE_MEMORY=1`); on the real graph the server refuses it (403).
+Note: `.env` overrides shell/Windows `NEO4J_*` variables (a stale `NEO4J_URI` from another project had silently redirected the app).
 
 ## Question answering: verified on live Aura + OpenAI (2026-10-14)
 `puppy-mind eval` (20 predefined questions over the scripted booth scene, each asked independently) scored 20/20 on two

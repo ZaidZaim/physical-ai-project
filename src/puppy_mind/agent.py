@@ -85,7 +85,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "read_cypher",
-        "description": "Last resort: read-only Cypher. Schema: (Observation)-[:DETECTED|MISSED]->(Object), (Observation)-[:AT]->(Location), (Object)-[:LOCATED_AT]->(Location), (Object)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until}]->(Object). Object{id,label,color,status,first_seen,last_seen}. Observation{id,ts,summary}.",
+        "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Object), (Sighting)-[:AT]->(Location), (Object)-[:LOCATED_AT]->(Location), (Object)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until}]->(Object). Object{id,label,color,status,first_seen,last_seen}. Sighting{id,ts,summary}.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
 

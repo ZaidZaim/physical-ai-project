@@ -200,8 +200,21 @@ class Brain:
         assert self.agent, "agent disabled"
         r = self.agent.ask(question, self.session)
         ids = sorted(set(_OBJ_ID.findall(str(r["evidence"]))))
+        threading.Thread(target=self._remember_exchange, args=(question, r, ids), daemon=True).start()  # off the answer path
         self.bus.publish("query", {"question": question, "tools": [t["tool"] for t in r["evidence"]], "ids": ids})
         return r
+
+    def _remember_exchange(self, question: str, r: dict, ids: list[str]) -> None:
+        """Short-term (Dialogue/Utterance) + reasoning (ReasoningStep/Lookup) memory in the graph; then tell the UI."""
+        try:
+            self.mem.record_exchange(self.session, question, r["answer"], r["evidence"], ids)
+            self.bus.publish("memory", {"kind": "exchange"})
+        except Exception as e:
+            self.bus.publish("error", {"error": f"could not save the conversation to memory: {e}"[:300]})
+
+    @property
+    def memory_kind(self) -> str:
+        return "fake" if os.getenv("PUPPY_FAKE_MEMORY") == "1" else "aura"
 
     def close(self) -> None:
         self.stop_watch()

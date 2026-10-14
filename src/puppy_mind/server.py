@@ -131,6 +131,8 @@ def events():
 
 @app.post("/api/demo/replay")
 def demo_replay(delay: float = 4.0):
+    if brain.memory_kind != "fake":
+        raise HTTPException(403, "Demo replay only runs on throwaway in-RAM memory (it would write fake data into your real graph).")
     """Replay the scripted booth scenario live (timestamps = now) to see the graph animate without a robot."""
     data = json.loads((Path(__file__).parents[2] / "eval" / "scenarios" / "booth.json").read_text(encoding="utf-8"))
 
@@ -173,6 +175,7 @@ def state():
         "camera_name": getattr(brain._src, "name", "") if brain._src else "",
         "camera_error": getattr(brain._src, "error", "") if brain._src else "",
         "nams": brain.nams.enabled,
+        "memory": brain.memory_kind,
         "nams_status": brain.nams.status(),
         "stats": brain.mem.stats(),
         "current": brain.mem.current_view(),
@@ -205,8 +208,22 @@ def changes(since: str):
 
 
 @app.get("/api/graph")
-def graph():
-    return brain.mem.graph_snapshot()
+def graph(lens: str = "long"):
+    if lens not in ("long", "short", "reasoning", "all"):
+        raise HTTPException(400, "lens must be long, short, reasoning or all")
+    return brain.mem.graph_snapshot(lens=lens)
+
+
+@app.get("/api/memory/summary")
+def memory_summary():
+    return brain.mem.memory_summary()
+
+
+@app.get("/api/ontology")
+def ontology_view():
+    from . import ontology
+
+    return ontology.build(brain.mem.label_counts(), brain.mem.rel_counts(), brain.nams.status())
 
 
 # ---------------------------------------------------------------- keyboard drive
