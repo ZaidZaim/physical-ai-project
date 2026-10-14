@@ -82,7 +82,10 @@ class Brain:
         if need_openai and self.s.openai_api_key:  # without a key: live view + replay only
             from .perception import Perception  # lazy: seed/tests need no OpenAI
 
-            self.perception = Perception(self.s)
+            # Camera frames are sent to OpenAI ONLY when perception is on. PERCEPTION=off keeps the question-answering
+            # agent but never uploads frames (used by plain driving tests).
+            if os.getenv("PERCEPTION", "on").lower() != "off":
+                self.perception = Perception(self.s)
             self.agent = Agent(self.s, self.mem, self.nams)
 
     @property

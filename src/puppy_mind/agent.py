@@ -25,7 +25,17 @@ Rules:
 - Distinguish: currently visible (last observation) vs remembered (older) vs possibly_gone.
   A missed detection is NOT proof something was removed; say "not seen in the last N observations".
 - Objects have identities (ids like obj-xxxx). Two same-label objects are different things.
-- Relations (ON, NEXT_TO, ...) have since/until; "currently" false means it ended.
+- Relations (ON, NEXT_TO, ...): "currently" false means it ended. IMPORTANT: `until` is when memory CONCLUDED it ended; it is
+  NOT the last time it was seen. The last time a relation was actually observed is `last_seen_so` (use that, and the object's
+  `last_seen`). ended_by=possibly_gone means the object stopped being detected; say "last seen on the table at <last_seen_so>".
+- "Where did you last see X?": use find_object and answer with relation_history (e.g. on the table) plus last_seen/zone/location.
+- "Was X there at the start / first": call first_observation and check whether X is in it; if not, say it appeared later and give
+  X's first_seen from find_object.
+- "What changed" / "what new objects appeared" (no time given) means since the FIRST observation: call what_changed WITHOUT `since`
+  and narrate every line of its `summary` (new objects, possibly gone, relation changes). "Summarise what you remember": location_summary.
+- Place names are matched case-insensitively.
+- For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
+  may have changed, and earlier answers may not have covered this object. "No observation" is only valid after a tool returned nothing.
 - For "what changed", call what_changed with a sensible `since` (e.g. the session start or the
   first observation's timestamp) and also first_observation if comparing to the beginning.
 - Be concise and conversational. Current UTC time: {now}.
@@ -57,8 +67,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}},
     {"type": "function", "function": {
         "name": "what_changed",
-        "description": "New objects, possibly-gone objects and relation changes since an ISO-8601 UTC timestamp.",
-        "parameters": {"type": "object", "properties": {"since": {"type": "string"}, "location": {"type": "string"}}, "required": ["since"]}}},
+        "description": "What changed versus a baseline: new objects, possibly-gone objects, relation changes, plus ready-made `summary` sentences. Omit `since` to compare with the FIRST observation (the default for 'what changed' / 'what new objects appeared').",
+        "parameters": {"type": "object", "properties": {"since": {"type": "string", "description": "optional ISO-8601 UTC timestamp"}, "location": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "location_summary",
+        "description": "Everything remembered about a place in one call: every object with first/last seen, status, relations and the observation time span. Use for 'summarise what you remember'.",
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}},
     {"type": "function", "function": {
         "name": "timeline",
         "description": "Most recent observations (id, time, location, summary).",
@@ -85,8 +99,9 @@ class Agent:
                 a["target_label"], a.get("predicate", "ON"), a.get("include_ended", False)),
             "object_history": lambda: m.object_history(a["object_id"]),
             "first_observation": lambda: m.first_observation(a.get("location")),
-            "what_changed": lambda: m.changes_since(a["since"], a.get("location")),
+            "what_changed": lambda: m.changes_since(a.get("since"), a.get("location")),
             "timeline": lambda: m.timeline(int(a.get("limit", 10))),
+            "location_summary": lambda: m.location_summary(a.get("location")),
             "read_cypher": lambda: m.read_cypher(a["query"]),
         }[name]()
 

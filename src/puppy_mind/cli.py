@@ -112,6 +112,11 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
                 print("OPENAI_API_KEY is not set: camera frames will NOT be analysed yet (video and driving still work).")
     else:
         os.environ["PUPPY_FAKE_MEMORY"] = "1"
+    if not real_memory or os.environ.get("PUPPY_FAKE_MEMORY") == "1":
+        os.environ["PERCEPTION"] = "off"  # driving test only: camera frames are NOT sent to OpenAI
+        print("Frame analysis is OFF (frames stay on this computer). Use --real-memory with Aura reachable to turn it on.")
+    elif s.openai_api_key:
+        print(f"Frame analysis is ON: about one camera frame every {s.watch_interval_s:g}s is sent to OpenAI ({s.vision_model}) while the camera runs.")
     bridge = _open(robot_ip, 9090, 2.0)
     if bridge:
         os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"

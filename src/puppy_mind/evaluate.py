@@ -20,6 +20,7 @@ def run(brain, path: str, target: float = 0.8) -> int:
     qs = json.loads(Path(path).read_text(encoding="utf-8"))
     good = 0
     for i, q in enumerate(qs, 1):
+        brain.agent.history.pop(brain.session, None)  # questions are independent: no carry-over from earlier answers
         ans = brain.ask(q["q"])["answer"]
         ok = passes(ans, q)
         good += ok

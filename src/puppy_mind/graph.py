@@ -198,7 +198,7 @@ class Memory:
                 MATCH (a:Object {{id:it.a}}), (b:Object {{id:it.b}})
                 MERGE (a)-[r:{pred}]->(b)
                   ON CREATE SET r.since=datetime($ts), r.count=0
-                SET r.active=true, r.until=null, r.last_confirmed=datetime($ts),
+                SET r.active=true, r.until=null, r.ended_by=null, r.last_confirmed=datetime($ts),
                     r.count=r.count+1, r.confidence=it.conf, r.last_obs=$obs
                 """,
                 items=items, ts=ts, obs=obs_id,
@@ -211,7 +211,7 @@ class Memory:
                 MATCH (a:Object)-[old:{pred}]->(:Object)
                 WHERE a.id IN $vis AND old.active AND old.last_obs <> $obs
                   AND EXISTS {{ (a)-[cur:{pred}]->(:Object) WHERE cur.last_obs = $obs }}
-                SET old.active=false, old.until=datetime($ts)
+                SET old.active=false, old.until=datetime($ts), old.ended_by='superseded'
                 """,
                 vis=visible, ts=ts, obs=obs_id,
             )
@@ -220,7 +220,7 @@ class Memory:
             f"""
             MATCH (a:Object)-[r:{REL_ALT}]->(b:Object)
             WHERE a.id IN $vis AND b.id IN $vis AND r.active AND r.last_obs <> $obs
-            SET r.active=false, r.until=datetime($ts)
+            SET r.active=false, r.until=datetime($ts), r.ended_by='not_reseen'
             """,
             vis=visible, ts=ts, obs=obs_id,
         )
@@ -268,7 +268,7 @@ class Memory:
     def current_view(self, location: str | None = None) -> dict[str, Any]:
         rows = self._read(
             """
-            MATCH (ob:Observation) WHERE $loc IS NULL OR (ob)-[:AT]->(:Location {name:$loc})
+            MATCH (ob:Observation) WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) }
             WITH ob ORDER BY ob.ts DESC LIMIT 1
             OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Object)
             OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.last_obs = ob.id
@@ -285,7 +285,7 @@ class Memory:
     def find_object(self, label: str, color: str | None = None, limit: int = 10) -> list[dict]:
         return self._read(
             """
-            MATCH (o:Object) WHERE toLower(o.label) CONTAINS toLower($label)
+            MATCH (o:Object) WHERE (toLower(o.label) CONTAINS toLower($label) OR toLower($label) CONTAINS toLower(o.label))
               AND ($color IS NULL OR toLower(coalesce(o.color,'')) = toLower($color))
             CALL (o) {
               OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Location)
@@ -296,7 +296,10 @@ class Memory:
                    toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
                    o.last_zone AS last_zone, location,
                    [(o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active |
-                      {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations
+                      {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations,
+                   [(o)-[h]->(hb:Object) WHERE type(h) IN $preds |
+                      {predicate: type(h), target: hb.label + ' ' + hb.id, currently: h.active,
+                       last_seen_so: toString(h.last_confirmed), ended_by: h.ended_by}][..8] AS relation_history
             ORDER BY o.last_seen DESC LIMIT $limit
             """,
             label=label, color=color, preds=list(PREDICATES), limit=limit,
@@ -313,7 +316,7 @@ class Memory:
             RETURN a.id AS id, a.label AS label, a.color AS color, b.label+' '+b.id AS target,
                    r.active AS currently, a.status AS status,
                    toString(r.since) AS since, toString(r.last_confirmed) AS last_confirmed,
-                   toString(r.until) AS until, r.count AS times_confirmed
+                   toString(r.until) AS until, r.ended_by AS ended_by, r.count AS times_confirmed
             ORDER BY r.last_confirmed DESC LIMIT 30
             """,
             t=target_label, ended=include_ended,
@@ -336,7 +339,8 @@ class Memory:
             f"""
             MATCH (o:Object {{id:$id}})-[r:{REL_ALT}]-(x:Object)
             RETURN type(r) AS predicate, startNode(r).id = $id AS outgoing, x.label+' '+x.id AS other,
-                   r.active AS currently, toString(r.since) AS since, toString(r.until) AS until
+                   r.active AS currently, toString(r.since) AS since, toString(r.last_confirmed) AS last_seen_so,
+                   toString(r.until) AS until, r.ended_by AS ended_by
             ORDER BY r.since DESC LIMIT 30
             """,
             id=object_id,
@@ -346,7 +350,7 @@ class Memory:
     def first_observation(self, location: str | None = None) -> dict[str, Any]:
         rows = self._read(
             """
-            MATCH (ob:Observation) WHERE $loc IS NULL OR (ob)-[:AT]->(:Location {name:$loc})
+            MATCH (ob:Observation) WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) }
             WITH ob ORDER BY ob.ts ASC LIMIT 1
             OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Object)
             OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.last_obs = ob.id
@@ -359,36 +363,96 @@ class Memory:
         )
         return rows[0] if rows and rows[0]["observation"] else {"observation": None}
 
-    def changes_since(self, since_iso: str, location: str | None = None) -> dict[str, Any]:
-        new = self._read(
+    def changes_since(self, since_iso: str | None = None, location: str | None = None) -> dict[str, Any]:
+        """What differs from a baseline. Baseline = `since_iso`, or by default the FIRST observation (at `location`).
+
+        Returns structured lists plus `summary`: ready-to-narrate plain sentences, so the answer does not depend on the
+        caller picking a good timestamp.
+        """
+        first = self.first_observation(location)
+        base = since_iso or first.get("ts")
+        if not base:
+            return {"since": None, "summary": ["No observations yet."], "appeared": [], "possibly_gone": [], "relation_changes": []}
+        baseline = [o["label"] for o in first.get("objects", [])] if first.get("ts") == base else []
+        appeared = self._read(
             """
             MATCH (o:Object) WHERE o.first_seen > datetime($since)
-              AND ($loc IS NULL OR (o)-[:LOCATED_AT]->(:Location {name:$loc}))
-            RETURN o.id AS id, o.label AS label, o.color AS color,
-                   toString(o.first_seen) AS first_seen, o.status AS status
+              AND ($loc IS NULL OR EXISTS { (o)-[:LOCATED_AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) })
+            RETURN o.id AS id, o.label AS label, o.color AS color, toString(o.first_seen) AS first_seen, o.status AS status
+            ORDER BY o.first_seen
             """,
-            since=since_iso, loc=location,
+            since=base, loc=location,
         )
         gone = self._read(
             """
-            MATCH (o:Object) WHERE o.status='possibly_gone'
-              AND ($loc IS NULL OR (o)-[:LOCATED_AT]->(:Location {name:$loc}))
-            RETURN o.id AS id, o.label AS label, o.color AS color,
-                   toString(o.last_seen) AS last_seen, o.miss_count AS consecutive_misses
+            MATCH (o:Object) WHERE o.status = 'possibly_gone'
+              AND ($loc IS NULL OR EXISTS { (o)-[:LOCATED_AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) })
+            RETURN o.id AS id, o.label AS label, o.color AS color, toString(o.last_seen) AS last_seen,
+                   o.miss_count AS consecutive_misses
             """,
-            since=since_iso, loc=location,
+            loc=location,
         )
-        moved = self._read(
+        rels = self._read(
             f"""
             MATCH (a:Object)-[r:{REL_ALT}]->(b:Object)
-            WHERE r.since > datetime($since) OR r.until > datetime($since)
-            RETURN a.label+' '+a.id AS subject, type(r) AS predicate, b.label+' '+b.id AS object,
-                   r.active AS currently, toString(r.since) AS since, toString(r.until) AS until
+            WHERE (r.since > datetime($since) OR r.until > datetime($since))
+              AND ($loc IS NULL OR EXISTS {{ (a)-[:LOCATED_AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) }})
+            RETURN a.label + ' ' + a.id AS subject, a.label AS subject_label, a.color AS subject_color,
+                   type(r) AS predicate, b.label AS object_label, b.color AS object_color,
+                   r.active AS currently, toString(r.since) AS since, toString(r.last_confirmed) AS last_seen_so,
+                   toString(r.until) AS until, r.ended_by AS ended_by
             ORDER BY coalesce(r.until, r.since) DESC LIMIT 40
             """,
-            since=since_iso,
+            since=base, loc=location,
         )
-        return {"since": since_iso, "new_objects": new, "possibly_gone": gone, "relation_changes": moved}
+
+        def name(color: str | None, label: str) -> str:
+            return f"{color + ' ' if color and color != 'unknown' else ''}{label}"
+
+        lines: list[str] = []
+        if baseline:
+            lines.append(f"Baseline (first observation at {base}): " + ", ".join(sorted(baseline)) + ".")
+        for o in appeared:
+            lines.append(f"NEW: a {name(o['color'], o['label'])} appeared, first seen at {o['first_seen']}.")
+        for o in gone:
+            lines.append(f"POSSIBLY GONE: the {name(o['color'], o['label'])} was last seen at {o['last_seen']} and has been "
+                         f"missed in {o['consecutive_misses']} consecutive observations (a missed detection is not proof it was removed).")
+        for r in rels:
+            s, ob = name(r["subject_color"], r["subject_label"]), name(r["object_color"], r["object_label"])
+            if r["currently"]:
+                lines.append(f"RELATION: the {s} is {r['predicate'].replace('_', ' ').lower()} the {ob} (since {r['since']}).")
+            else:
+                why = {"possibly_gone": "because the object stopped being detected", "superseded": "because it moved elsewhere",
+                       "not_reseen": "because it was no longer seen that way"}.get(r["ended_by"] or "", "")
+                lines.append(f"RELATION ENDED: the {s} was {r['predicate'].replace('_', ' ').lower()} the {ob}; last seen like that at "
+                             f"{r['last_seen_so']}; memory ended it at {r['until']} {why}.".replace("  ", " "))
+        return {"since": base, "summary": lines, "appeared": appeared, "possibly_gone": gone, "relation_changes": rels}
+
+    def location_summary(self, location: str | None = None) -> dict[str, Any]:
+        """Everything remembered about a place: each object with first/last seen, status and relations."""
+        objs = self._read(
+            """
+            MATCH (o:Object)-[:LOCATED_AT]->(l:Location)
+            WHERE $loc IS NULL OR toLower(l.name) = toLower($loc)
+            RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status,
+                   toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
+                   o.seen_count AS times_seen, o.miss_count AS consecutive_misses, l.name AS location,
+                   [(o)-[r]->(b:Object) WHERE type(r) IN $preds |
+                      {predicate: type(r), target: b.label + ' ' + b.id, currently: r.active,
+                       last_seen_so: toString(r.last_confirmed), ended_by: r.ended_by}] AS relations
+            ORDER BY o.first_seen
+            """,
+            loc=location, preds=list(PREDICATES),
+        )
+        span = self._read(
+            """
+            MATCH (ob:Observation)
+            WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Location) WHERE toLower(l.name) = toLower($loc) }
+            RETURN count(ob) AS observations, toString(min(ob.ts)) AS first_observation, toString(max(ob.ts)) AS last_observation
+            """,
+            loc=location,
+        )
+        return {"observations": span[0] if span else None, "objects": objs}
 
     def timeline(self, limit: int = 20) -> list[dict]:
         return self._read(

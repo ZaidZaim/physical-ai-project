@@ -30,9 +30,15 @@ check("first observation had the laptop and no backpack", "laptop" in [o["label"
 cur = m.current_view("Booth")
 check("current view has backpack, no laptop", "backpack" in [o["label"] for o in cur["objects"]] and "laptop" not in [o["label"] for o in cur["objects"]], sorted(o["label"] for o in cur["objects"]))
 
-ch = m.changes_since(first["ts"], "Booth")
-check("changes since start: backpack is new", [o["label"] for o in ch["new_objects"]] == ["backpack"], [o["label"] for o in ch["new_objects"]])
-check("changes since start: laptop possibly gone", [o["label"] for o in ch["possibly_gone"]] == ["laptop"])
+ch = m.changes_since(None, "booth")  # default baseline = first observation; location is case-insensitive
+check("changes (default baseline): backpack is new", [o["label"] for o in ch["appeared"]] == ["backpack"], [o["label"] for o in ch["appeared"]])
+check("changes: laptop possibly gone", [o["label"] for o in ch["possibly_gone"]] == ["laptop"])
+text = " ".join(ch["summary"]).lower()
+check("summary mentions backpack NEW, laptop POSSIBLY GONE, and the ended laptop-on-table relation",
+      "new: a red backpack" in text and "possibly gone: the silver laptop" in text and "relation ended: the silver laptop was on the brown table" in text, ch["summary"][:1])
+check("explicit since = first obs gives the same answer", [o["label"] for o in m.changes_since(first["ts"], "Booth")["appeared"]] == ["backpack"])
+check("find_object understands 'red backpack'", bool(m.find_object("red backpack")) and m.find_object("red backpack")[0]["label"] == "backpack")
+check("find_object keeps ended relations in history", any(r["predicate"] == "ON" and r["currently"] is False and r["ended_by"] == "possibly_gone" for r in m.find_object("laptop")[0]["relation_history"]))
 
 h = m.object_history(lap[0]["id"])
 check("laptop history: 3 sightings", len(h["object"]["sightings"]) == 3, len(h["object"]["sightings"]))

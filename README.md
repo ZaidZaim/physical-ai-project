@@ -98,6 +98,15 @@ your Aura instance and checks 17 facts (what is on the table, what changed, whic
 guard). Passed against a live AuraDB Professional instance on 2026-10-14. This found and fixed a real Cypher bug in `find_object`.
 Note: `.env` now overrides shell/Windows `NEO4J_*` variables (a stale `NEO4J_URI` from another project had silently redirected the app).
 
+## Question answering: verified on live Aura + OpenAI (2026-10-14)
+`puppy-mind eval` (20 predefined questions over the scripted booth scene, each asked independently) scored 20/20 on two
+consecutive runs after fixes (first run 15/20). Failures found by reading answers, not just scores: case-sensitive place names,
+'until' misread as 'last seen', find_object not understanding 'red backpack', and an agent that picked inconsistent baselines for
+'what changed' (now a deterministic default plus ready-made summary lines). Caveats: scripted scene, not the real camera; the
+checker is substring-based; the model is non-deterministic, so re-run `eval` after any prompt/tool change.
+Privacy: camera frames go to OpenAI only when frame analysis is on (`--real-memory` with Aura reachable, or `serve`). Driving
+tests (`robot-test` without `--real-memory`) set `PERCEPTION=off`, so frames stay on the computer.
+
 ## Status / honest limits
 * Graph logic and matching are unit-tested (matching) and designed against Aura; the Aura-backed ingestion/queries have NOT yet been executed against a live instance (connection was failing when this was written).
 * Single camera, no pose: spatial relations are qualitative and "location" is a name you set (`/api/location`).
