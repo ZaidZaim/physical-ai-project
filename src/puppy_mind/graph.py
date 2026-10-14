@@ -607,6 +607,81 @@ class Memory:
             name=name, room=room_type, ts=now_iso(),
         )
 
+    # ---- duplicate objects: one real thing seen from two angles becomes two Objects; merge them when the evidence allows
+    def find_duplicates(self, place: str | None = None, strict: bool = True) -> list[dict[str, Any]]:
+        """Pairs of Objects in one place with the same label that were NEVER detected in the same frame (two things in one frame are
+        two things; the same thing seen from two angles is never in two spots of one frame). strict: the colours must be equal and
+        known; otherwise an unknown colour also matches. The one seen more often is kept."""
+        color_ok = "a.color = b.color AND a.color <> 'unknown'" if strict else "(a.color = b.color OR a.color = 'unknown' OR b.color = 'unknown')"
+        return self._read(
+            f"""
+            MATCH (a:Object)-[:LOCATED_AT]->(l:Location)<-[:LOCATED_AT]-(b:Object)
+            WHERE a.id < b.id AND a.label = b.label AND {color_ok} AND ($place IS NULL OR l.name = $place)
+              AND NOT EXISTS {{ (s:Sighting)-[:DETECTED]->(a) WHERE (s)-[:DETECTED]->(b) }}
+            WITH a, b, l, CASE WHEN a.seen_count >= b.seen_count THEN [a, b] ELSE [b, a] END AS kd
+            RETURN l.name AS place, kd[0].id AS keep, kd[1].id AS drop, a.label AS label, kd[0].color AS keep_color, kd[1].color AS drop_color
+            """, place=place)
+
+    def merge_objects(self, keep: str, drop: str) -> bool:
+        """Fold Object drop into keep: sightings, relations, counters. Used for duplicates of one real thing."""
+        if keep == drop or not self._read("MATCH (a:Object {id: $k}), (b:Object {id: $d}) RETURN count(*) AS c", k=keep, d=drop)[0]["c"]:
+            return False
+        self._write(
+            """
+            MATCH (s:Sighting)-[d:DETECTED]->(x:Object {id: $d}), (k:Object {id: $k})
+            MERGE (s)-[d2:DETECTED]->(k) SET d2 += properties(d)
+            DELETE d
+            """, k=keep, d=drop)
+        for pred in PREDICATES:
+            self._write(
+                f"""
+                MATCH (x:Object {{id: $d}})-[r:{pred}]->(o:Object), (k:Object {{id: $k}}) WHERE o.id <> $k
+                MERGE (k)-[r2:{pred}]->(o) ON CREATE SET r2 = properties(r)
+                WITH r DELETE r
+                """, k=keep, d=drop)
+            self._write(
+                f"""
+                MATCH (o:Object)-[r:{pred}]->(x:Object {{id: $d}}), (k:Object {{id: $k}}) WHERE o.id <> $k
+                MERGE (o)-[r2:{pred}]->(k) ON CREATE SET r2 = properties(r)
+                WITH r DELETE r
+                """, k=keep, d=drop)
+        self._write(
+            """
+            MATCH (k:Object {id: $k}), (x:Object {id: $d})
+            SET k.seen_count = coalesce(k.seen_count, 0) + coalesce(x.seen_count, 0), k.miss_count = 0, k.status = 'present',
+                k.first_seen = CASE WHEN x.first_seen < k.first_seen THEN x.first_seen ELSE k.first_seen END
+            DETACH DELETE x
+            """, k=keep, d=drop)
+        return True
+
+    def consolidate_duplicates(self, place: str | None = None, strict: bool = True, dry_run: bool = False) -> list[dict[str, Any]]:
+        """Merge what find_duplicates reports (repeating, because merging A into B can expose B into C)."""
+        done: list[dict[str, Any]] = []
+        for _ in range(5):
+            pairs = [p for p in self.find_duplicates(place, strict) if p["drop"] not in {d["drop"] for d in done}]
+            if not pairs or dry_run:
+                return done + (pairs if dry_run else [])
+            used: set[str] = set()
+            for p in pairs:
+                if p["keep"] in used or p["drop"] in used:
+                    continue
+                if self.merge_objects(p["keep"], p["drop"]):
+                    done.append(p)
+                    used |= {p["keep"], p["drop"]}
+        return done
+
+    def reset_spatial(self, dry_run: bool = True) -> dict[str, int]:
+        """Clean start for the spatial data: every Location, the Objects in them and the Sightings at them. Dialogue and reasoning
+        history are kept. NAMS entities are not touched here (run nams-sync --rebuild afterwards)."""
+        q = self._read(
+            "MATCH (l:Location) OPTIONAL MATCH (o:Object)-[:LOCATED_AT]->(l) OPTIONAL MATCH (x:Sighting)-[:AT]->(l) "
+            "RETURN count(DISTINCT l) AS places, count(DISTINCT o) AS objects, count(DISTINCT x) AS sightings")[0]
+        if not dry_run:
+            self._write("MATCH (o:Object) DETACH DELETE o")
+            self._write("MATCH (x:Sighting) DETACH DELETE x")
+            self._write("MATCH (l:Location) DETACH DELETE l")
+        return dict(q)
+
     def learn_room_type(self, name: str, min_votes: int = 2) -> str | None:
         """A place whose kind of room is still unknown takes the room type most of its own frames reported (needs min_votes frames).
         Without this a place keeps 'unknown' forever and the resolver cannot tell it apart from other rooms by room type."""

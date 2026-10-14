@@ -114,6 +114,25 @@ try:
         ing(ORI, "living room", ("zzsofa", "grey", "center"), ("zzlamp", "black", "right"), heading=90.0)  # looking at the table's spot: it is gone
     t = m._read("MATCH (o:Object {label:'zztable'})-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.status AS status", p=ORI)[0]["status"]
     check("but an object missing from where the robot is looking does count", t == "possibly_gone", t)
+    # --- duplicates: the same box seen twice (never together) merges; two boxes in one frame never do
+    DUP = P + "dup"
+    m.ensure_place(DUP, "storage", True)
+    for lab in ("zzbox", "zzbox"):
+        pass
+    ids = []
+    for zone in ("left", "right"):  # two sightings, each showing one brown box, plus a bag that is always present
+        m.ingest(scene("storage", ("zzbox", "brown", zone), ("zzcrate", "black", "center")), session_id=sid, location=DUP, source=SRC, room_type="storage")
+    box_ids = [r["id"] for r in m._read("MATCH (o:Object {label:'zzbox'})-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.id AS id", p=DUP)]
+    if len(box_ids) == 1:  # matching already unified them: force a second copy so the merge itself is tested
+        m._write("MATCH (l:Location {name:$p}) CREATE (o:Object {id:'zz-dup-2', label:'zzbox', color:'brown', seen_count:1, miss_count:0, status:'present', first_seen:datetime()})-[:LOCATED_AT]->(l)", p=DUP)
+    pairs = m.find_duplicates(DUP)
+    check("two never-co-occurring look-alikes are reported as duplicates", len(pairs) == 1 and pairs[0]["label"] == "zzbox", pairs)
+    merged = m.consolidate_duplicates(DUP)
+    left_boxes = m._read("MATCH (o:Object {label:'zzbox'})-[:LOCATED_AT]->(:Location {name:$p}) RETURN count(o) AS c", p=DUP)[0]["c"]
+    check("consolidate merges them into one object", len(merged) == 1 and left_boxes == 1, (len(merged), left_boxes))
+    both = ing(DUP, "storage", ("zzcup", "white", "left"), ("zzcup", "white", "right"))
+    cups = m._read("MATCH (o:Object {label:'zzcup'})-[:LOCATED_AT]->(:Location {name:$p}) RETURN count(o) AS c", p=DUP)[0]["c"]
+    check("two cups in ONE frame are two objects and are never merged", cups == 2 and not [d for d in m.find_duplicates(DUP) if d["label"] == "zzcup"], cups)
 finally:
     cleanup(m)
     left = m._read("MATCH (n) WHERE (n:Object AND n.label STARTS WITH 'zz') OR (n:Location AND n.name STARTS WITH $p) OR (n:Sighting AND n.source = $s) RETURN count(n) AS c", p=P, s=SRC)[0]["c"]

@@ -248,6 +248,14 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("place")
     sp.add_argument("--gap", type=float, default=90.0, help="seconds between objects' last_seen that start a new group")
     sp.add_argument("--yes", action="store_true", help="apply: the first group stays, the others become 'PLACE 2', 'PLACE 3', ...")
+    cd = sub.add_parser("consolidate", help="merge duplicate objects (same label, never in one frame together); dry run unless --yes")
+    cd.add_argument("--place")
+    cd.add_argument("--loose", action="store_true", help="also merge when one colour is unknown")
+    cd.add_argument("--yes", action="store_true")
+    rs = sub.add_parser("reset-spatial", help="delete ALL places, objects and camera sightings (clean start); dialogue is kept; dry run unless --yes")
+    rs.add_argument("--yes", action="store_true")
+    ic = sub.add_parser("imu-check", help="turn the robot left for ~2 s and report whether the heading went UP (needs the robot on and rosbridge)")
+    ic.add_argument("--robot-ip", required=True)
     sub.add_parser("reset").add_argument("--yes", action="store_true")
     e = sub.add_parser("eval", help="run the question set against current memory")
     e.add_argument("questions", nargs="?", default="eval/questions.json")
@@ -277,6 +285,49 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "robot-test":
         return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine, real_memory=args.real_memory)
+
+    if args.cmd == "imu-check":
+        import time
+
+        from .drive import DriveState
+        from .pose import HeadingTracker, wrap180
+        from .rosbridge import RosbridgeDriver
+
+        ds, hd = DriveState(), HeadingTracker()
+        rb = RosbridgeDriver(f"ws://{args.robot_ip}:9090", ds, on_imu=hd.feed).start()
+        try:
+            t0 = time.time()
+            while not rb.connected and time.time() - t0 < 8:
+                time.sleep(0.2)
+            if not rb.connected:
+                print("could not reach rosbridge:", rb.error)
+                return 1
+            time.sleep(1.5)
+            at_rest = hd.value()
+            if at_rest is None:
+                print("connected, but no IMU data arrived: the topic", rb.IMU_TOPIC, "is not publishing")
+                return 1
+            print(f"IMU ok ({rb.imu_samples} samples). Heading at rest: {at_rest:.1f} deg. Turning LEFT for 2 s, the robot will move...")
+            ds.arm(True)
+            end = time.time() + 2.0
+            while time.time() < end:
+                ds.command(0.0, 0.0, 0.6)  # positive yaw = left (counter-clockwise)
+                time.sleep(0.1)
+            ds.stop()
+            time.sleep(1.0)
+            ds.arm(False)
+            delta = wrap180(hd.value() - at_rest)
+            print(f"heading change after a LEFT turn: {delta:+.1f} deg")
+            if delta > 10:
+                print("PASS: heading rises when the robot turns left, as the spatial code assumes.")
+            elif delta < -10:
+                print("REVERSED: the heading falls on a left turn. Tell me and I will flip the sign.")
+            else:
+                print("The robot barely turned (or the gyro barely moved): try again on a hard floor.")
+            return 0 if delta > 10 else 2
+        finally:
+            ds.arm(False)
+            rb.close()
 
     if args.cmd == "robot-check":
         from .robotcheck import check, scan
@@ -337,6 +388,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("Real observations are untouched. Re-run with --yes to delete.")
             else:
                 print("Deleted:", c)
+        elif args.cmd == "consolidate":
+            rows = brain.mem.consolidate_duplicates(args.place, strict=not args.loose, dry_run=not args.yes)
+            for r in rows:
+                print(f"{r['place']}: {r['label']} {r['drop_color']} -> {r['keep_color']}")
+            print(("merged " if args.yes else "DRY RUN, would merge ") + f"{len(rows)} duplicate objects" + ("" if args.yes else ". Re-run with --yes."))
+        elif args.cmd == "reset-spatial":
+            c = brain.mem.reset_spatial(dry_run=not args.yes)
+            print(("Deleted " if args.yes else "DRY RUN. Would delete ") + f"{c['places']} places, {c['objects']} objects, {c['sightings']} sightings (dialogue kept).")
+            if not args.yes:
+                print("Re-run with --yes. Afterwards: uv run puppy-mind nams-sync --rebuild")
         elif args.cmd == "split-place":
             groups = brain.mem.suggest_split(args.place, args.gap)
             for i, g in enumerate(groups, 1):

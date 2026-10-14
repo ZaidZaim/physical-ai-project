@@ -227,6 +227,11 @@ class Brain:
             self.mem.touch_place(name, scene.room_type)
             self.location = name
             self.heading.reset()  # new place, new origin: 0 degrees = the way we face on arrival
+            if prev and prev != name and hasattr(self.mem, "consolidate_duplicates"):
+                try:  # leaving a place: tidy look-alikes of one thing seen from two angles
+                    self.mem.consolidate_duplicates(prev)
+                except Exception:
+                    pass
             if prev and prev != name:
                 self.mem.note_transition(prev, name)
                 self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
