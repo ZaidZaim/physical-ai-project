@@ -165,6 +165,10 @@ function syncGraph() {
     }
     for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, '#f85149'); setTimeout(() => edges.remove(id), 900); }
     $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} edges`;
+    if (g.nodes.length !== window._lastNodeCount) {  // keep every node in view as the graph grows
+      window._lastNodeCount = g.nodes.length;
+      setTimeout(() => net.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } }), 1200);
+    }
   }).catch(e => log('error', 'graph: ' + e.message));
   return syncing;
 }
