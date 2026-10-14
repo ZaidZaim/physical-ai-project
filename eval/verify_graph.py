@@ -40,6 +40,11 @@ check("explicit since = first obs gives the same answer", [o["label"] for o in m
 check("find_object understands 'red backpack'", bool(m.find_object("red backpack")) and m.find_object("red backpack")[0]["label"] == "backpack")
 check("find_object keeps ended relations in history", any(r["predicate"] == "ON" and r["currently"] is False and r["ended_by"] == "possibly_gone" for r in m.find_object("laptop")[0]["relation_history"]))
 
+check("next-to is symmetric: chair has the backpack next to it AND vice versa",
+      [x["label"] for x in m.related_objects("chair", "NEXT_TO")] == ["backpack"] and [x["label"] for x in m.related_objects("backpack", "NEXT_TO")] == ["chair"])
+check("related_objects understands a colour word ('red backpack')", [x["label"] for x in m.related_objects("red backpack", "ANY")] == ["chair"])
+check("find_object colour word picks the right one", all(x["color"] == "blue" for x in m.find_object("blue bottle")))
+
 h = m.object_history(lap[0]["id"])
 check("laptop history: 3 sightings", len(h["object"]["sightings"]) == 3, len(h["object"]["sightings"]))
 check("timeline has 6 observations", len(m.timeline(20)) == 6)

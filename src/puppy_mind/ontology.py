@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 ONTOLOGY_FILE = Path(__file__).parents[2] / "ontology" / "puppy_pi.json"
-AURA_LABEL = {"PhysicalObject": "Object", "Place": "Location"}  # ontology type -> label stored in Aura
+AURA_LABEL = {"Agent": "Robot"}  # ontology type -> label stored in Aura (Object and Location keep their names)
 
 # agent-memory types (not in the domain file): label, memory layer, description, properties
 MEMORY_TYPES = [
@@ -27,18 +27,18 @@ MEMORY_TYPES = [
     ("Lookup", "reasoning", "One memory lookup made during a step: tool name, input, output.", ["id", "name", "input", "output", "seq"]),
 ]
 MEMORY_EDGES = [
-    ("DETECTED", "Sighting", "PhysicalObject", "short", "this frame showed the object (with confidence)"),
-    ("MISSED", "Sighting", "PhysicalObject", "short", "expected here but not detected (not proof it is gone)"),
-    ("AT", "Sighting", "Place", "short", "where the frame was taken"),
+    ("DETECTED", "Sighting", "Object", "short", "this frame showed the object (with confidence)"),
+    ("MISSED", "Sighting", "Object", "short", "expected here but not detected (not proof it is gone)"),
+    ("AT", "Sighting", "Location", "short", "where the frame was taken"),
     ("IN_SESSION", "Sighting", "Session", "short", ""),
     ("IN_SESSION", "Dialogue", "Session", "short", ""),
     ("HAS_UTTERANCE", "Dialogue", "Utterance", "short", ""),
     ("FOLLOWED_BY", "Utterance", "Utterance", "short", "order of the conversation"),
-    ("ABOUT", "Utterance", "PhysicalObject", "short", "an answer talked about this object"),
+    ("ABOUT", "Utterance", "Object", "short", "an answer talked about this object"),
     ("HAS_REASONING", "Dialogue", "ReasoningStep", "reasoning", ""),
     ("PRODUCED", "ReasoningStep", "Utterance", "reasoning", "the step that produced this answer"),
     ("MADE_LOOKUP", "ReasoningStep", "Lookup", "reasoning", "a lookup made while reasoning"),
-    ("RELIED_ON", "ReasoningStep", "PhysicalObject", "reasoning", "this object informed the answer (provenance)"),
+    ("RELIED_ON", "ReasoningStep", "Object", "reasoning", "this object informed the answer (provenance)"),
 ]
 SPATIAL = ("ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND")
 

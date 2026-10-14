@@ -32,18 +32,21 @@ def _nams_cmd(args, s) -> int:
                 if r is None and n.auth == "invalid":
                     print(f"{title}: REJECTED - {n.stats['last_error']}")
                     return 1
-                text = json.dumps(r, default=str, ensure_ascii=False)
+                text = json.dumps(r, default=str, ensure_ascii=True)  # emoji in ontology icons break cp1252 consoles
                 print(f"{title}: {text[:600] + (' ...' if len(text) > 600 else '') if r is not None else 'unavailable (' + n.stats['last_error'] + ')'}")
             print(f"\nworkspace header: {s.nams_workspace_id or '(none)'}   base: {s.nams_base_url}")
             return 0
         if args.cmd == "nams-setup":
             spec = json.loads(Path("ontology/puppy_pi.json").read_text(encoding="utf-8"))
             for obj in s.vocab:  # let NAMS extraction map common nouns in observation text to PhysicalObject
-                spec["ontology"]["extraction_aliases"].setdefault(obj, "PhysicalObject")
-            spec["ontology"]["extraction_aliases"].update({"puppypi": "Robot", "robot": "Robot", "visitor": "Person"})
+                spec["ontology"]["extraction_aliases"].setdefault(obj, "Object")
+            spec["ontology"]["extraction_aliases"].update({"puppypi": "Agent", "robot": "Agent", "visitor": "Person"})
             r = n._req("POST", "/v1/ontologies", spec)
             if r is None:
                 print("create failed:", n.stats["last_error"])
+                if "403" in n.stats["last_error"]:
+                    print("This API key can read and write memory but is not allowed to manage ontologies.")
+                    print("Memory sync works without it: the app already uses the types of your active ontology (Agent, Location, Object, Person).")
                 return 1
             print("created ontology version:", json.dumps({k: r.get(k) for k in ("id", "ontology_id", "revision", "semver_tag", "validation_mode")}))
             if args.activate:
@@ -57,6 +60,22 @@ def _nams_cmd(args, s) -> int:
 
             mem = Memory(s)
             n.mem = mem
+            if args.rebuild:
+                links = mem.nams_links()
+                gone = 0
+                for v in links.values():  # only entities THIS app created: the ones our objects point to
+                    if n._req("DELETE", f"/v1/entities/{v['id']}") is not None:
+                        gone += 1
+                names = {s.robot_name: "Agent"}
+                for loc in {o["location"] for o in mem.export_for_nams(args.location)["objects"]}:
+                    names[loc] = "Location"
+                for nm, typ in names.items():  # our fixed entities, recognised by our own description text
+                    for e in (n._req("GET", "/v1/entities/by-name", params={"name": nm, "type": typ}) or {}).get("entities", []):
+                        if (e.get("description") or "").startswith(("Place observed by", "Hiwonder PuppyPi")):
+                            if n._req("DELETE", f"/v1/entities/{e['id']}") is not None:
+                                gone += 1
+                print(f"rebuild: deleted {gone} NAMS entities created by this app; cleared {mem.clear_nams_links()} links in Aura")
+                n._links.clear()
             n._load_links()
             snap = mem.export_for_nams(args.location)
             by_loc: dict[str, list] = {}
@@ -247,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     ns.add_argument("--activate", action="store_true")
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
+    nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)

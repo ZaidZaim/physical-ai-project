@@ -6,6 +6,7 @@ every claim must come from a tool result, carry its timestamp, and express uncer
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -54,10 +55,10 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"label": {"type": "string"}, "color": {"type": "string"}}, "required": ["label"]}}},
     {"type": "function", "function": {
         "name": "related_objects",
-        "description": "Objects that are (or were, with include_ended) ON/INSIDE/NEXT_TO/NEAR/IN_FRONT_OF/BEHIND a target label, e.g. what is on the table.",
+        "description": "Objects related to a target label: ON/INSIDE/NEXT_TO/NEAR/IN_FRONT_OF/BEHIND (include_ended adds past relations). Use the predicate that matches the question ('next to' -> NEXT_TO, 'on' -> ON); omit it or use ANY to search all relations. NEXT_TO and NEAR are symmetric. The result says which relation each object has to the target.",
         "parameters": {"type": "object", "properties": {
             "target_label": {"type": "string"},
-            "predicate": {"type": "string", "enum": ["ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND"]},
+            "predicate": {"type": "string", "enum": ["ANY", "ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND"]},
             "include_ended": {"type": "boolean"}}, "required": ["target_label"]}}},
     {"type": "function", "function": {
         "name": "object_history",
@@ -102,7 +103,7 @@ class Agent:
             "current_view": lambda: m.current_view(a.get("location")),
             "find_object": lambda: m.find_object(a["label"], a.get("color")),
             "related_objects": lambda: m.related_objects(
-                a["target_label"], a.get("predicate", "ON"), a.get("include_ended", False)),
+                a["target_label"], a.get("predicate", "ANY"), a.get("include_ended", False)),
             "object_history": lambda: m.object_history(a["object_id"]),
             "first_observation": lambda: m.first_observation(a.get("location")),
             "what_changed": lambda: m.changes_since(a.get("since"), a.get("location")),
@@ -141,5 +142,6 @@ class Agent:
         turns += [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
         self.nams.message(session_id, "user", question)
         self.nams.message(session_id, "assistant", answer, tools=",".join(t["tool"] for t in trace))
-        self.nams.reasoning(session_id, question, trace, answer)
+        ids = sorted(set(re.findall(r"obj-[0-9a-f]{8}", json.dumps([t["result"] for t in trace], default=str))))
+        self.nams.reasoning(session_id, question, trace, answer, ids)
         return {"answer": answer, "evidence": trace}

@@ -61,8 +61,19 @@ uv run puppy-mind nams-sync               # backfill the current Aura world mode
 ```
 `validation_mode` is `permissive`, so entities of these types are accepted even before activation (unverified; see below).
 
-## Status of verification
-Unit/integration tests run against a fake NAMS built from the public OpenAPI spec (request/response shapes, headers, dedupe results,
-401/500 handling). **Not yet verified against the live service**: the API key supplied on 2026-10-14 was rejected (401). Things to confirm
-once a valid key exists: custom entity types accepted under the cloned `agent-memory` ontology, `X-Workspace-Id` handling, how NAMS
-merges same-name entities, and what Observations/Reflections it generates from the narrative.
+## Verified live against NAMS (2026-10-14)
+Run with a real key against your workspace; every test object was deleted afterwards. What was measured, and what the code now does about it:
+
+| Finding | Consequence in the code |
+|---|---|
+| The key accepts memory read/write but **not** workspace/ontology admin (`/v1/workspace` and ontology management return 403) | The app uses the types of the workspace's **active** ontology (`Agent`, `Location`, `Object`, `Person`); `nams-setup` explains the 403 |
+| NAMS writes into the **same Aura database** (`:Entity`, `:Conversation`/`:Message`, `:AgentStep`/`:ToolCall`, `RELATED_TO`) | `nams_graph.py` reads them for the lenses and adds `MIRRORED_BY` and `RELIED_ON` links from our nodes; it never creates or deletes NAMS-labelled nodes (tested) |
+| Relationships are stored as generic `RELATED_TO` with the real name in `predicate` (`next_to`, `observed`, `located_at`) | Lenses read `predicate`; spatial duplicates of our own facts are not redrawn |
+| Duplicate resolution: auto-merge at similarity >= 0.92, review flag from 0.78 (`/v1/workspace/resolution`, readable) | `black chair` / `black chair #2` was **merged**, as were `mug (red)`/`mug (blue)` and any name+short-id without colour. Names are `label colour short-id` (`black chair 3f2a9c`), which stayed separate; a `merged` result is never mirrored 1:1 (retried with a more distinct name), and review flags between our own objects are rejected via the reviews API |
+| Different `userId`s keep entities apart, but relationships across users are refused (`cross_user_relationship`) | One shared scope; `userId` is not used for objects |
+| `Agent` requires property `agent_id` | Set to the robot name; per-item errors are now surfaced instead of swallowed |
+| `messages/search` returned nothing right after writing (text search, possibly indexed asynchronously) | `recall_memory` also uses entity search; message recall unverified |
+
+Real data in NAMS now: `nams-sync --rebuild` mirrored the robot's 11 real objects, the `Demo Area` location and the `PuppyPi` agent (13 entities, 32 relationships).
+Not verified: what NAMS's Observations/Reflections look like (they appear only after message windows are processed), and the effect of confirming a
+review pair in the NAMS dashboard (never do this for two of our objects: they are different instances).

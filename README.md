@@ -111,10 +111,9 @@ Privacy: camera frames go to OpenAI only when frame analysis is on (`--real-memo
 tests (`robot-test` without `--real-memory`) set `PERCEPTION=off`, so frames stay on the computer.
 
 ## Memory: Aura + NAMS
-Aura is the authoritative, time-aware world model; NAMS holds entities/relationships, a narrative log, Q&A with reasoning traces
-and semantic recall. Design, data flow, setup commands and verification status: [docs/MEMORY.md](docs/MEMORY.md).
-NAMS code is tested against a fake server built from its OpenAPI spec; **not yet verified against the live service** (the key supplied
-on 2026-10-14 was rejected with 401).
+Aura is the authoritative, time-aware world model; NAMS holds entities/relationships, a narrative log, Q&A with reasoning traces and
+semantic recall, and **writes into the same Aura database**, so the graph viewer shows both (dashed ring = stored by NAMS). Design,
+measured NAMS behaviour (merge thresholds, key scope), setup commands: [docs/MEMORY.md](docs/MEMORY.md). Verified live on 2026-10-14.
 
 ## Status / honest limits
 * Graph logic and matching are unit-tested (matching) and designed against Aura; the Aura-backed ingestion/queries have NOT yet been executed against a live instance (connection was failing when this was written).

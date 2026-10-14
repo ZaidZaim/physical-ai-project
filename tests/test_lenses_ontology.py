@@ -31,10 +31,10 @@ def test_ontology_covers_three_memory_layers_and_edges_point_at_real_types():
     o = ontology.build({"Object": 3, "Sighting": 5})
     ids = {n["id"] for n in o["nodes"]}
     assert {n["memory"] for n in o["nodes"]} == {"short", "long", "reasoning"}
-    assert {"Robot", "PhysicalObject", "Place", "Sighting", "Utterance", "ReasoningStep", "Lookup"} <= ids
+    assert {"Agent", "Object", "Location", "Sighting", "Utterance", "ReasoningStep", "Lookup"} <= ids
     for e in o["edges"]:
         assert e["source"] in ids and e["target"] in ids, e
-    po = next(n for n in o["nodes"] if n["id"] == "PhysicalObject")
+    po = next(n for n in o["nodes"] if n["id"] == "Object")
     assert po["aura_label"] == "Object" and po["count"] == 3
     assert next(n for n in o["nodes"] if n["id"] == "Person")["pii"] is True
 

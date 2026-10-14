@@ -114,7 +114,7 @@
         <div id="legend"><span><i style="background:var(--long)"></i>long-term</span><span><i style="background:var(--short)"></i>short-term</span>
           <span><i style="background:var(--reasoning)"></i>reasoning</span><span><i style="background:var(--gone)"></i>possibly gone</span>
           <span><i style="border:2px solid var(--new);background:none"></i>new</span><span><i style="border:2px solid var(--miss);background:none"></i>missed</span>
-          <span><i style="border:2px solid var(--ask);background:none"></i>consulted by agent</span></div></div>
+          <span><i style="border:2px solid var(--ask);background:none"></i>consulted by agent</span><span><i style="border:2px dashed var(--ink);background:none"></i>stored by NAMS</span></div></div>
       <div id="ontowrap" hidden>
         <div id="onto"></div>
         <div id="ontodetail"><b>Ontology</b><div style="color:var(--mute)">Click a type or relationship. Node size = how many exist in your graph right now.</div></div>
@@ -142,11 +142,11 @@ const net = new vis.Network($('#graph'), { nodes, edges }, {
 /* Colour = memory type (long-term orange, short-term green, reasoning purple); shape = kind of node. */
 let lens = 'long';
 const MEM = () => ({ short:css('--short'), long:css('--long'), reasoning:css('--reasoning') });
-const SHAPE = { Object:['dot',16], Location:['box',20], Sighting:['diamond',14], Utterance:['square',10], Dialogue:['database',11], ReasoningStep:['triangle',16], Lookup:['triangleDown',12] };
+const SHAPE = { Entity:['dot',11], Object:['dot',16], Location:['box',20], Sighting:['diamond',14], Utterance:['square',10], Dialogue:['database',11], ReasoningStep:['triangle',16], Lookup:['triangleDown',12] };
 const baseOf = n => { const [shape, size] = SHAPE[n.kind] || ['dot', 14];
   return { bg: n.status === 'possibly_gone' ? css('--gone') : (MEM()[n.memory] || css('--obj')), size, shape }; };
-const nodeLabel = n => n.kind === 'Location' ? '📍 ' + n.label : n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label : n.label;
-const SOFT = new Set(['LOCATED_AT', 'THEN', 'FOLLOWED_BY', 'HAS_UTTERANCE', 'DETECTED']);  // structural links: dashed, unlabelled
+const nodeLabel = n => n.kind === 'Entity' ? n.label : n.kind === 'Location' ? '📍 ' + n.label : n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label : n.label;
+const SOFT = new Set(['MIRRORED_BY', 'LOCATED_AT', 'THEN', 'FOLLOWED_BY', 'HAS_UTTERANCE', 'DETECTED']);  // structural links: dashed, unlabelled
 const edgeId = e => `${e.source}|${e.type}|${e.target}`;
 
 function tween(from, to, ms, step, done) {
@@ -175,7 +175,9 @@ function syncGraph() {
     const seen = new Set();
     for (const n of g.nodes) {
       seen.add(n.id); const b = baseOf(n);
-      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind };
+      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind,
+        title:(n.source === 'nams' ? 'stored by NAMS' + (n.review ? ' (flagged: possible duplicate)' : '') + (n.detail ? ': ' + n.detail : '') : (n.detail || '')),
+        shapeProperties:{ borderDashes: n.source === 'nams' ? [4, 3] : false }, borderWidth: n.source === 'nams' ? 3 : 2 };
       if (!nodes.get(n.id)) {                                  // newly appeared: grow in from nothing
         nodes.add({ ...view, size:2 });
         tween(2, b.size, 500, v => nodes.get(n.id) && nodes.update({ id:n.id, size:v }));

@@ -30,7 +30,7 @@ def test_observation_flows_to_nams_and_missing_objects_become_possibly_gone(monk
         brain.observe_scene(empty_table, location="Booth")  # laptop missed twice => possibly gone
         assert brain.nams.flush(5)
         types = {(e["name"], e["type"]) for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"]}
-        assert ("silver laptop", "PhysicalObject") in types and ("Booth", "Place") in types and ("PuppyPi", "Robot") in types
+        assert any(n.startswith("silver laptop ") and t == "Object" for n, t in types) and ("Booth", "Location") in types and ("PuppyPi", "Agent") in types
         rels = [r["relationshipType"] for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
         assert "ON" in rels and "OBSERVED" in rels
         descs = [b["description"] for m, p, b in fake.calls if m == "PUT"]

@@ -14,6 +14,8 @@ class FakeNams:
     def __init__(self, mode="ok"):
         self.mode, self.calls, self.entities, self.n = mode, [], {}, 0
         self.headers_seen = {}
+        self.merge_always = set()   # entity names NAMS "merges" (measured live: look-alike names get merged)
+        self.pairs = []             # pending review pairs returned by GET /v1/reviews
 
     def _id(self, p):
         self.n += 1
@@ -36,6 +38,13 @@ class FakeNams:
         if path == "/v1/entities/bulk":
             results = []
             for i, e in enumerate(body["entities"]):
+                if e["type"] == "Agent" and "agent_id" not in (e.get("properties") or {}):
+                    results.append({"index": i, "name": e["name"], "type": e["type"],
+                                    "error": 'Type "Agent" is missing required properties: agent_id'})
+                    continue
+                if any(e["name"].startswith(m) for m in self.merge_always):
+                    results.append({"index": i, "name": e["name"], "type": e["type"], "resolution": "merged", "merged_into": "someone-elses"})
+                    continue
                 key = (e["name"], e["type"])
                 if key in self.entities:
                     results.append({"index": i, "merged_into": self.entities[key], "resolution": "merged"})
@@ -43,6 +52,10 @@ class FakeNams:
                     self.entities[key] = self._id("ent")
                     results.append({"index": i, "id": self.entities[key]})
             return httpx.Response(200, json={"created": len(results), "failed": 0, "merged": 0, "results": results})
+        if req.method == "GET" and path == "/v1/reviews":
+            return httpx.Response(200, json={"pairs": self.pairs})
+        if req.method == "POST" and re.fullmatch(r"/v1/reviews/[^/]+/decision", path):
+            return httpx.Response(200, json={"status": "ok"})
         if path == "/v1/relationships/bulk":
             return httpx.Response(200, json={"created": len(body["relationships"]), "failed": 0, "reasserted": 0, "results": []})
         if req.method == "PUT" and path.startswith("/v1/entities/"):
@@ -52,7 +65,7 @@ class FakeNams:
         if path == "/v1/reasoning/tool-calls":
             return httpx.Response(201, json={"id": self._id("tc"), "toolName": body["toolName"]})
         if path == "/v1/entities/search":
-            return httpx.Response(200, json={"entities": [{"name": "red backpack", "type": "PhysicalObject", "description": "d", "score": 0.9, "id": "x"}]})
+            return httpx.Response(200, json={"entities": [{"name": "red backpack", "type": "Object", "description": "d", "score": 0.9, "id": "x"}]})
         if path == "/v1/messages/search":
             return httpx.Response(200, json={"messages": [{"role": "user", "content": "x" * 900, "createdAt": "t", "score": 0.8, "metadata": {"kind": "observation"}}]})
         return httpx.Response(404, json={"error": path})
@@ -94,7 +107,7 @@ def test_observation_creates_entities_relationships_narrative_and_links_back_to_
     n.submit_observation(obs([O("o1", "table", "brown"), O("o2", "bottle", "blue")], [{"a": "o2", "b": "o1", "predicate": "ON"}]))
     assert n.flush(5)
     ents = {(e["name"], e["type"]) for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"]}
-    assert {("brown table", "PhysicalObject"), ("blue bottle", "PhysicalObject"), ("PuppyPi", "Robot"), ("Booth", "Place")} <= ents
+    assert {("brown table o1", "Object"), ("blue bottle o2", "Object"), ("PuppyPi", "Agent"), ("Booth", "Location")} <= ents
     rels = [r for call in fake.calls_to("POST", "/v1/relationships/bulk") for r in call["relationships"]]
     kinds = sorted(r["relationshipType"] for r in rels)
     assert kinds.count("OBSERVED") == 2 and kinds.count("LOCATED_AT") == 2 and kinds.count("ON") == 1
@@ -113,8 +126,8 @@ def test_identical_looking_objects_get_distinct_entities():
     n, _ = make(fake)
     n.submit_observation(obs([O("c1", "chair", "black"), O("c2", "chair", "black")]))
     assert n.flush(5)
-    names = sorted(e["name"] for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"] if e["type"] == "PhysicalObject")
-    assert names == ["black chair", "black chair #2"]
+    names = sorted(e["name"] for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"] if e["type"] == "Object")
+    assert names == ["black chair c1", "black chair c2"]  # colour + short id: measured live to stay apart in NAMS
     n.close()
 
 
@@ -198,4 +211,51 @@ def test_real_constructor_sends_bearer_and_workspace_headers(monkeypatch):
     n = Nams(s)
     assert seen["headers"]["Authorization"] == "Bearer nams_abc" and seen["headers"]["X-Workspace-Id"] == "ws-9"
     assert seen["base_url"] == "https://memory.example"
+    n.close()
+
+
+def test_agent_entity_carries_the_required_agent_id():
+    fake = FakeNams()
+    n, _ = make(fake)
+    n.submit_observation(obs([O("o1", "table")]))
+    assert n.flush(5)
+    agent = [e for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"] if e["type"] == "Agent"][0]
+    assert agent["properties"] == {"agent_id": "PuppyPi"}
+    assert any(r["relationshipType"] == "OBSERVED" for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"])
+    n.close()
+
+
+def test_per_item_entity_errors_are_surfaced_not_swallowed():
+    fake = FakeNams()
+    n, _ = make(fake)
+    n._create_entities([{"name": "R", "type": "Agent"}])  # missing agent_id on purpose
+    assert n.status()["failed"] == 1 and "agent_id" in n.status()["last_error"]
+    n.close()
+
+
+def test_a_merged_result_is_never_mirrored_onto_someone_elses_entity():
+    fake, aura = FakeNams(), FakeAura()
+    fake.merge_always = {"black chair"}  # NAMS merges every black chair it sees
+    n, _ = make(fake, aura)
+    n.submit_observation(obs([O("c1", "chair", "black")]))
+    assert n.flush(5)
+    assert aura.links == [] and "could not be mirrored" in n.status()["last_error"]
+    attempts = [e["name"] for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"] if e["type"] == "Object"]
+    assert len(attempts) == 3 and len(set(attempts)) == 3  # retried twice with more distinct names, then gave up safely
+    n.close()
+
+
+def test_duplicate_flags_between_our_objects_are_rejected_but_foreign_pairs_are_not():
+    fake = FakeNams()
+    n, _ = make(fake)
+    n.submit_observation(obs([O("c1", "chair", "black"), O("c2", "chair", "black")]))
+    assert n.flush(5)
+    ours = [v["id"] for v in n._links.values()]
+    fake.pairs = [{"pairId": "p1", "sourceId": ours[0], "targetId": ours[1]},
+                  {"pairId": "p2", "sourceId": ours[0], "targetId": "somebody-elses-entity"}]
+    n._flagged.add(ours[1])
+    n._reject_flags()
+    decided = [(p, b) for m, p, b in fake.calls if m == "POST" and "/decision" in p]
+    assert [p for p, _ in decided] == ["/v1/reviews/p1/decision"] and decided[0][1]["action"] == "reject"
+    assert n.status()["rejected_flags"] == 1
     n.close()

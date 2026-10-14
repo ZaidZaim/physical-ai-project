@@ -307,7 +307,14 @@ class Memory:
         )
         return rows[0] if rows and rows[0]["observation"] else {"observation": None}
 
+    def _color_words(self, text: str) -> list[str]:
+        have = {r["c"].lower() for r in self._read("MATCH (o:Object) WHERE o.color IS NOT NULL AND o.color <> 'unknown' RETURN DISTINCT o.color AS c")}
+        return sorted(w for w in re.findall(r"[a-z]+", (text or "").lower()) if w in have)
+
     def find_object(self, label: str, color: str | None = None, limit: int = 10) -> list[dict]:
+        if color is None:  # 'red shoe' means label shoe AND colour red
+            qc = self._color_words(label)
+            color = qc[0] if len(qc) == 1 else None
         return self._read(
             """
             MATCH (o:Object) WHERE (toLower(o.label) CONTAINS toLower($label) OR toLower($label) CONTAINS toLower(o.label))
@@ -330,22 +337,31 @@ class Memory:
             label=label, color=color, preds=list(PREDICATES), limit=limit,
         )
 
-    def related_objects(self, target_label: str, predicate: str = "ON", include_ended: bool = False) -> list[dict]:
-        predicate = predicate.upper()
-        if predicate not in PREDICATES:
-            return [{"error": f"predicate must be one of {PREDICATES}"}]
-        return self._read(
-            f"""
-            MATCH (a:Object)-[r:{predicate}]->(b:Object)
-            WHERE toLower(b.label) CONTAINS toLower($t) AND ($ended OR r.active)
-            RETURN a.id AS id, a.label AS label, a.color AS color, b.label+' '+b.id AS target,
-                   r.active AS currently, a.status AS status,
-                   toString(r.since) AS since, toString(r.last_confirmed) AS last_confirmed,
-                   toString(r.until) AS until, r.ended_by AS ended_by, r.count AS times_confirmed
-            ORDER BY r.last_confirmed DESC LIMIT 30
-            """,
-            t=target_label, ended=include_ended,
-        )
+    def related_objects(self, target_label: str, predicate: str = "ANY", include_ended: bool = False) -> list[dict]:
+        """Objects related to the target. NEXT_TO and NEAR are symmetric, so both directions count; ON, INSIDE, IN_FRONT_OF and
+        BEHIND are directional (the returned object is the one that is ON/INSIDE/... the target). predicate=ANY searches all."""
+        predicate = (predicate or "ANY").upper()
+        if predicate != "ANY" and predicate not in PREDICATES:
+            return [{"error": f"predicate must be ANY or one of {PREDICATES}"}]
+        rows: list[dict] = []
+        qc = self._color_words(target_label)  # 'yellow bag' = label bag AND colour yellow
+        for p in (PREDICATES if predicate == "ANY" else (predicate,)):
+            symmetric = p in ("NEXT_TO", "NEAR")
+            pattern = f"(a:Object)-[r:{p}]-(b:Object)" if symmetric else f"(a:Object)-[r:{p}]->(b:Object)"
+            rows += self._read(
+                f"""
+                MATCH {pattern}
+                WHERE (toLower(b.label) CONTAINS toLower($t) OR toLower($t) CONTAINS toLower(b.label))
+                  AND (size($qc) = 0 OR toLower(coalesce(b.color, '')) IN $qc) AND a <> b AND ($ended OR r.active)
+                RETURN a.id AS id, a.label AS label, a.color AS color, '{p}' AS relation, b.label+' '+b.id AS target,
+                       r.active AS currently, a.status AS status,
+                       toString(r.since) AS since, toString(r.last_confirmed) AS last_confirmed,
+                       toString(r.until) AS until, r.ended_by AS ended_by, r.count AS times_confirmed
+                ORDER BY r.last_confirmed DESC LIMIT 30
+                """,
+                t=target_label, ended=include_ended, qc=qc,
+            )
+        return rows[:40]
 
     def object_history(self, object_id: str, limit: int = 25) -> dict[str, Any]:
         obs = self._read(
@@ -502,6 +518,21 @@ class Memory:
         except Exception as e:  # surface syntax errors so the model can retry
             return [{"error": str(e)[:300]}]
 
+    def clear_nams_links(self) -> int:
+        """Forget which NAMS entity mirrors each object (used before a rebuild). Touches only our Object nodes."""
+        rows = self._write("MATCH (o:Object) WHERE o.nams_id IS NOT NULL REMOVE o.nams_id, o.nams_name RETURN count(o) AS n")
+        return rows[0]["n"] if rows else 0
+
+    def mirror_links(self) -> int:
+        from .nams_graph import link_entities
+
+        return link_entities(self)
+
+    def link_reasoning(self, step_id: str, object_ids: list[str]) -> int:
+        from .nams_graph import link_step
+
+        return link_step(self, step_id, object_ids)
+
     def nams_links(self) -> dict[str, dict]:
         """object id -> {id, name} of the NAMS entity mirroring it (so a restart keeps identities)."""
         rows = self._read("MATCH (o:Object) WHERE o.nams_id IS NOT NULL RETURN o.id AS id, o.nams_id AS nams_id, o.nams_name AS name")
@@ -629,9 +660,21 @@ class Memory:
                    count {{ (:ReasoningStep) }} AS steps, count {{ (:Lookup) }} AS tool_calls
             """
         )[0]
-        return {"short": {"observations": r["observations"], "messages": r["messages"], "conversations": r["conversations"]},
-                "long": {"objects": r["objects"], "places": r["places"], "relationships": r["spatial"]},
-                "reasoning": {"steps": r["steps"], "tool_calls": r["tool_calls"]}}
+        out = {"short": {"observations": r["observations"], "messages": r["messages"], "conversations": r["conversations"]},
+               "long": {"objects": r["objects"], "places": r["places"], "relationships": r["spatial"], "nams_entities": 0},
+               "reasoning": {"steps": r["steps"], "tool_calls": r["tool_calls"]}}
+        try:  # add what NAMS stored in the same database
+            from .nams_graph import summary as nams_summary
+
+            n = nams_summary(self)
+            out["short"]["messages"] += n.get("messages", 0)
+            out["short"]["conversations"] += n.get("conversations", 0)
+            out["long"]["nams_entities"] = n.get("entities", 0)
+            out["reasoning"]["steps"] += n.get("steps", 0)
+            out["reasoning"]["tool_calls"] += n.get("tool_calls", 0)
+        except Exception:
+            pass
+        return out
 
     def purge_demo(self, dry_run: bool = True) -> dict[str, int]:
         """Remove scripted/demo data only: observations with source 'scenario'/'demo', objects ONLY ever detected by them,
@@ -749,4 +792,7 @@ class Memory:
             entity_nodes(sorted({d["b"] for d in infl}))
             for d in infl:
                 edge(d["a"], d["b"], "RELIED_ON", "reasoning")
+        from .nams_graph import add_to_snapshot
+
+        add_to_snapshot(self, lens, node, edge)  # NAMS-stored nodes from the shared database (read-only)
         return {"nodes": list(nodes.values())[: limit * 2], "edges": edges, "lens": lens}

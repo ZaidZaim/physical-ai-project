@@ -4,7 +4,7 @@ Division of labour (see docs/MEMORY.md)
   Aura (graph.py)  authoritative physical world model: typed, time-aware facts (what is ON what, since/until,
                    possibly_gone). Exact queries. NAMS cannot update or delete relationships, so it cannot hold this.
   NAMS (this file) the story and the meaning around it:
-      * entities   Robot / Place / PhysicalObject (+ Person only with consent), linked by ON / NEXT_TO / LOCATED_AT / OBSERVED
+      * entities   Agent (the robot) / Location / Object (+ Person only with consent), linked by ON / NEXT_TO / LOCATED_AT / OBSERVED
       * narrative  every observation is written as a message to an observation-log conversation; NAMS itself builds
                    Observations and Reflections from message windows (the "story of the day")
       * dialogue   questions and answers (chat conversation), reasoning steps and tool calls (provenance)
@@ -23,6 +23,7 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from typing import Any, Callable
 
 import httpx
@@ -31,7 +32,7 @@ from .config import Settings
 
 log = logging.getLogger("puppy_mind.nams")
 
-T_ROBOT, T_PLACE, T_OBJECT, T_PERSON = "Robot", "Place", "PhysicalObject", "Person"  # match ontology/puppy_pi.json
+T_ROBOT, T_PLACE, T_OBJECT, T_PERSON = "Agent", "Location", "Object", "Person"  # types of the workspace's ACTIVE ontology (verified live)
 SPATIAL = ("ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND")
 
 
@@ -71,6 +72,7 @@ class Nams:
         self._fixed: dict[tuple[str, str], str] = {}
         self._info: dict[str, dict] = {}       # aura object id -> {"label","color"}
         self._gone: set[str] = set()
+        self._flagged: set[str] = set()       # NAMS entity ids it flagged as possible duplicates
         self._q: queue.Queue = queue.Queue(maxsize=1000)
         self._stop = threading.Event()
         self.http = client
@@ -162,7 +164,6 @@ class Nams:
             if self.mem is not None and hasattr(self.mem, "nams_links"):
                 for oid, v in self.mem.nams_links().items():
                     self._links[oid] = v
-                    self._names[v["name"]] = oid
         except Exception as e:
             log.warning("could not load NAMS links from Aura: %s", e)
 
@@ -170,59 +171,110 @@ class Nams:
     def _id_of(res: dict) -> str | None:
         return res.get("id") or res.get("merged_into") or res.get("duplicate_of")
 
-    def _create_entities(self, items: list[dict]) -> list[str | None]:
-        """Bulk-create (NAMS resolves duplicates by name+type). Returns an entity id (or None) per input item."""
+    def _create_entities(self, items: list[dict]) -> list[dict]:
+        """Bulk-create. Returns one dict per input item: {"id", "resolution", "duplicate_of"} (id None on error).
+
+        NAMS resolves duplicates by name similarity (auto-merge at >= 0.92, review flag from 0.78 on, measured live), so the
+        caller must treat resolution == "merged" as an identity conflict. Per-item errors are surfaced, never swallowed.
+        """
         if not items:
             return []
         out = self._req("POST", "/v1/entities/bulk", {"entities": items})
-        ids: list[str | None] = [None] * len(items)
+        res: list[dict] = [{"id": None, "resolution": "failed", "duplicate_of": None} for _ in items]
         for r in (out or {}).get("results", []):
             i = r.get("index")
-            if isinstance(i, int) and 0 <= i < len(items) and not r.get("error"):
-                ids[i] = self._id_of(r)
-        return ids
+            if not (isinstance(i, int) and 0 <= i < len(items)):
+                continue
+            if r.get("error"):
+                self.stats["failed"] += 1
+                self.stats["last_error"] = f"entity {items[i]['name']!r}: {r['error']}"[:200]
+                continue
+            res[i] = {"id": r.get("id") or r.get("merged_into") or r.get("duplicate_of"),
+                      "resolution": r.get("resolution") or "created", "duplicate_of": r.get("duplicate_of")}
+            if r.get("resolution") == "merged":
+                res[i]["id"] = None  # merged into someone else's entity: never mirror 1:1 onto it
+                res[i]["merged_into"] = r.get("merged_into")
+        return res
 
     def _fixed_entity(self, kind: str, name: str, type_: str, description: str) -> str | None:
         key = (kind, name)
         if key not in self._fixed:
-            ids = self._create_entities([{"name": name, "type": type_, "description": description}])
-            if ids and ids[0]:
-                self._fixed[key] = ids[0]
+            item = {"name": name, "type": type_, "description": description}
+            if type_ == T_ROBOT:
+                item["properties"] = {"agent_id": name}  # the Agent type in the active ontology requires agent_id
+            r = self._create_entities([item])
+            if r and r[0]["id"]:
+                self._fixed[key] = r[0]["id"]
         return self._fixed.get(key)
 
-    def _unique_name(self, label: str, color: str, object_id: str) -> str:
-        base = object_name(label, color)
-        name, n = base, 1
-        while self._names.get(name, object_id) != object_id:
-            n += 1
-            name = f"{base} #{n}"
-        self._names[name] = object_id
-        return name
+    @staticmethod
+    def _instance_name(label: str, color: str, object_id: str, salt: str = "") -> str:
+        """Readable AND unique: 'black chair 3f2a9c'. Colour + a short id keep NAMS from merging distinct look-alikes
+        (measured live: 'chair 3f2a9c' without the colour merged; 'black chair 3f2a9c' stayed separate)."""
+        short = object_id.removeprefix("obj-")[:6]
+        return f"{object_name(label, color)} {short}{salt}"
 
     def _ensure_objects(self, objs: list[dict], place: str, ts: str) -> None:
-        """Create NAMS entities for objects we have not linked yet and record the link in Aura."""
+        """Create NAMS entities for objects we have not linked yet and record the link in Aura (1:1, never onto a merged entity)."""
         todo = [o for o in objs if o["id"] not in self._links]
         if not todo:
             return
-        items, names = [], []
-        for o in todo:
-            name = self._unique_name(o["label"], o["color"], o["id"])
-            names.append(name)
-            items.append({"name": name, "type": T_OBJECT,
-                          "description": f"{name}, first observed at {place} on {ts}",
-                          "properties": {"object_id": o["id"], "label": o["label"], "color": o["color"],
-                                         "first_seen": ts, "location": place}})
-        ids = self._create_entities(items)
-        links = []
-        for o, name, eid in zip(todo, names, ids):
-            if eid:
-                self._links[o["id"]] = {"id": eid, "name": name}
-                links.append({"id": o["id"], "nams_id": eid, "name": name})
+        salts = [""] * len(todo)
+        links: list[dict] = []
+        pending = list(range(len(todo)))
+        for attempt in range(3):
+            items = []
+            for i in pending:
+                o = todo[i]
+                name = self._instance_name(o["label"], o["color"], o["id"], salts[i])
+                items.append({"name": name, "type": T_OBJECT, "description": f"{object_name(o['label'], o['color'])}, first observed at {place} on {ts}",
+                              "properties": {"object_id": o["id"], "label": o["label"], "color": o["color"], "first_seen": ts, "location": place}})
+            results = self._create_entities(items)
+            retry = []
+            for i, item, r in zip(pending, items, results):
+                if r["id"]:
+                    o = todo[i]
+                    self._links[o["id"]] = {"id": r["id"], "name": item["name"]}
+                    links.append({"id": o["id"], "nams_id": r["id"], "name": item["name"]})
+                    if r["resolution"] == "review_pending":
+                        self._flagged.add(r["id"])
+                elif r["resolution"] == "merged":
+                    salts[i] += f"-{uuid.uuid4().hex[:4]}"  # NAMS thought it was a duplicate: retry with a more distinct name
+                    retry.append(i)
+            pending = retry
+            if not pending:
+                break
+        if pending:
+            self.stats["last_error"] = f"{len(pending)} object(s) could not be mirrored without being merged by NAMS"
         if links and self.mem is not None and hasattr(self.mem, "set_nams_links"):
             try:
                 self.mem.set_nams_links(links)
             except Exception as e:
                 log.warning("could not save NAMS links to Aura: %s", e)
+        self._reject_flags()
+
+    def _reject_flags(self) -> None:
+        """Our world model knows these objects are different instances: reject NAMS's 'possible duplicate' flags between them,
+        so nobody merges them by accident in the review queue. Only pairs where BOTH sides are objects we mirror are touched."""
+        if not self._flagged:
+            return
+        mine = {v["id"] for v in self._links.values()}
+        out = self._req("GET", "/v1/reviews", params={"status": "pending", "limit": 200})
+        for p in (out or {}).get("pairs", []):
+            if p.get("sourceId") in mine and p.get("targetId") in mine:
+                r = self._req("POST", f"/v1/reviews/{p['pairId']}/decision",
+                              {"action": "reject", "sourceId": p["sourceId"], "targetId": p["targetId"]})
+                if r is not None:
+                    self.stats["rejected_flags"] = self.stats.get("rejected_flags", 0) + 1
+        self._flagged.clear()
+
+    def _link_mirrors(self) -> None:
+        """Shared database: connect our Object nodes to the Entity nodes NAMS wrote for them (best effort, idempotent)."""
+        try:
+            if self.mem is not None and hasattr(self.mem, "mirror_links"):
+                self.mem.mirror_links()
+        except Exception as e:
+            log.warning("could not link mirrored entities: %s", e)
 
     def _relationships(self, rels: list[dict]) -> None:
         if rels:
@@ -255,6 +307,7 @@ class Nams:
             if a and b and r["predicate"] in SPATIAL:
                 rels.append({"relationshipType": r["predicate"], "sourceId": a["id"], "targetId": b["id"], "properties": props})
         self._relationships(rels)
+        self._link_mirrors()
 
         # status changes live in the entity description (NAMS entities update name/description only)
         for m in p["missed"]:
@@ -298,6 +351,7 @@ class Nams:
                 rels.append({"relationshipType": r["predicate"], "sourceId": a["id"], "targetId": b["id"],
                              "properties": {"since": r.get("since") or ""}})
         self._relationships(rels)
+        self._link_mirrors()
         return {"objects": len(objs), "relationships": len(rels), "linked": sum(1 for o in objs if o["id"] in self._links)}
 
     # ------------------------------------------------------------------ conversations (async)
@@ -319,10 +373,10 @@ class Nams:
         if cid:
             self._req("POST", f"/v1/conversations/{cid}/messages", {"role": role, "content": content, "metadata": meta})
 
-    def reasoning(self, session_id: str, question: str, tool_trace: list[dict], answer: str) -> None:
-        self._submit(self._reasoning, session_id, question, tool_trace, answer)
+    def reasoning(self, session_id: str, question: str, tool_trace: list[dict], answer: str, object_ids: list[str] | None = None) -> None:
+        self._submit(self._reasoning, session_id, question, tool_trace, answer, object_ids or [])
 
-    def _reasoning(self, session_id: str, question: str, tool_trace: list[dict], answer: str) -> None:
+    def _reasoning(self, session_id: str, question: str, tool_trace: list[dict], answer: str, object_ids: list[str]) -> None:
         cid = self.conversation(session_id, "chat")
         if not cid:
             return
@@ -335,6 +389,11 @@ class Nams:
                 "toolName": t["tool"], "input": json.dumps(t["args"])[:4000],
                 "output": json.dumps(t["result"], default=str)[:4000], "status": "success",
                 **({"stepId": step["id"]} if step and step.get("id") else {})})
+        if step and step.get("id") and object_ids and self.mem is not None and hasattr(self.mem, "link_reasoning"):
+            try:  # provenance NAMS cannot store: which objects this answer relied on
+                self.mem.link_reasoning(step["id"], object_ids)
+            except Exception as e:
+                log.warning("could not link reasoning step to objects: %s", e)
 
     # ------------------------------------------------------------------ recall (sync: the agent waits for it)
     def recall(self, query: str, limit: int = 5) -> dict:

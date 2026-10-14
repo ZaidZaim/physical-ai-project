@@ -207,7 +207,10 @@ class Brain:
     def _remember_exchange(self, question: str, r: dict, ids: list[str]) -> None:
         """Short-term (Dialogue/Utterance) + reasoning (ReasoningStep/Lookup) memory in the graph; then tell the UI."""
         try:
-            self.mem.record_exchange(self.session, question, r["answer"], r["evidence"], ids)
+            if self.nams.auth == "ok":  # NAMS stores this exchange in the shared database; avoid a duplicate local copy
+                self.nams.flush(20)
+            else:
+                self.mem.record_exchange(self.session, question, r["answer"], r["evidence"], ids)
             self.bus.publish("memory", {"kind": "exchange"})
         except Exception as e:
             self.bus.publish("error", {"error": f"could not save the conversation to memory: {e}"[:300]})
