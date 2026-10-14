@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     if url:  # drive through the robot's own rosbridge: nothing to run on the robot
         from .rosbridge import RosbridgeDriver
 
-        brain.rosbridge = RosbridgeDriver(url, brain.drive).start()
+        brain.rosbridge = RosbridgeDriver(url, brain.drive, on_imu=brain.heading.feed).start()
     yield
     if getattr(brain, "rosbridge", None):
         brain.rosbridge.close()
@@ -55,6 +55,21 @@ class Ask(BaseModel):
 
 class Loc(BaseModel):
     name: str
+
+
+class PlaceBody(BaseModel):
+    mode: str  # "auto" or "manual"
+    name: str | None = None
+
+
+class Rename(BaseModel):
+    old: str
+    new: str
+
+
+class Merge(BaseModel):
+    src: str
+    dst: str
 
 
 @app.get("/")
@@ -130,15 +145,17 @@ def events():
 
 
 @app.post("/api/demo/replay")
-def demo_replay(delay: float = 4.0):
+def demo_replay(delay: float = 4.0, scenario: str = "home"):
     if brain.memory_kind != "fake":
         raise HTTPException(403, "Demo replay only runs on throwaway in-RAM memory (it would write fake data into your real graph).")
     """Replay the scripted booth scenario live (timestamps = now) to see the graph animate without a robot."""
-    data = json.loads((Path(__file__).parents[2] / "eval" / "scenarios" / "booth.json").read_text(encoding="utf-8"))
+    if scenario not in ("home", "booth"):
+        raise HTTPException(400, "scenario must be home or booth")
+    data = json.loads((Path(__file__).parents[2] / "eval" / "scenarios" / f"{scenario}.json").read_text(encoding="utf-8"))
 
     def run():
         for st in data["steps"]:
-            brain.observe_scene(_scene(st), source="demo", location=data["location"])
+            brain.observe_scene(_scene(st), source="demo", location=data.get("location"))  # no pinned place: the robot works it out
             time.sleep(delay)
 
     threading.Thread(target=run, daemon=True).start()
@@ -176,6 +193,7 @@ def state():
         "camera_error": getattr(brain._src, "error", "") if brain._src else "",
         "nams": brain.nams.enabled,
         "memory": brain.memory_kind,
+        "place": brain.place_info(),
         "nams_status": brain.nams.status(),
         "stats": brain.mem.stats(),
         "current": brain.mem.current_view(),
@@ -186,8 +204,45 @@ def state():
 
 @app.post("/api/location")
 def set_location(body: Loc):
-    brain.location = body.name.strip() or brain.location
-    return {"location": brain.location}
+    """Pin the place by hand (manual mode). POST /api/place with mode=auto hands control back to the robot."""
+    return {"location": brain.set_place_manual(body.name), "place": brain.place_info()}
+
+
+@app.get("/api/place")
+def get_place():
+    return brain.place_info()
+
+
+@app.post("/api/place")
+def set_place(body: PlaceBody):
+    if body.mode == "manual":
+        if not (body.name or "").strip():
+            raise HTTPException(400, "manual mode needs a place name")
+        brain.set_place_manual(body.name)
+    elif body.mode == "auto":
+        brain.set_place_auto()
+    else:
+        raise HTTPException(400, "mode must be auto or manual")
+    return brain.place_info()
+
+
+@app.get("/api/places")
+def places():
+    return {"current": brain.place_info(), "places": brain.mem.places_overview()}
+
+
+@app.post("/api/places/rename")
+def places_rename(body: Rename):
+    if not brain.rename_place(body.old, body.new):
+        raise HTTPException(409, "rename failed: unknown place, empty name, or the name is already taken")
+    return {"ok": True}
+
+
+@app.post("/api/places/merge")
+def places_merge(body: Merge):
+    if not brain.merge_places(body.src, body.dst):
+        raise HTTPException(409, "merge failed: both places must exist and differ")
+    return {"ok": True}
 
 
 @app.post("/api/watch/{action}")

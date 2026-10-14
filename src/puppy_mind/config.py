@@ -51,6 +51,8 @@ class Settings:
     # a frame only counts as evidence of absence if it shares at least this fraction of the objects known (present) at the place
     min_overlap: float = float(os.getenv("MIN_OVERLAP", "0.5"))
     auto_place: bool = _bool("AUTO_PLACE", True)
+    # horizontal field of view of the camera, used to turn 'left/centre/right third of the frame' into a bearing. A guess until measured.
+    camera_fov_deg: float = float(os.getenv("CAMERA_FOV_DEG", "70"))
     place_confirm_frames: int = int(os.getenv("PLACE_CONFIRM_FRAMES", "2"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)

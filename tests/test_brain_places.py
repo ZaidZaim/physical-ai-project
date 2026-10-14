@@ -142,3 +142,14 @@ def test_a_missing_object_counts_when_the_thing_it_rested_on_is_in_view():
         assert by["monitor"]["status"] == "present"
     finally:
         brain.close()
+
+
+def test_throwaway_memory_never_talks_to_a_real_nams(monkeypatch):
+    """Regression: a dev demo on in-RAM memory leaked 12 fake entities into the real NAMS workspace."""
+    monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_would_be_a_real_key_000000000000_000000000000000000000000000000000000000000000000")
+    b = Brain(s, need_openai=False)
+    try:
+        assert b.nams.enabled is False and b.nams.http is None
+    finally:
+        b.close()

@@ -98,6 +98,22 @@ try:
     st = {x["label"]: x for x in m._read("MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.label AS label, o.status AS status, o.miss_count AS miss", p=ANCHOR)}
     check("partial view: the mug that was ON the desk is missed (its anchor is in view)", st["zzmug"]["status"] == "possibly_gone", st["zzmug"])
     check("partial view: the lamp and monitor (no anchor in view) are just out of frame, not missing", st["zzlamp"]["miss"] == 0 and st["zzmonitor"]["miss"] == 0, (st["zzlamp"]["miss"], st["zzmonitor"]["miss"]))
+
+    # --- orientation: bearings are stored, and an object outside the view cone is never charged with a miss
+    ORI = P + "orient"
+    m.ensure_place(ORI, "living room", True)
+    ing(ORI, "living room", ("zztable", "brown", "center"), ("zzsofa", "grey", "left"), ("zzlamp", "black", "right"), heading=90.0)
+    b = {x["label"]: x["bearing"] for x in m._read("MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.label AS label, o.last_bearing AS bearing", p=ORI)}
+    fov = get_settings().camera_fov_deg
+    check("bearings are stored per object (left is counter-clockwise: heading + fov/3)", b["zztable"] == 90.0 and abs(b["zzsofa"] - (90 + fov / 3)) < 0.2 and abs(b["zzlamp"] - (90 - fov / 3)) < 0.2, b)
+    for _ in range(4):
+        ing(ORI, "living room", ("zzwindow", "white", "center"), ("zzcabinet", "white", "left"), heading=270.0)  # turned around
+    st = {x["label"]: x["miss"] for x in m._read("MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.label AS label, o.miss_count AS miss", p=ORI)}
+    check("objects behind the robot (outside the view cone) are not missing", st["zztable"] == 0 and st["zzsofa"] == 0 and st["zzlamp"] == 0, st)
+    for _ in range(3):
+        ing(ORI, "living room", ("zzsofa", "grey", "center"), ("zzlamp", "black", "right"), heading=90.0)  # looking at the table's spot: it is gone
+    t = m._read("MATCH (o:Object {label:'zztable'})-[:LOCATED_AT]->(:Location {name:$p}) RETURN o.status AS status", p=ORI)[0]["status"]
+    check("but an object missing from where the robot is looking does count", t == "possibly_gone", t)
 finally:
     cleanup(m)
     left = m._read("MATCH (n) WHERE (n:Object AND n.label STARTS WITH 'zz') OR (n:Location AND n.name STARTS WITH $p) OR (n:Sighting AND n.source = $s) RETURN count(n) AS c", p=P, s=SRC)[0]["c"]

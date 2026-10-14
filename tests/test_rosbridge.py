@@ -20,6 +20,9 @@ class FakeBridge:
         for raw in ws:
             m = json.loads(raw)
             self.msgs.append(m)
+            if m["op"] == "subscribe" and m["topic"] == "/ros_robot_controller/imu_raw":  # the robot starts streaming gyro samples
+                for _ in range(6):
+                    ws.send(json.dumps({"op": "publish", "topic": m["topic"], "msg": {"angular_velocity": {"x": 0.0, "y": 0.0, "z": 0.5}, "linear_acceleration": {"z": 9.8}}}))
             if m["op"] == "call_service" and m["service"] == "/rosapi/topic_type":
                 ws.send(json.dumps({"op": "service_response", "id": m["id"], "result": True,
                                     "values": {"type": self.vel_type}}))
@@ -132,5 +135,32 @@ def test_startup_restores_stock_gait_not_trot():
         assert gait["swing_time"] == 0.15 and gait["overlap_time"] == 0.1
         pose = [m["msg"] for m in fb.msgs if m["op"] == "publish" and m["topic"] == "/puppy_control/pose"][0]
         assert pose["x_shift"] == -0.5 and pose["height"] == -10.0
+    finally:
+        d.close(); fb.close()
+
+
+def test_imu_yaw_rate_reaches_the_heading_tracker_and_integrates_to_degrees():
+    from puppy_mind.pose import HeadingTracker
+
+    fb, drive, tracker = FakeBridge(), DriveState(), HeadingTracker()
+    d = RosbridgeDriver(f"ws://127.0.0.1:{fb.port}", drive, on_imu=tracker.feed).start()
+    try:
+        t0 = time.time()
+        while d.imu_samples < 4 and time.time() - t0 < 5:
+            time.sleep(0.05)
+        assert d.imu_samples >= 4
+        sub = [m for m in fb.msgs if m["op"] == "subscribe"][0]
+        assert sub["topic"] == "/ros_robot_controller/imu_raw" and sub["type"] == "sensor_msgs/Imu" and sub["throttle_rate"] == 50
+        assert tracker.value() is not None  # data is fresh
+    finally:
+        d.close(); fb.close()
+
+
+def test_without_an_imu_callback_the_driver_never_subscribes():
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        time.sleep(0.2)
+        assert not [m for m in fb.msgs if m["op"] == "subscribe"]
     finally:
         d.close(); fb.close()

@@ -102,3 +102,19 @@ def test_possibly_gone_objects_count_for_less_when_recognising_a_place():
     r = PlaceResolver()
     idf = r._idf([ghost, real])
     assert r.score(V(("sofa", "grey")), "unknown", 0.0, ghost, idf) < r.score(V(("sofa", "grey")), "unknown", 0.0, real, idf)
+
+
+def test_another_wall_of_the_same_room_is_not_a_new_room():
+    window_and_cabinet = V(("window", "white"), ("cabinet", "white"))  # nothing here is known about the Kitchen yet
+    d = decide(window_and_cabinet, room="kitchen", conf=0.9, current="Kitchen")
+    assert d.stay and d.place == "Kitchen" and not d.is_new
+
+
+def test_but_a_different_kind_of_room_still_becomes_a_new_place():
+    d = decide(V(("bed", "white"), ("lamp", "black")), room="bedroom", conf=0.9, current="Kitchen")
+    assert d.is_new and d.suggested_name == "Bedroom"
+
+
+def test_low_confidence_room_type_does_not_trigger_the_same_room_shortcut():
+    d = decide(V(("window", "white"), ("cabinet", "white")), room="kitchen", conf=0.3, current="Kitchen")
+    assert d.is_new  # not sure it is even a kitchen: do not assume it is the same room

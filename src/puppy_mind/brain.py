@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import collections
+import dataclasses
 import queue
 import re
 import threading
@@ -20,6 +21,7 @@ from .config import Settings, get_settings
 from .drive import DriveState
 from .graph import Memory, now_iso
 from .models import Scene
+from .pose import HeadingTracker
 from .spatial import PlaceInfo, PlaceResolver, PlaceTracker
 from .nams import Nams
 from .sources import FolderSource, FrameSource, ahash, hamming
@@ -63,7 +65,9 @@ class Brain:
             self.mem = FakeMemory(self.s)
         else:
             self.mem = Memory(self.s)
-        self.nams = Nams(self.s, memory=self.mem)
+        # Throwaway in-RAM memory must never reach a real NAMS workspace: a dev demo once leaked 12 fake entities into it.
+        nams_settings = dataclasses.replace(self.s, nams_api_key="") if os.getenv("PUPPY_FAKE_MEMORY") == "1" else self.s
+        self.nams = Nams(nams_settings, memory=self.mem)
         self.bus = Bus()
         self.drive = DriveState(allow_combine=os.getenv("DRIVE_COMBINE") == "1")
         self._moved = False  # robot moved since the last observation
@@ -75,6 +79,7 @@ class Brain:
         self._place_ids: dict[str, str] = {}
         self._moved_view = False  # the first frame after a place change is a new view
         self._just_changed = False
+        self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
         self._deferred: list[tuple] = []  # frames held back while a change of place is unconfirmed
         self.frame: bytes | None = None
         self.frame_id = 0
@@ -163,14 +168,14 @@ class Brain:
             return {"skipped": "possible change of place: waiting to confirm", "deferred": True, "location": loc, "reason": self.place_state["reason"]}
         held, self._deferred = (self._deferred if changed else []), []
         for d_scene, d_src, d_jpeg, d_ts in held:  # frames that were waiting for this very decision
-            self._ingest(d_scene, loc, d_src, d_jpeg, d_ts, count_misses=False, place_conf=place_conf)
+            self._ingest(d_scene, loc, d_src, d_jpeg, d_ts, count_misses=False, place_conf=place_conf, heading=None)
         moved = self._moved or self._moved_view
-        res = self._ingest(scene, loc, source, jpeg, ts, count_misses=not moved, place_conf=place_conf)
+        res = self._ingest(scene, loc, source, jpeg, ts, count_misses=not moved, place_conf=place_conf, heading=self.heading.value())
         self._moved = self._moved_view = False
         return res
 
     def _ingest(self, scene: Scene, loc: str, source: str, jpeg: bytes | None, ts: str | None, *, count_misses: bool,
-                place_conf: float | None) -> dict[str, Any]:
+                place_conf: float | None, heading: float | None = None) -> dict[str, Any]:
         image_ref = None
         if jpeg and self.s.store_images:
             d = Path("frames")
@@ -178,7 +183,7 @@ class Brain:
             image_ref = str(d / f"{int(time.time() * 1000)}.jpg")
             Path(image_ref).write_bytes(jpeg)
         res = self.mem.ingest(scene, session_id=self.session, location=loc, source=source, ts=ts, image_ref=image_ref,
-                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf)
+                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading)
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {
@@ -218,6 +223,7 @@ class Brain:
                 name = r.place  # type: ignore[assignment]
             self.mem.touch_place(name, scene.room_type)
             self.location = name
+            self.heading.reset()  # new place, new origin: 0 degrees = the way we face on arrival
             if prev and prev != name:
                 self.mem.note_transition(prev, name)
                 self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
@@ -233,7 +239,8 @@ class Brain:
         return self.location, r.uncertain, r.confidence
 
     def place_info(self) -> dict[str, Any]:
-        return {**self.place_state, "mode": self.place_mode, "name": self.location}
+        return {**self.place_state, "mode": self.place_mode, "name": self.location, "heading_deg": self.heading.value(),
+                "heading_source": "imu gyro (relative to entry, drifts)" if self.heading.value() is not None else None}
 
     def set_place_manual(self, name: str) -> str:
         name = name.strip()
@@ -241,6 +248,7 @@ class Brain:
             return self.location
         self.mem.ensure_place(name, "unknown", False)
         self.location, self.place_mode = name, "manual"
+        self.heading.reset()
         self.tracker.set_current(name)
         self.place_state = {"mode": "manual", "name": name, "confidence": None, "reason": "set by you", "room_type": "unknown", "uncertain": False}
         self._moved = True  # the view is about to change

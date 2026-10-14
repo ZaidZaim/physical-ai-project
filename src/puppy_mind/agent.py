@@ -15,6 +15,7 @@ from openai import OpenAI
 from .config import Settings
 from .graph import Memory
 from .nams import Nams
+from .pose import direction_words, wrap180
 
 SYSTEM = """You are {robot}, a quadruped robot with a camera and a persistent memory graph.
 You answer questions about your surroundings and what you observed earlier, ONLY from tool results.
@@ -35,6 +36,9 @@ Rules:
 - "What changed" / "what new objects appeared" (no time given) means since the FIRST observation: call what_changed WITHOUT `since`
   and narrate every line of its `summary` (new objects, possibly gone, relation changes). "Summarise what you remember": location_summary.
 - Place names are matched case-insensitively.
+- ORIENTATION: `direction_from_here` (when present) says which way an object is from where the robot is facing now, e.g. "to your left".
+  It comes from a gyro heading that is relative to where the robot entered the room and drifts, so say "roughly"/"last time I looked".
+  `last_bearing` is the object's direction in that same room frame (degrees, counter-clockwise, 0 = the way the robot faced on arrival).
 - SPATIAL MEMORY: the robot moves between places (rooms). Object identity is scoped to a place: a chair in the kitchen and a chair in
   the living room are DIFFERENT objects. If asked about "the chair" and several exist in different places, list them by place.
   `possibly_gone` is per place: something missing in the kitchen says nothing about the living room.
@@ -112,11 +116,23 @@ class Agent:
         self.place_fn = None  # set by Brain: returns where the robot is now
         self.history: dict[str, list[dict]] = {}  # per-session short-term turns (also mirrored to NAMS)
 
+    def _with_directions(self, rows: list[dict]) -> list[dict]:
+        """For objects in the place the robot is in now, say which way they are from where it faces (only when heading is known)."""
+        info = self.place_fn() if self.place_fn else None
+        heading = (info or {}).get("heading_deg")
+        if heading is None:
+            return rows
+        for r in rows:
+            b = r.get("last_bearing")
+            if b is not None and r.get("location") == info.get("name"):
+                r["direction_from_here"] = direction_words(wrap180(b - heading))
+        return rows
+
     def _call(self, name: str, a: dict) -> Any:
         m = self.mem
         return {
             "current_view": lambda: m.current_view(a.get("location")),
-            "find_object": lambda: m.find_object(a["label"], a.get("color")),
+            "find_object": lambda: self._with_directions(m.find_object(a["label"], a.get("color"))),
             "related_objects": lambda: m.related_objects(
                 a["target_label"], a.get("predicate", "ANY"), a.get("include_ended", False)),
             "object_history": lambda: m.object_history(a["object_id"]),

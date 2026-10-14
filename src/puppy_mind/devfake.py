@@ -9,6 +9,7 @@ from typing import Any
 
 from .graph import now_iso
 from .matching import Known, Seen, assign
+from .pose import bearing_of, in_view
 from .models import Scene
 
 
@@ -46,8 +47,21 @@ class FakeMemory:
         overlap = (sum(1 for o in present if o["id"] in matched) / len(present)) if present else 1.0
         partial = overlap <= self.s.min_overlap
         seen_labels = {d.label.lower() for d in dets.values()}
-        eligible = {o["id"] for o in present if any(a == o["id"] and r["active"] and self.objs[b]["label"] in seen_labels for (a, p, b), r in self.rels.items())} if partial else set()
-        if partial and not eligible:
+        fov = self.s.camera_fov_deg
+        eligible = set()
+        for o in self.objs.values():
+            if o["loc"] != loc:
+                continue
+            cone = in_view(o.get("bearing"), heading, fov)
+            if cone is not None:
+                ok = cone
+            elif not partial:
+                ok = True
+            else:
+                ok = any(a == o["id"] and r["active"] and self.objs[b]["label"] in seen_labels for (a, p, b), r in self.rels.items())
+            if ok:
+                eligible.add(o["id"])
+        if not eligible:
             count_misses = False
         ids, rows = {}, []
         for i, d in dets.items():
@@ -56,10 +70,12 @@ class FakeMemory:
             ids[i] = oid
             o = self.objs.setdefault(oid, {"id": oid, "label": d.label, "color": d.color, "loc": loc, "status": "present", "miss": 0})
             o.update(zone=d.zone, status="present", miss=0, last_seen=ts)
+            if heading is not None:
+                o["bearing"] = bearing_of(d.zone, heading, fov)
             if d.color != "unknown":
                 o["color"] = d.color
             rows.append({"id": oid, "label": d.label, "color": o["color"], "description": d.description,
-                         "zone": d.zone, "conf": d.confidence, "new": new})
+                         "zone": d.zone, "conf": d.confidence, "new": new, "bearing": bearing_of(d.zone, heading, fov)})
         cur = set()
         for r in scene.relations:
             if r.subject in ids and r.object in ids:
@@ -72,7 +88,7 @@ class FakeMemory:
                 r["active"], r["until"] = False, ts
         missed = []
         for o in (self.objs.values() if count_misses else []):
-            if o["loc"] == loc and o["id"] not in vis and o["status"] in ("present", "possibly_gone") and (not partial or o["id"] in eligible):
+            if o["loc"] == loc and o["id"] not in vis and o["status"] in ("present", "possibly_gone") and o["id"] in eligible:
                 o["miss"] += 1
                 if o["miss"] >= self.s.miss_threshold:
                     o["status"] = "possibly_gone"

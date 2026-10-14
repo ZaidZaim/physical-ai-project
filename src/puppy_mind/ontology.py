@@ -27,7 +27,9 @@ MEMORY_TYPES = [
     ("Lookup", "reasoning", "One memory lookup made during a step: tool name, input, output.", ["id", "name", "input", "output", "seq"]),
 ]
 MEMORY_EDGES = [
-    ("DETECTED", "Sighting", "Object", "short", "this frame showed the object (with confidence)"),
+    ("ADJACENT_TO", "Location", "Location", "long", "the robot went from one place to the other (learned, with a count)"),
+    ("POSSIBLY_MOVED_FROM", "Object", "Object", "long", "HYPOTHESIS: a look-alike appeared here after the original stopped being seen elsewhere"),
+    ("DETECTED", "Sighting", "Object", "short", "this frame showed the object (with confidence and bearing)"),
     ("MISSED", "Sighting", "Object", "short", "expected here but not detected (not proof it is gone)"),
     ("AT", "Sighting", "Location", "short", "where the frame was taken"),
     ("IN_SESSION", "Sighting", "Session", "short", ""),

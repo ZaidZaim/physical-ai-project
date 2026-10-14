@@ -81,6 +81,10 @@ driving away never makes objects look "possibly gone".
 * **Privacy by default:** people are stored as anonymous `person` presence only (no description/colour/images) unless
   `PEOPLE_CONSENT=true`; frames are not saved unless `STORE_IMAGES=true`.
 
+## Spatial memory
+
+Place recognition, adjacency map, view-aware change detection, moved-object hypotheses and gyro heading: see [docs/SPATIAL.md](docs/SPATIAL.md).
+
 ## Layout
 `src/puppy_mind/` brain (perception, graph, matching, agent, nams, server, cli) · `robot/` on-robot streamer ·
 `eval/` scenarios + 20 questions · `tests/` · `docs/`.

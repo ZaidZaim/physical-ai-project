@@ -29,8 +29,12 @@ ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
 
 class RosbridgeDriver:
-    def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=YAW_LIMIT, invert_yaw=False):
+    IMU_TOPIC = "/ros_robot_controller/imu_raw"  # sensor_msgs/Imu, from Hiwonder's puppy_control source
+
+    def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
         self.url, self.drive = url, drive
+        self.on_imu = on_imu  # callback(yaw_rate_rad_s) for each IMU sample
+        self.imu_samples = 0
         self.max_x, self.max_y, self.invert_yaw = max_x, max_y, invert_yaw
         self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
         self.connected = False
@@ -53,7 +57,7 @@ class RosbridgeDriver:
         self._t.join(timeout=2)
 
     def status(self) -> dict:
-        return {"url": self.url, "connected": self.connected, "error": self.error, "velocity_type": self.vel_type}
+        return {"url": self.url, "connected": self.connected, "error": self.error, "velocity_type": self.vel_type, "imu_samples": self.imu_samples}
 
     # ---- protocol helpers
     def _send(self, obj: dict) -> None:
@@ -117,6 +121,8 @@ class RosbridgeDriver:
         time.sleep(0.2)
         self._publish("/puppy_control/gait", {k: v for k, v in GAIT.items() if k != "x_shift"})
         self._call("/puppy_control/set_mark_time", {"data": False})  # leave mark-time so it can walk
+        if self.on_imu:  # orientation: the gyro's yaw rate, throttled to ~20 Hz
+            self._send({"op": "subscribe", "topic": self.IMU_TOPIC, "type": "sensor_msgs/Imu", "throttle_rate": 50, "queue_length": 1})
 
     def _loop(self) -> None:
         last, last_pub, last_home = None, 0.0, self.drive.current()["home_seq"]
@@ -152,6 +158,11 @@ class RosbridgeDriver:
                     m = json.loads(self._ws.recv(timeout=0))
                     if m.get("op") == "status" and m.get("level") == "error":
                         self.error = str(m.get("msg"))[:200]
+                    elif m.get("op") == "publish" and m.get("topic") == self.IMU_TOPIC and self.on_imu:
+                        wz = ((m.get("msg") or {}).get("angular_velocity") or {}).get("z")
+                        if isinstance(wz, (int, float)):
+                            self.imu_samples += 1
+                            self.on_imu(float(wz))
             except TimeoutError:
                 pass
             time.sleep(max(0.0, 0.1 - (time.monotonic() - t0)))

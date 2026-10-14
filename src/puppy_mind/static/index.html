@@ -50,6 +50,10 @@
   #lenses { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 8px } .lens { background:var(--bg); color:var(--ink); border:1px solid var(--line); padding:3px 10px; font-size:12px }
   .lens small { color:var(--mute) } .lens.on { border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink) }
   .lens[data-lens=long]::first-letter { color:var(--long) } .lens[data-lens=short]::first-letter { color:var(--short) } .lens[data-lens=reasoning]::first-letter { color:var(--reasoning) } .lens[data-lens=all]::first-letter { color:var(--ink) }
+  #placeswrap { flex:1; min-height:380px; display:flex; flex-direction:column; gap:8px } #placeswrap[hidden] { display:none }
+  #placesmap { flex:1; min-height:240px; border:1px solid var(--line); border-radius:8px } #placeslist { max-height:190px; overflow:auto; font-size:12px }
+  #placeslist table { width:100%; border-collapse:collapse } #placeslist th { text-align:left; color:var(--mute); font-weight:500 } #placeslist td, #placeslist th { padding:3px 6px; border-bottom:1px solid var(--line) }
+  #placeslist tr.cur { background:rgba(63,185,80,.12) } button.sm { padding:1px 6px; font-size:11px }
   #ontowrap { flex:1; min-height:380px; position:relative; display:flex; flex-direction:column; gap:8px } #ontowrap[hidden], #graphwrap[hidden], #lenses[hidden] { display:none }
   #onto { flex:1; min-height:300px; border:1px solid var(--line); border-radius:8px } #ontodetail { font-size:12px; border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--bg); max-height:150px; overflow:auto }
   #ontolegend { font-size:11px; color:var(--mute); display:flex; gap:12px; flex-wrap:wrap } #ontolegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
@@ -63,8 +67,8 @@
   <span class="pill"><span class="live" id="dot"></span><span id="conn">connecting…</span></span>
   <span class="pill" id="loc"></span><span class="pill" id="stats"></span><span class="pill" id="nams"></span>
   <span style="flex:1"></span>
-  <input type="text" id="locin" placeholder="Set location" style="max-width:150px;flex:none;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
-  <button class="ghost" id="setloc">Set</button>
+  <input type="text" id="locin" placeholder="Set place (manual)" style="max-width:150px;flex:none;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
+  <button class="ghost" id="setloc">Set</button><button class="ghost" id="autoloc" title="Let the robot work out where it is from what it sees">Auto</button>
   <button class="ghost" id="demo" title="Replay a scripted booth day so you can watch the graph build without a robot">▶ Demo replay</button>
   <button id="watch">Start camera</button>
 </header>
@@ -103,7 +107,7 @@
   </div>
   <div class="col">
     <section style="flex:1">
-      <h2><span class="tabs"><button class="tab on" data-tab="graph">Memory graph (live)</button><button class="tab" data-tab="onto">Ontology</button></span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
+      <h2><span class="tabs"><button class="tab on" data-tab="graph">Memory graph (live)</button><button class="tab" data-tab="onto">Ontology</button><button class="tab" data-tab="places">Places</button></span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
       <div id="lenses">
         <button class="lens on" data-lens="long" title="Entities and facts: objects, places and how they relate">● Long-term <small id="c-long"></small></button>
         <button class="lens" data-lens="short" title="What is happening now: the stream of observations and the conversation">● Short-term <small id="c-short"></small></button>
@@ -115,6 +119,10 @@
           <span><i style="background:var(--reasoning)"></i>reasoning</span><span><i style="background:var(--gone)"></i>possibly gone</span>
           <span><i style="border:2px solid var(--new);background:none"></i>new</span><span><i style="border:2px solid var(--miss);background:none"></i>missed</span>
           <span><i style="border:2px solid var(--ask);background:none"></i>consulted by agent</span><span><i style="border:2px dashed var(--ink);background:none"></i>stored by NAMS</span></div></div>
+      <div id="placeswrap" hidden>
+        <div id="placesmap"></div>
+        <div id="placeslist"></div>
+      </div>
       <div id="ontowrap" hidden>
         <div id="onto"></div>
         <div id="ontodetail"><b>Ontology</b><div style="color:var(--mute)">Click a type or relationship. Node size = how many exist in your graph right now.</div></div>
@@ -253,12 +261,20 @@ function connect() {
     showChips(d.objects);
     const n = d.objects.filter(o => o.new).map(o => o.label);
     log('new', `<b>${esc(d.location)}</b> · ${d.objects.length} seen` + (n.length ? ` · new: ${esc(n.join(', '))}` : '') + (d.missed.length ? ` · <span class="k-miss">missed: ${esc(d.missed.map(m => m.label + (m.status === 'possibly_gone' ? ' (possibly gone)' : '')).join(', '))}</span>` : '') + ` — ${esc(d.summary)}`);
+    if (d.misses_counted === false && d.overlap != null && d.overlap < 1) log('ask', `view overlap ${Math.round(d.overlap * 100)}%: absences not counted (partial view)`);
+    (d.moved_hypotheses || []).forEach(h => log('ask', `💡 a ${esc(h.label)} appeared that looks like one that went missing elsewhere (confidence ${Math.round(h.confidence * 100)}%): a guess, not a fact`));
     await syncGraph();
     d.objects.forEach(o => glow(o.id, o.new ? css('--new') : css('--seen')));
     d.missed.forEach(m => glow(m.id, css('--miss'), 2200));
     d.relations.forEach(r => flashEdge(`${r.a}|${r.predicate}|${r.b}`, css('--new')));
     glow('loc:' + d.location, css('--loc'));
     refreshStats();
+  });
+  es.addEventListener('place', e => {
+    const d = JSON.parse(e.data);
+    if (d.uncertain) log('ask', `🧭 not sure the robot is still in <b>${esc(d.name)}</b>: ${esc(d.reason)}`);
+    else log('new', `🧭 ${d.new ? 'new place discovered' : 'moved'}: <b>${esc(d.name)}</b>${d.previous ? ' (from ' + esc(d.previous) + ')' : ''} · ${esc(d.reason)}`);
+    refreshStats(); if (!$('#placeswrap').hidden) loadPlaces();
   });
   es.addEventListener('drive', e => {
     const d = JSON.parse(e.data); log('ask', `drive: ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
@@ -274,7 +290,8 @@ function connect() {
 /* ---------- controls / state ---------- */
 async function refreshStats() {
   const s = await api('/api/state');
-  $('#loc').textContent = '📍 ' + s.location; const ns = s.nams_status || {}; $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS: key rejected' : (s.nams ? `NAMS on · ${ns.synced_observations || 0} synced${ns.failed ? ' · ' + ns.failed + ' errors' : ''}` : 'NAMS off'); $('#nams').title = ns.last_error || ''; $('#nams').style.color = ns.auth === 'invalid' ? '#f85149' : '';
+  const pl = s.place || {}; $('#loc').textContent = '📍 ' + s.location + (pl.mode === 'manual' ? ' · manual' : ' · auto' + (pl.confidence != null ? ' ' + Math.round(pl.confidence * 100) + '%' : '')) + (pl.uncertain ? ' · checking…' : '') + (pl.heading_deg != null ? ' · 🧭 ' + Math.round(pl.heading_deg) + '°' : '');
+  $('#loc').title = pl.reason || ''; $('#autoloc').style.opacity = pl.mode === 'manual' ? 1 : .45; const ns = s.nams_status || {}; $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS: key rejected' : (s.nams ? `NAMS on · ${ns.synced_observations || 0} synced${ns.failed ? ' · ' + ns.failed + ' errors' : ''}` : 'NAMS off'); $('#nams').title = ns.last_error || ''; $('#nams').style.color = ns.auth === 'invalid' ? '#f85149' : '';
   $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
   $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
   const lap = (s.camera_name || '').startsWith('webcam');
@@ -290,8 +307,9 @@ $('#watch').onclick = async () => {
   catch (e) { let m = e.message; try { m = JSON.parse(m).detail || m; } catch (_) {} $('#vstat').textContent = m; log('miss', '⚠ ' + esc(m)); }
   setTimeout(refreshStats, 1200);
 };
-$('#demo').onclick = () => post('/api/demo/replay?delay=4').then(() => log('new', 'demo replay started'));
-$('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); refreshStats(); } };
+$('#demo').onclick = () => post('/api/demo/replay?delay=2.5&scenario=home').then(() => log('new', 'demo replay started'));
+$('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); $('#locin').value = ''; refreshStats(); } };
+$('#autoloc').onclick = async () => { await post('/api/place', { mode:'auto' }); refreshStats(); };
 
 /* ---------- memory lenses + ontology tab ---------- */
 function paintLens() { document.querySelectorAll('.lens').forEach(b => b.classList.toggle('on', b.dataset.lens === lens)); }
@@ -308,10 +326,36 @@ async function refreshSummary() {
 let ontoNet = null, ontoLoaded = false;
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
-  const onto = b.dataset.tab === 'onto';
-  $('#graphwrap').hidden = onto; $('#lenses').hidden = onto; $('#ontowrap').hidden = !onto;
-  if (onto) loadOntology(); else setTimeout(() => net.fit(), 100);
+  const t = b.dataset.tab;
+  $('#graphwrap').hidden = t !== 'graph'; $('#lenses').hidden = t !== 'graph'; $('#ontowrap').hidden = t !== 'onto'; $('#placeswrap').hidden = t !== 'places';
+  if (t === 'onto') loadOntology(); else if (t === 'places') loadPlaces(); else setTimeout(() => net.fit(), 100);
 });
+/* ---------- places: where the robot is and how rooms connect ---------- */
+let placesNet = null;
+async function loadPlaces() {
+  const d = await api('/api/places'), cur = d.current.name, M = MEM();
+  const nodesP = d.places.map(p => ({ id:p.name, label:`${p.name}\n${p.present} here${p.possibly_gone ? ' · ' + p.possibly_gone + ' gone' : ''}`, shape:'box', margin:10,
+    color:{ background: p.name === cur ? M.short : M.long, border: p.name === cur ? css('--ink') : M.long }, borderWidth: p.name === cur ? 4 : 2, font:{ color:'#111', size:13 },
+    title:`${p.room_type}${p.provisional ? ' (discovered automatically: rename it)' : ''}` }));
+  const seen = new Set(), edgesP = [];
+  for (const p of d.places) for (const a of p.adjacent) { const k = [p.name, a.place].sort().join('|'); if (!seen.has(k)) { seen.add(k); edgesP.push({ from:p.name, to:a.place, label:`${a.times}×`, width:1 + Math.min(5, a.times), color:{ color:css('--mute') }, font:{ size:10, color:css('--mute'), strokeWidth:0 } }); } }
+  const data = { nodes:new vis.DataSet(nodesP), edges:new vis.DataSet(edgesP) };
+  if (placesNet) placesNet.destroy();
+  placesNet = new vis.Network($('#placesmap'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-90, springLength:150 }, stabilization:{ iterations:150 } }, interaction:{ hover:true } });
+  placesNet.once('stabilizationIterationsDone', () => placesNet.fit());
+  $('#placeslist').innerHTML = '<table><tr><th>Place</th><th>Room</th><th>Here</th><th>Gone</th><th>Sightings</th><th>Last seen</th><th></th></tr>' + d.places.map(p =>
+    `<tr${p.name === cur ? ' class="cur"' : ''}><td>${p.name === cur ? '📍 ' : ''}${esc(p.name)}${p.provisional ? ' <span class="tag">new</span>' : ''}</td><td>${esc(p.room_type)}</td><td>${p.present}</td><td>${p.possibly_gone}</td><td>${p.sightings}</td><td>${esc((p.last_seen || '').slice(0, 16).replace('T', ' '))}</td>`
+    + `<td><button class="ghost sm" data-act="rename" data-p="${esc(p.name)}">Rename</button> <button class="ghost sm" data-act="merge" data-p="${esc(p.name)}">Merge into…</button></td></tr>`).join('') + '</table>';
+  document.querySelectorAll('#placeslist button').forEach(b => b.onclick = async () => {
+    const name = b.dataset.p;
+    try {
+      if (b.dataset.act === 'rename') { const n = prompt(`New name for "${name}"`, name); if (n && n !== name) await post('/api/places/rename', { old:name, new:n }); }
+      else { const dst = prompt(`Merge "${name}" into which place? (type its exact name)`); if (dst) await post('/api/places/merge', { src:name, dst }); }
+    } catch (e) { let m = e.message; try { m = JSON.parse(m).detail || m; } catch (_) {} alert(m); }
+    loadPlaces(); refreshStats();
+  });
+}
+
 async function loadOntology() {
   const o = await api('/api/ontology'), M = MEM();
   const sz = n => 18 + 7 * Math.log2(1 + (n.count || 0));

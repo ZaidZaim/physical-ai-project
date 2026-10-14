@@ -122,6 +122,11 @@ class PlaceResolver:
                 return Decision(best, False, False, best_s, f"matches '{best}' ({best_s:.2f}) much better than '{current}' ({cur:.2f})", scores)
             if cur >= self.stay_threshold or (best_s < self.switch_threshold and len(view) < self.min_objects_for_new):
                 return Decision(current, False, True, cur, f"still looks like '{current}' ({cur:.2f})", scores)
+            cur_place = next((p for p in places if p.name == current), None)
+            if (cur_place and room not in UNINFORMATIVE_ROOMS and room == cur_place.room_type and room_conf >= 0.5
+                    and best_s < self.switch_threshold):
+                # Same KIND of room and nothing else fits: this is another wall of the same room, not a second kitchen.
+                return Decision(current, False, True, max(cur, 0.3), f"another view of '{current}' (same kind of room, nothing else matches)", scores)
         elif places:
             best, best_s = max(scores.items(), key=lambda kv: kv[1])
             if best_s >= self.switch_threshold:

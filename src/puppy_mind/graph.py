@@ -24,6 +24,7 @@ from neo4j.exceptions import ClientError
 from .config import Settings
 from .matching import Known, Seen, assign
 from .models import EXCLUSIVE_PREDICATES, PREDICATES, Scene
+from .pose import bearing_of, in_view
 
 REL_ALT = "|".join(PREDICATES)
 _WRITE_WORDS = re.compile(
@@ -141,7 +142,7 @@ class Memory:
             MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
             OPTIONAL MATCH (o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active
             RETURN o.id AS id, o.label AS label, coalesce(o.color,'unknown') AS color,
-                   coalesce(o.last_zone,'unknown') AS zone, o.status AS status,
+                   coalesce(o.last_zone,'unknown') AS zone, o.status AS status, o.last_bearing AS bearing,
                    collect(DISTINCT [type(r), b.label]) AS anchors
             """,
             loc=location, preds=list(PREDICATES),
@@ -170,12 +171,27 @@ class Memory:
         matched_ids = {v for v in mapping.values() if v}
         present_known = [r for r in rows if r["status"] != "possibly_gone"]
         overlap = (sum(1 for r in present_known if r["id"] in matched_ids) / len(present_known)) if present_known else 1.0
-        # Partial view (half the room or less): an absence only counts for objects whose spatial ANCHOR is in view. A laptop that
-        # was ON the table is missed if the table is in the frame; a stove out of frame is simply out of frame.
+        # Which known objects could the camera see in THIS frame? Only those get a chance to be "missed".
+        #  1. heading known and the object has a remembered bearing: it is eligible iff that bearing is inside the view cone
+        #     (a sofa behind the robot is not missing);
+        #  2. otherwise, if most of the place is in view (overlap > min_overlap), everything is eligible;
+        #  3. otherwise (a partial view) only objects whose spatial ANCHOR is in the frame: a laptop that was ON the table is missed
+        #     when the table is visible, a stove out of frame is just out of frame.
         partial = overlap <= self.s.min_overlap
         seen_labels = {d.label.lower() for d in dets.values()}
-        eligible = [r["id"] for r in rows if any(lab in seen_labels for _t, lab in r["anchors"] if lab)] if partial else []
-        if partial and not eligible:
+        fov = self.s.camera_fov_deg
+        eligible: list[str] = []
+        for r in rows:
+            cone = in_view(r.get("bearing"), heading, fov)
+            if cone is not None:
+                ok = cone
+            elif not partial:
+                ok = True
+            else:
+                ok = any(lab in seen_labels for _t, lab in r["anchors"] if lab)
+            if ok:
+                eligible.append(r["id"])
+        if not eligible:
             count_misses = False
 
         # 2) resolve ids (unmatched detections become new objects)
@@ -192,7 +208,7 @@ class Memory:
             {
                 "id": obj_id[i], "label": d.label.lower(), "color": d.color.lower(),
                 "description": d.description, "zone": d.zone, "conf": d.confidence,
-                "new": obj_id[i] in new_ids,
+                "new": obj_id[i] in new_ids, "bearing": bearing_of(d.zone, heading, fov),
             }
             for i, d in dets.items()
         ]
@@ -218,8 +234,10 @@ class Memory:
             SET o.color = CASE WHEN d.color IN ['unknown',''] THEN coalesce(o.color,'unknown') ELSE d.color END,
                 o.description = CASE WHEN d.description='' THEN o.description ELSE d.description END,
                 o.last_seen=datetime($ts), o.last_zone=d.zone, o.last_confidence=d.conf,
+                o.last_bearing = CASE WHEN d.bearing IS NULL THEN o.last_bearing ELSE d.bearing END,
                 o.seen_count=o.seen_count+1, o.miss_count=0, o.status='present'
-            MERGE (ob)-[:DETECTED {confidence:d.conf, zone:d.zone}]->(o)
+            MERGE (ob)-[dt:DETECTED]->(o)
+            SET dt.confidence = d.conf, dt.zone = d.zone, dt.bearing = d.bearing  // SET accepts a null bearing; MERGE would refuse it
             MERGE (r)-[ro:OBSERVED]->(o) ON CREATE SET ro.first=datetime($ts)
             SET ro.last=datetime($ts)
             MERGE (o)-[la:LOCATED_AT]->(l)
@@ -278,13 +296,13 @@ class Memory:
             """
             MATCH (ob:Sighting {id:$obs})
             MATCH (o:Object)-[:LOCATED_AT]->(:Location {name:$loc})
-            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone'] AND (NOT $partial OR o.id IN $elig)
+            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone'] AND o.id IN $elig
             SET o.miss_count = coalesce(o.miss_count,0)+1
             SET o.status = CASE WHEN o.miss_count >= $thr THEN 'possibly_gone' ELSE o.status END
             MERGE (ob)-[:MISSED]->(o)
             RETURN o.id AS id, o.label AS label, o.miss_count AS misses, o.status AS status
             """,
-            loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold, partial=partial, elig=eligible,
+            loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold, elig=eligible,
         )
         # a possibly-gone object no longer "is on" anything: end its relations (history is kept)
         gone_ids = [m["id"] for m in missed if m["status"] == "possibly_gone"]
@@ -352,7 +370,7 @@ class Memory:
             RETURN o.id AS id, o.label AS label, o.color AS color, o.description AS description,
                    o.status AS status, o.miss_count AS consecutive_misses, o.seen_count AS times_seen,
                    toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
-                   o.last_zone AS last_zone, location,
+                   o.last_zone AS last_zone, o.last_bearing AS last_bearing, location,
                    [(o)-[r]->(b:Object) WHERE type(r) IN $preds AND r.active |
                       {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations,
                    [(o)-[mv:POSSIBLY_MOVED_FROM]->(c:Object) | {object: coalesce(c.color, 'unknown') + ' ' + c.label, id: c.id,
@@ -904,8 +922,10 @@ class Memory:
                 """
                 MATCH (a:Object)-[r]->(b) WHERE (b:Object OR b:Location) AND type(r) IN $types AND coalesce(r.active, true)
                 RETURN a.id AS source, CASE WHEN b:Object THEN b.id ELSE 'loc:' + b.name END AS target, type(r) AS type LIMIT $limit
-                """, types=list(PREDICATES) + ["LOCATED_AT"], limit=limit * 3):
+                """, types=list(PREDICATES) + ["LOCATED_AT", "POSSIBLY_MOVED_FROM"], limit=limit * 3):
                 edge(e["source"], e["target"], e["type"], "long")
+            for e in self._read("MATCH (a:Location)-[r:ADJACENT_TO]->(b:Location) RETURN 'loc:' + a.name AS source, 'loc:' + b.name AS target, r.count AS n"):
+                edge(e["source"], e["target"], "ADJACENT_TO", "long")
 
         if lens in ("short", "all"):
             obs = self._read(
