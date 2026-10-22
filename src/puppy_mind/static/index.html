@@ -3,158 +3,269 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PuppyPi Mind</title>
-<link rel="icon" href="data:,">
+<title>Puppy Mind</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232a7f9e' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%232a7f9e'/%3E%3C/svg%3E">
+<script>
+  // theme before first paint: saved choice, else the system setting
+  (function () { let t = null; try { t = localStorage.getItem('pm_theme'); } catch (e) {}
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t; })();
+</script>
 <script src="/static/vendor/vis-network.min.js"></script>
 <style>
-  :root { --bg:#0b1016; --panel:#141c25; --ink:#e6edf3; --mute:#8b98a5; --line:#25313d;
-          --obj:#4fb3ff; --loc:#3fb950; --gone:#6e7681; --new:#3fb950; --seen:#4fb3ff; --miss:#d29922; --ask:#bc8cff; }
-  @media (prefers-color-scheme: light) { :root { --bg:#f3f5f8; --panel:#fff; --ink:#1f2328; --mute:#656d76; --line:#d0d7de;
-          --obj:#0969da; --loc:#1a7f37; --gone:#8c959f; --new:#1a7f37; --seen:#0969da; --miss:#9a6700; --ask:#8250df; } }
-  * { box-sizing:border-box } html,body { height:100% }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,sans-serif; display:flex; flex-direction:column }
-  header { display:flex; gap:10px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap }
-  h1 { font-size:15px; margin:0 } .pill { padding:2px 9px; border-radius:99px; background:var(--panel); border:1px solid var(--line); color:var(--mute); font-size:12px }
-  .live { width:8px; height:8px; border-radius:50%; background:var(--gone); display:inline-block; margin-right:5px } .live.on { background:var(--new); box-shadow:0 0 8px var(--new) }
-  main { flex:1; min-height:0; display:grid; grid-template-columns:minmax(300px,2fr) minmax(0,3fr); gap:10px; padding:10px 14px }
-  @media (max-width:900px){ main { grid-template-columns:1fr; grid-auto-rows:minmax(360px,auto) } html,body{height:auto} }
-  .col { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0 }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; min-width:0; min-height:0; display:flex; flex-direction:column }
-  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--mute); margin:0 0 6px; display:flex; justify-content:space-between }
-  #video { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:4/3 }
-  #video img { width:100%; height:100%; object-fit:contain; display:block }
+  :root { --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  :root[data-theme="light"] { --bg:#e9edf2; --panel:#eff2f6; --card:#f6f8fa; --ink:#1c2733; --mute:#5d6d7e; --line:#c8d0d9; --accent:#2a7f9e; --accent-ink:#fff;
+          --long:#b9691a; --short:#2f8f55; --reasoning:#7050cc; --gone:#8794a3; --new:#2f8f55; --seen:#2a7f9e; --miss:#b7791f; --ask:#7050cc; --bad:#c0392b; --canvas:#f3f5f8; }
+  :root[data-theme="dark"] { --bg:#0b1117; --panel:#101821; --card:#141e29; --ink:#dde6ee; --mute:#7e8e9f; --line:#223040; --accent:#4db3d6; --accent-ink:#06151c;
+          --long:#e3a047; --short:#4cc27a; --reasoning:#a98cf5; --gone:#667587; --new:#4cc27a; --seen:#4db3d6; --miss:#e0a63a; --ask:#a98cf5; --bad:#f06a5d; --canvas:#0d141c; }
+  * { box-sizing:border-box } html, body { height:100%; max-height:100vh }
+  body { margin:0; background:var(--bg); color:var(--ink); font:12px/1.4 var(--sans); display:flex; flex-direction:column; overflow:hidden }
   [hidden] { display:none !important }
-  #novid { position:absolute; inset:0; display:grid; place-items:center; color:#8b98a5; text-align:center; padding:12px }
+  .mono, .lbl, .tag, button, input, .kv { font-family:var(--mono) }
+  .lbl { font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--mute) }
+
+  /* ---- top bar */
+  header { display:flex; align-items:center; gap:16px; padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex:none }
+  .brand { display:flex; align-items:center; gap:10px; min-width:0; flex:none }
+  .brand svg { width:26px; height:26px; flex:none }
+  .brand b { display:block; font:600 14px/1 var(--mono); letter-spacing:.24em; text-transform:uppercase }
+  .brand span { display:block; margin-top:4px; white-space:nowrap; font:8.5px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
+  nav { display:flex; gap:4px }
+  nav button { background:transparent; border:1px solid transparent; color:var(--mute); padding:7px 12px; font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; cursor:pointer; border-radius:2px }
+  nav button:hover { color:var(--ink) }
+  nav button.on { color:var(--accent); border-color:var(--line); background:var(--card); box-shadow:inset 0 -2px 0 var(--accent) }
+  .theme { display:flex; align-items:center; gap:6px; font:9.5px var(--mono); letter-spacing:.12em; color:var(--mute); cursor:pointer; user-select:none }
+  .theme i { width:34px; height:16px; border-radius:9px; background:var(--accent); position:relative; display:inline-block }
+  .theme i::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--accent-ink); transition:left .15s }
+  :root[data-theme="light"] .theme i::after { left:20px }
+  .spacer { flex:1 }
+  .kpis { display:flex; gap:18px }
+  .kpi { text-align:right } .kpi .lbl { display:block; font-size:8.5px }
+  .kpi b { font:500 16px/1.2 var(--mono); letter-spacing:.02em } .kpi b.warn { color:var(--miss) } .kpi b.bad { color:var(--bad) }
+  .conn { display:flex; align-items:center; gap:6px; font:9.5px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute) }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--gone) } .dot.on { background:var(--new); box-shadow:0 0 8px var(--new) }
+
+  /* ---- layout */
+  main { flex:1; min-height:0; display:grid; grid-template-columns:300px minmax(0,1fr) 330px; grid-template-rows:minmax(0,1fr); overflow:hidden }
+  .side { background:var(--panel); border-right:1px solid var(--line); overflow:auto; min-height:0 }
+  .side.right { border-right:0; border-left:1px solid var(--line); display:flex; flex-direction:column; overflow:hidden }
+  .blk { padding:11px 14px; border-bottom:1px solid var(--line) }
+  .blk > .lbl:first-child { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
+  .center { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--canvas) }
+  @media (max-width:1150px) { body { overflow:auto; height:auto } main { display:block } .side, .side.right { overflow:visible; border:0 } .center { height:75vh; min-height:480px } header { flex-wrap:wrap } .kpis { display:none } .side.right #chat { min-height:160px } }
+
+  button { padding:6px 10px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; font-size:10px; letter-spacing:.1em; text-transform:uppercase; border-radius:2px }
+  button:hover { border-color:var(--accent); color:var(--accent) }
+  button.pri { background:var(--accent); color:var(--accent-ink); border-color:var(--accent) } button.pri:hover { filter:brightness(1.08); color:var(--accent-ink) }
+  button.sm { padding:3px 8px; font-size:10px }
+  button[disabled] { opacity:.35; cursor:not-allowed }
+  input[type=text] { width:100%; padding:7px 9px; border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:11px; border-radius:2px; outline:none }
+  input[type=text]:focus { border-color:var(--accent) }
+  .tag { display:inline-block; padding:1px 6px; border:1px solid var(--line); border-radius:2px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--mute) }
+  .tag.ok { color:var(--new); border-color:var(--new) } .tag.warn { color:var(--miss); border-color:var(--miss) } .tag.bad { color:var(--bad); border-color:var(--bad) }
+
+  /* ---- camera */
+  #video { position:relative; background:#000; aspect-ratio:4/3; max-height:25vh; width:100%; margin:0 auto; overflow:hidden; border:1px solid var(--line) }
+  #video img { width:100%; height:100%; object-fit:contain; display:block }
+  #novid { position:absolute; inset:0; display:grid; place-items:center; color:#8794a3; text-align:center; padding:14px; font:11px/1.6 var(--mono); letter-spacing:.08em }
   .zones { position:absolute; inset:0; display:grid; grid-template-columns:1fr 1fr 1fr; pointer-events:none }
-  .zone { display:flex; flex-direction:column; justify-content:flex-end; gap:4px; padding:6px; border-right:1px dashed rgba(255,255,255,.12) }
-  .chip { align-self:flex-start; padding:1px 7px; border-radius:6px; font-size:12px; color:#fff; background:rgba(20,28,37,.82); border:1px solid var(--seen); animation:pop .35s ease-out }
-  .chip.new { border-color:var(--new); background:rgba(26,127,55,.85) } @keyframes pop { from { transform:scale(.4); opacity:0 } to { transform:scale(1); opacity:1 } }
-  #scan { position:absolute; left:0; right:0; height:3px; top:0; background:linear-gradient(90deg,transparent,var(--obj),transparent); opacity:0; box-shadow:0 0 14px var(--obj) }
-  #scan.on { opacity:1; animation:scan 1.4s linear infinite } @keyframes scan { from { top:0 } to { top:calc(100% - 3px) } }
-  #padrow { display:flex; gap:14px; align-items:center; flex-wrap:wrap }
-  #pad { display:grid; grid-template-columns:repeat(3,44px); gap:4px } #pad button { padding:0; height:40px; font-size:18px; background:var(--bg); color:var(--ink); user-select:none; touch-action:none }
-  #pad button.on, #pad button:active { background:var(--obj); color:#fff } #pad button.stop { color:#f85149 } #pad button[disabled] { opacity:.35; cursor:not-allowed }
-  #drive.armed { border-color:var(--miss); box-shadow:0 0 0 1px var(--miss) } #dinfo { font-size:12px; flex:1; min-width:200px }
-  #chat { flex:1; min-height:120px; overflow:auto; display:flex; flex-direction:column; gap:6px }
-  .m { padding:7px 10px; border-radius:8px; max-width:94%; white-space:pre-wrap } .u { background:var(--obj); color:#fff; align-self:flex-end } .a { background:var(--bg); border:1px solid var(--line) }
-  details { font-size:12px; color:var(--mute); margin-top:4px } pre { overflow:auto; max-height:180px; margin:4px 0 0 }
-  form { display:flex; gap:6px; margin-top:6px } input[type=text] { flex:1; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
-  button { padding:7px 11px; border-radius:6px; border:1px solid var(--line); background:var(--obj); color:#fff; cursor:pointer } button.ghost { background:var(--panel); color:var(--ink) }
-  #graphwrap { flex:1; min-height:380px; position:relative } #graph { position:absolute; inset:0; border:1px solid var(--line); border-radius:8px }
-  #legend { position:absolute; left:8px; bottom:8px; font-size:11px; color:var(--mute); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px 8px; display:flex; gap:10px; flex-wrap:wrap }
-  #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
-  :root { --short:#3fb950; --long:#f0a020; --reasoning:#a371f7 }
-  @media (prefers-color-scheme: light) { :root { --short:#1a7f37; --long:#bc6c00; --reasoning:#8250df } }
-  .tabs { display:flex; gap:4px } .tab { background:transparent; color:var(--mute); border:0; border-bottom:2px solid transparent; border-radius:0; padding:2px 8px; text-transform:uppercase; letter-spacing:.07em; font-size:11px }
-  .tab.on { color:var(--ink); border-bottom-color:var(--obj) }
-  #lenses { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 8px } .lens { background:var(--bg); color:var(--ink); border:1px solid var(--line); padding:3px 10px; font-size:12px }
-  .lens small { color:var(--mute) } .lens.on { border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink) }
-  .lens[data-lens=long]::first-letter { color:var(--long) } .lens[data-lens=short]::first-letter { color:var(--short) } .lens[data-lens=reasoning]::first-letter { color:var(--reasoning) } .lens[data-lens=all]::first-letter { color:var(--ink) }
-  #placeswrap { flex:1; min-height:380px; display:flex; flex-direction:column; gap:8px } #placeswrap[hidden] { display:none }
-  #placesmap { flex:1; min-height:240px; border:1px solid var(--line); border-radius:8px } #placeslist { max-height:190px; overflow:auto; font-size:12px }
-  #placeslist table { width:100%; border-collapse:collapse } #placeslist th { text-align:left; color:var(--mute); font-weight:500 } #placeslist td, #placeslist th { padding:3px 6px; border-bottom:1px solid var(--line) }
-  #placeslist tr.cur { background:rgba(63,185,80,.12) } button.sm { padding:1px 6px; font-size:11px }
-  #ontowrap { flex:1; min-height:380px; position:relative; display:flex; flex-direction:column; gap:8px } #ontowrap[hidden], #graphwrap[hidden], #lenses[hidden] { display:none }
-  #onto { flex:1; min-height:300px; border:1px solid var(--line); border-radius:8px } #ontodetail { font-size:12px; border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--bg); max-height:150px; overflow:auto }
-  #ontolegend { font-size:11px; color:var(--mute); display:flex; gap:12px; flex-wrap:wrap } #ontolegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px }
-  #log { height:120px; overflow:auto; font:12px/1.5 ui-monospace,monospace; color:var(--mute) } #log b { color:var(--ink) }
-  .k-new { color:var(--new) } .k-miss { color:var(--miss) } .k-ask { color:var(--ask) }
+  .zone { display:flex; flex-direction:column; justify-content:flex-end; gap:4px; padding:6px; border-right:1px dashed rgba(255,255,255,.14) }
+  .chip { align-self:flex-start; padding:1px 7px; font:11px var(--mono); color:#fff; background:rgba(12,18,26,.82); border:1px solid var(--seen); animation:pop .3s ease-out }
+  .chip.new { border-color:var(--new) } .chip.new::before { content:"NEW "; color:var(--new); letter-spacing:.1em }
+  @keyframes pop { from { transform:scale(.5); opacity:0 } to { transform:scale(1); opacity:1 } }
+  #scan { position:absolute; left:0; right:0; height:2px; top:0; background:linear-gradient(90deg,transparent,var(--accent),transparent); opacity:0 }
+  #scan.on { opacity:1; animation:scan 1.4s linear infinite } @keyframes scan { from { top:0 } to { top:calc(100% - 2px) } }
+  .vrow { display:flex; justify-content:space-between; gap:8px; margin-top:6px; font:9.5px var(--mono); color:var(--mute); letter-spacing:.04em; min-height:13px }
+
+  /* ---- place + compass */
+  .place { display:flex; gap:16px; align-items:center }
+  #compass { width:78px; height:78px; flex:none }
+  #pname { font:600 15px/1.15 var(--mono); letter-spacing:.03em; word-break:break-word }
+  #pmeta { margin-top:4px; font:9.5px/1.5 var(--mono); color:var(--mute); letter-spacing:.06em; text-transform:uppercase }
+  .row { display:flex; gap:5px; margin-top:9px } .row input { flex:1 }
+
+  /* ---- drive */
+  #drive.armed { box-shadow:inset 3px 0 0 var(--miss) }
+  #padrow { display:flex; gap:16px; align-items:flex-start }
+  #pad { display:grid; grid-template-columns:repeat(3,36px); gap:3px; flex:none }
+  #pad button { padding:0; height:32px; font-size:14px; letter-spacing:0; user-select:none; touch-action:none }
+  #pad button.on, #pad button:active { background:var(--accent); color:var(--accent-ink); border-color:var(--accent) } #pad button.stop { color:var(--bad) }
+  #dinfo { font:9.5px/1.55 var(--mono); color:var(--mute); letter-spacing:.04em; min-width:0 }
+  #dinfo b { color:var(--ink); font-weight:500 }
+  .meter { height:5px; background:var(--line); margin-top:6px } .meter > i { display:block; height:100%; background:var(--new); width:0 } .meter > i.low { background:var(--miss) }
+
+  /* ---- centre: toolbar + canvases */
+  .toolbar { display:flex; align-items:center; gap:8px; padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex:none; flex-wrap:wrap }
+  .toolbar input { max-width:170px } .chk { display:flex; align-items:center; gap:6px; font:9.5px var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--mute); cursor:pointer } .chk input { width:auto; accent-color:var(--accent) }
+  .lens { display:flex; align-items:stretch; gap:0; padding:0; border:1px solid var(--line); background:var(--card); text-transform:none; letter-spacing:.04em; font-size:11.5px }
+  .lens::before { content:""; width:4px; background:var(--c) } .lens span { padding:4px 9px; text-align:left; font-size:10.5px } .lens small { display:block; color:var(--mute); font-size:9px }
+  .lens.on { border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink) } .lens:hover { color:var(--ink); border-color:var(--ink) }
+  .view { flex:1 1 0; min-height:0; position:relative; overflow:hidden } .view > .cv { position:absolute; inset:0 }
+  #legend { position:absolute; left:14px; bottom:12px; display:flex; gap:14px; flex-wrap:wrap; font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute); background:var(--panel); border:1px solid var(--line); padding:6px 10px; max-width:calc(100% - 28px) }
+  #legend .rel { cursor:pointer } #legend .rel.off { opacity:.35; text-decoration:line-through } #legend u { display:inline-block; width:16px; height:3px; margin-right:6px; vertical-align:3px }
+  #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align:-1px }
+  .gstat { margin-left:auto; font:10.5px var(--mono); letter-spacing:.12em; color:var(--mute); text-transform:uppercase }
+  #placesview { display:flex; flex-direction:column } #placesmap { flex:1; min-height:200px } #placeslist { max-height:42%; overflow:auto; border-top:1px solid var(--line); background:var(--panel) }
+  table { width:100%; border-collapse:collapse; font:11.5px var(--mono) } th { text-align:left; color:var(--mute); font-weight:500; font-size:10px; letter-spacing:.14em; text-transform:uppercase }
+  td, th { padding:7px 14px; border-bottom:1px solid var(--line) } tr.cur td:first-child { box-shadow:inset 3px 0 0 var(--new) }
+  #schemaview { display:flex; flex-direction:column } #onto { flex:1; min-height:240px }
+  #ontodetail { padding:12px 18px; border-top:1px solid var(--line); background:var(--panel); font-size:12px; max-height:150px; overflow:auto }
+  #ontolegend { padding:8px 18px; border-top:1px solid var(--line); background:var(--panel); display:flex; gap:16px; flex-wrap:wrap; font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute) }
+  #ontolegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px }
+  #timelineview { overflow:auto !important; background:var(--panel) } .tl { display:grid; grid-template-columns:90px 160px 80px 1fr; gap:0 14px; padding:9px 18px; border-bottom:1px solid var(--line); font:11.5px/1.5 var(--mono) }
+  .tl .t { color:var(--mute) } .tl .s { font-family:var(--sans); color:var(--ink) }
+
+  /* ---- right: ask + activity */
+  .askhead { padding:12px 14px 6px } .askhead p { margin:5px 0 0; color:var(--mute); font-size:11px }
+  #chat { flex:1; min-height:80px; overflow:auto; padding:0 14px; display:flex; flex-direction:column; gap:10px }
+  .m { padding:7px 10px; max-width:94%; white-space:pre-wrap; font-size:12px; border:1px solid var(--line); background:var(--card) }
+  .m.u { align-self:flex-end; background:var(--accent); color:var(--accent-ink); border-color:var(--accent) }
+  details { font:11px var(--mono); color:var(--mute); margin-top:6px } pre { overflow:auto; max-height:170px; margin:4px 0 0; font-size:11px }
+  #sugg { padding:6px 14px 0; display:flex; flex-wrap:wrap; gap:5px }
+  #sugg button { text-align:left; text-transform:none; letter-spacing:.01em; font-size:10.5px; color:var(--mute); padding:4px 8px; background:var(--card) }
+  #f { display:flex; gap:5px; padding:8px 14px }
+  #log { height:170px; overflow:auto; padding:6px 14px; border-top:1px solid var(--line); font:10px/1.5 var(--mono); color:var(--mute); flex:none }
+  #log b { color:var(--ink); font-weight:500 } .k-new { color:var(--new) } .k-miss { color:var(--miss) } .k-ask { color:var(--ask) } .k-bad { color:var(--bad) }
 </style>
 </head>
 <body>
 <header>
-  <h1>🧠 PuppyPi Mind</h1>
-  <span class="pill"><span class="live" id="dot"></span><span id="conn">connecting…</span></span>
-  <span class="pill" id="loc"></span><span class="pill" id="stats"></span><span class="pill" id="nams"></span>
-  <span style="flex:1"></span>
-  <input type="text" id="locin" placeholder="Set place (manual)" style="max-width:150px;flex:none;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
-  <button class="ghost" id="setloc">Set</button><button class="ghost" id="autoloc" title="Let the robot work out where it is from what it sees">Auto</button>
-  <button class="ghost" id="demo" title="Replay a scripted booth day so you can watch the graph build without a robot">▶ Demo replay</button>
-  <button id="watch">Start camera</button>
+  <div class="brand">
+    <svg viewBox="0 0 34 34" fill="none" stroke="var(--accent)" stroke-width="1.6"><circle cx="17" cy="17" r="14"/><circle cx="17" cy="17" r="8" stroke-opacity=".55"/><circle cx="17" cy="17" r="2.6" fill="var(--accent)" stroke="none"/><path d="M17 3v5M17 26v5M3 17h5M26 17h5" stroke-opacity=".8"/></svg>
+    <div><b>Puppy Mind</b><span>Spatial memory · Physical AI</span></div>
+  </div>
+  <nav id="nav">
+    <button class="on" data-tab="graph">Graph</button><button data-tab="places">Places</button><button data-tab="onto">Ontology</button><button data-tab="timeline">Timeline</button>
+  </nav>
+  <div class="theme" id="theme" title="Switch theme">DARK <i></i> LIGHT</div>
+  <span class="spacer"></span>
+  <div class="kpis">
+    <div class="kpi"><span class="lbl">Places</span><b id="k-places">0</b></div>
+    <div class="kpi"><span class="lbl">Objects</span><b id="k-objects">0</b></div>
+    <div class="kpi"><span class="lbl">Sightings</span><b id="k-sightings">0</b></div>
+    <div class="kpi"><span class="lbl">Missing</span><b id="k-gone">0</b></div>
+    <div class="kpi"><span class="lbl">Battery</span><b id="k-batt">--</b></div>
+  </div>
+  <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting</span> <span class="tag" id="nams"></span></div>
 </header>
+
 <main>
-  <div class="col">
-    <section>
-      <h2><span>Live camera</span><span><span id="fps" style="text-transform:none;letter-spacing:0;margin-right:10px"></span><span id="vstat" style="text-transform:none;letter-spacing:0"></span></span></h2>
+  <!-- left: the robot -->
+  <aside class="side">
+    <div class="blk">
+      <div class="lbl"><span>Camera</span><span><button class="sm" id="demo" hidden title="Replay a scripted home so you can watch the graph build without a robot">Demo</button> <button class="sm pri" id="watch" data-on="0">Start camera</button></span></div>
       <div id="video">
         <img id="vimg" alt="" hidden>
-        <div id="novid">No frames yet.<br>Press “Start camera”, or run the robot streamer.</div>
+        <div id="novid">NO SIGNAL<br>Start the camera, or run the robot streamer.</div>
         <div class="zones"><div class="zone" id="z-left"></div><div class="zone" id="z-center"></div><div class="zone" id="z-right"></div></div>
         <div id="scan"></div>
       </div>
-    </section>
-    <section id="drive">
-      <h2><span>Drive <span id="dstate" class="pill" style="text-transform:none;letter-spacing:0">disarmed</span> <span id="rstate" class="pill" style="text-transform:none;letter-spacing:0">robot offline</span></span>
-        <button class="ghost" id="arm" style="padding:3px 9px">Enable keyboard drive</button></h2>
+      <div class="vrow"><span id="fps"></span><span id="vstat"></span></div>
+    </div>
+
+    <div class="blk">
+      <div class="lbl"><span>Where am I</span><span id="pmode" class="tag"></span></div>
+      <div class="place">
+        <svg id="compass" viewBox="0 0 100 100" aria-label="heading relative to where the robot entered this place">
+          <circle cx="50" cy="50" r="46" fill="var(--card)" stroke="var(--line)" stroke-width="1.5"/>
+          <g stroke="var(--mute)" stroke-width="1.2"><path d="M50 5v7M50 88v7M5 50h7M88 50h7"/></g>
+          <path d="M50 1 L46 9 L54 9 Z" fill="var(--accent)"/>
+          <g id="needle" style="transform-origin:50px 50px; transition:transform .35s ease">
+            <path d="M50 16 L60 56 L50 50 L40 56 Z" fill="var(--accent)"/>
+            <path d="M50 84 L58 58 L50 62 L42 58 Z" fill="var(--mute)" opacity=".5"/>
+          </g>
+          <circle cx="50" cy="50" r="3.5" fill="var(--ink)"/>
+        </svg>
+        <div style="min-width:0"><div id="pname">--</div><div id="pmeta"></div></div>
+      </div>
+      <div id="phint" hidden style="margin-top:8px;padding:6px 8px;border:1px solid var(--miss);color:var(--miss);font:10px/1.4 var(--mono)"></div>
+      <div class="row"><input type="text" id="locin" placeholder="Name this place"><button id="setloc">Set</button><button id="newroom" class="pri" title="Start a NEW room here, even if it looks like one the robot already knows (a second bedroom, say)">New room</button><button id="autoloc" title="Let the robot work out where it is from what it sees">Auto</button></div>
+    </div>
+
+    <div class="blk" id="drive">
+      <div class="lbl"><span>Drive <span id="dstate" class="tag">disarmed</span></span><button class="sm" id="arm">Enable keys</button></div>
       <div id="padrow">
         <div id="pad">
-          <button data-k="q" title="Strafe left (Q)">⤺</button><button data-k="w" title="Forward (W / ↑)">▲</button><button data-k="e" title="Strafe right (E)">⤻</button>
-          <button data-k="a" title="Turn left (A / ←)">↶</button><button data-k=" " class="stop" title="Stop (Space)">■</button><button data-k="d" title="Turn right (D / →)">↷</button>
-          <span></span><button data-k="s" title="Back (S / ↓)">▼</button><span></span>
+          <span></span><button data-k="w" title="Forward (W / Up)">&#9650;</button><span></span>
+          <button data-k="a" title="Turn left (A / Left)">&#8630;</button><button data-k=" " class="stop" title="Stop (Space)">&#9632;</button><button data-k="d" title="Turn right (D / Right)">&#8631;</button>
+          <span></span><button data-k="s" title="Back (S / Down)">&#9660;</button><span></span>
         </div>
         <div id="dinfo">
-          <div>Speed <span id="spd" class="pill">2 · medium</span> <span style="color:var(--mute)">keys 1 2 3</span></div>
-          <div style="color:var(--mute);margin-top:6px"><b>W/S</b> forward/back · <b>A/D</b> turn · <b>Q/E</b> strafe <span style="opacity:.7">(stock firmware: not supported)</span><br><b>Space</b> stop · <b>H</b> stand/home · <b>Esc</b> disarm<br>Arrow keys also work. Hold to move; release to stop.<br>Forward + turn together is off (it made the robot flex): turning pauses walking.</div>
-          <div id="dwarn" style="color:var(--miss);margin-top:6px"></div>
+          <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3)</div>
+          <div><b>W S</b> walk &nbsp; <b>A D</b> turn<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
         </div>
       </div>
-    </section>
-    <section style="flex:1">
-      <h2>Talk with the environment</h2>
-      <div id="chat"></div>
-      <form id="f"><input type="text" id="q" placeholder="What changed since the beginning?" autocomplete="off"><button>Ask</button></form>
-    </section>
-  </div>
-  <div class="col">
-    <section style="flex:1">
-      <h2><span class="tabs"><button class="tab on" data-tab="graph">Memory graph (live)</button><button class="tab" data-tab="onto">Ontology</button><button class="tab" data-tab="places">Places</button></span><span id="gstat" style="text-transform:none;letter-spacing:0"></span></h2>
-      <div id="lenses">
-        <button class="lens on" data-lens="long" title="Entities and facts: objects, places and how they relate">● Long-term <small id="c-long"></small></button>
-        <button class="lens" data-lens="short" title="What is happening now: the stream of observations and the conversation">● Short-term <small id="c-short"></small></button>
-        <button class="lens" data-lens="reasoning" title="How answers were reached: reasoning steps and the lookups they made">● Reasoning <small id="c-reasoning"></small></button>
-        <button class="lens" data-lens="all" title="All three memory types in one graph">● All</button>
-      </div>
-      <div id="graphwrap"><div id="graph"></div>
-        <div id="legend"><span><i style="background:var(--long)"></i>long-term</span><span><i style="background:var(--short)"></i>short-term</span>
-          <span><i style="background:var(--reasoning)"></i>reasoning</span><span><i style="background:var(--gone)"></i>possibly gone</span>
-          <span><i style="border:2px solid var(--new);background:none"></i>new</span><span><i style="border:2px solid var(--miss);background:none"></i>missed</span>
-          <span><i style="border:2px solid var(--ask);background:none"></i>consulted by agent</span><span><i style="border:2px dashed var(--ink);background:none"></i>stored by NAMS</span></div></div>
-      <div id="placeswrap" hidden>
-        <div id="placesmap"></div>
-        <div id="placeslist"></div>
-      </div>
-      <div id="ontowrap" hidden>
-        <div id="onto"></div>
-        <div id="ontodetail"><b>Ontology</b><div style="color:var(--mute)">Click a type or relationship. Node size = how many exist in your graph right now.</div></div>
-        <div id="ontolegend"></div>
-      </div>
-    </section>
-    <section><h2>Event feed</h2><div id="log"></div></section>
-  </div>
+      <div class="vrow" style="margin-top:8px"><span id="rstate">robot offline</span><span id="batt"></span></div>
+      <div class="meter"><i id="battbar"></i></div>
+      <div id="dwarn" style="color:var(--miss);margin-top:8px;font:11px var(--mono)"></div>
+    </div>
+  </aside>
+
+  <!-- centre: the memory -->
+  <section class="center">
+    <div class="toolbar" id="lenses">
+      <button class="lens on" data-lens="long" style="--c:var(--long)" title="Entities and facts: objects, places and how they relate"><span>LONG-TERM<small id="c-long"></small></span></button>
+      <button class="lens" data-lens="short" style="--c:var(--short)" title="What is happening now: the stream of observations and the conversation"><span>SHORT-TERM<small id="c-short"></small></span></button>
+      <button class="lens" data-lens="reasoning" style="--c:var(--reasoning)" title="How answers were reached: reasoning steps and the lookups they made"><span>REASONING<small id="c-reasoning"></small></span></button>
+      <button class="lens" data-lens="all" style="--c:var(--ink)" title="All three memory types in one graph"><span>ALL<small>every layer</small></span></button>
+      <input type="text" id="find" placeholder="Find an object or place"><label class="chk" title="Also show the entities NAMS extracted from your questions. Off: one node per thing."><input type="checkbox" id="namsent"> NAMS entities</label>
+      <span class="gstat" id="gstat"></span>
+    </div>
+    <div class="view" id="graphview"><div class="cv" id="graph"></div>
+      <div id="legend"><span><i style="background:var(--long)"></i>long-term</span><span><i style="background:var(--short)"></i>short-term</span>
+        <span><i style="background:var(--reasoning)"></i>reasoning</span><span><i style="background:var(--gone)"></i>possibly gone</span>
+        <span><i style="border:2px solid var(--new)"></i>new</span><span><i style="border:2px solid var(--miss)"></i>missed</span>
+        <span><i style="border:2px solid var(--ask)"></i>consulted</span><span><i style="border:2px dashed var(--ink)"></i>in NAMS</span></div></div>
+    <div class="view" id="placesview" hidden><div class="cv" id="placesmap" style="position:relative;flex:1"></div><div id="placeslist"></div></div>
+    <div class="view" id="schemaview" hidden><div id="onto"></div><div id="ontodetail"><span class="lbl">Ontology</span><div style="color:var(--mute);margin-top:4px">Click a type or a relationship. Circle size is how many exist in your graph right now.</div></div><div id="ontolegend"></div></div>
+    <div class="view" id="timelineview" hidden><div id="timeline"></div></div>
+  </section>
+
+  <!-- right: ask + activity -->
+  <aside class="side right">
+    <div class="askhead"><div class="lbl">Ask the environment</div><p>Ask in plain words, then follow up. Every answer shows the lookups behind it.</p></div>
+    <div id="chat"></div>
+    <div id="sugg">
+      <button>Where am I right now?</button><button>What is in each room?</button><button>What changed since the beginning?</button><button>What is to my left?</button>
+    </div>
+    <form id="f"><input type="text" id="q" placeholder="Ask, e.g. where did I last see the cabinet" autocomplete="off"><button class="pri">Ask</button></form>
+    <div class="lbl" style="padding:6px 14px;border-top:1px solid var(--line)">Activity</div>
+    <div id="log" style="border-top:0;padding-top:0"></div>
+  </aside>
 </main>
+
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 async function api(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
 const post = (p, body) => api(p, { method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined });
+const FONT = css('--mono');
 
 /* ---------- graph ---------- */
 const nodes = new vis.DataSet(), edges = new vis.DataSet();
 const net = new vis.Network($('#graph'), { nodes, edges }, {
-  physics: { solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-70, springLength:120, springConstant:.06, damping:.5 }, stabilization:false },
-  nodes: { shape:'dot', borderWidth:2, font:{ color:css('--ink'), size:13 } },
-  edges: { arrows:'to', smooth:{ type:'dynamic' }, font:{ size:10, color:css('--mute'), strokeWidth:0, align:'middle' }, width:1.5 },
+  physics: { solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-60, centralGravity:.035, springLength:90, springConstant:.1, damping:.6, avoidOverlap:.5 }, stabilization:false },
+  nodes: { shape:'dot', borderWidth:2, font:{ color:css('--ink'), size:11, face:FONT } },
+  edges: { arrows:{ to:{ scaleFactor:.6 } }, smooth:{ type:'dynamic' }, font:{ size:9, face:FONT, color:css('--mute'), strokeWidth:0, align:'middle' }, width:1.2 },
   interaction: { hover:true },
 });
-/* Colour = memory type (long-term orange, short-term green, reasoning purple); shape = kind of node. */
+/* Colour = memory layer (long-term amber, short-term green, reasoning violet); shape and size = kind of node. */
 let lens = 'long';
 const MEM = () => ({ short:css('--short'), long:css('--long'), reasoning:css('--reasoning') });
-const SHAPE = { Entity:['dot',11], Object:['dot',16], Location:['box',20], Sighting:['diamond',14], Utterance:['square',10], Dialogue:['database',11], ReasoningStep:['triangle',16], Lookup:['triangleDown',12] };
-const baseOf = n => { const [shape, size] = SHAPE[n.kind] || ['dot', 14];
-  return { bg: n.status === 'possibly_gone' ? css('--gone') : (MEM()[n.memory] || css('--obj')), size, shape }; };
-const nodeLabel = n => n.kind === 'Entity' ? n.label : n.kind === 'Location' ? '📍 ' + n.label : n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label : n.label;
-const SOFT = new Set(['MIRRORED_BY', 'LOCATED_AT', 'THEN', 'FOLLOWED_BY', 'HAS_UTTERANCE', 'DETECTED']);  // structural links: dashed, unlabelled
+const SHAPE = { Entity:['dot',10], Object:['dot',15], Place:['circle',0], Robot:['star',24], Sighting:['diamond',13], Utterance:['square',9], Dialogue:['database',10], ReasoningStep:['triangle',15], Lookup:['triangleDown',11] };
+const baseOf = n => { const [shape, size] = SHAPE[n.kind] || ['dot', 13];
+  const byPlace = lens === 'long' && n.place && placeColors[n.place];
+  return { bg: n.kind === 'Robot' ? css('--ink') : (n.status === 'possibly_gone' ? css('--gone') : (byPlace || MEM()[n.memory] || css('--seen'))), size, shape }; };
+const nodeLabel = n => n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + ' ' : '') + n.label : n.label;
+const nodeFont = n => n.kind === 'Place' ? { color:'#fff', size:12, face:FONT, bold:{ color:'#fff' } } : { color:css('--ink'), size:11, face:FONT };
+const SOFT = new Set(['MIRRORED_BY', 'THEN', 'FOLLOWED_BY', 'HAS_UTTERANCE', 'DETECTED']);  // structural links: dashed, unlabelled
+const NOLABEL = new Set([...SOFT, 'LOCATED_AT']);   // 'located at' is shown by position and colour, not text
+/* In the long-term view every place gets its own colour and its objects share it, so rooms read as clusters. */
+const PALETTE = { dark:['#e3a047','#4db3d6','#4cc27a','#d96ca0','#a98cf5','#e0d24a','#e0705a','#6fd3c0'], light:['#b9691a','#2a7f9e','#2f8f55','#b8457c','#7050cc','#9a8a10','#c0503a','#2a9d8a'] };
+let placeColors = {};
+function colorPlaces(names) { const pal = PALETTE[document.documentElement.dataset.theme] || PALETTE.dark; placeColors = {};
+  [...new Set(names)].sort().forEach((n, i) => placeColors[n] = pal[i % pal.length]); }
 const edgeId = e => `${e.source}|${e.type}|${e.target}`;
 
 function tween(from, to, ms, step, done) {
@@ -165,31 +276,70 @@ const timers = {};
 function glow(id, color, ms = 1600) {
   if (!nodes.get(id)) return;
   clearTimeout(timers[id]);
-  nodes.update({ id, borderWidth:5, color:{ border:color, background:nodes.get(id)._bg }, shadow:{ enabled:true, color, size:28, x:0, y:0 } });
+  nodes.update({ id, borderWidth:5, color:{ border:color, background:nodes.get(id)._bg }, shadow:{ enabled:true, color, size:26, x:0, y:0 } });
   timers[id] = setTimeout(() => nodes.get(id) && nodes.update({ id, borderWidth:2, color:{ border:nodes.get(id)._bg, background:nodes.get(id)._bg }, shadow:{ enabled:false } }), ms);
 }
 function flashEdge(id, color) {
   if (!edges.get(id)) return;
-  edges.update({ id, width:5, color:{ color } });
-  setTimeout(() => edges.get(id) && edges.update({ id, width:1.5, color:{ color:css('--mute') } }), 1400);
+  edges.update({ id, width:4, color:{ color } });
+  setTimeout(() => { const ed = edges.get(id); if (ed) edges.update({ id, width: ed._rel && !NOLABEL.has(ed._rel) ? 2.2 : 1, color:{ color: ed._base || css('--mute') } }); }, 1400);
 }
 
-let syncing = Promise.resolve(), known = { n: new Set(), e: new Set() };
+/* Relationships (facts about the world) get their own colour and a visible name; structure (LOCATED_AT, DETECTED...) stays quiet. */
+const REL_COLORS = { ON:'#e0a63a', INSIDE:'#d96ca0', NEXT_TO:'#4db3d6', NEAR:'#6fd3c0', IN_FRONT_OF:'#a98cf5', BEHIND:'#e0705a', ADJACENT_TO:'#4cc27a', CURRENTLY_IN:'#ffffff', POSSIBLY_MOVED_FROM:'#f06a5d' };
+const relColor = t => REL_COLORS[t] || '#8fa0b2';
+const hiddenRel = new Set();
+const LEGEND_MEM = $('#legend').innerHTML;
+/* Long-term view: a fixed, readable layout. Places sit on a ring; each place's objects form a ring around it. Everything else uses physics. */
+function applyLayout(g) {
+  const fixed = lens === 'long' && !$('#namsent').checked;
+  net.setOptions({ physics: { enabled: !fixed }, edges: { smooth: fixed ? { type: 'continuous', roundness: .2 } : { type: 'dynamic' } } });
+  if (!fixed) return;
+  const placeIds = g.nodes.filter(n => n.kind === 'Place').map(n => n.id);
+  const byPlace = {};
+  for (const n of g.nodes) if (n.kind === 'Object') (byPlace[n.place] = byPlace[n.place] || []).push(n.id);
+  // each place's objects form one ring, or two when there are many; `rad` is how much room the cluster needs
+  const rings = id => { const n = (byPlace[id.slice(4)] || []).length;
+    if (n <= 10) return { rings: [{ r: 66 + 4 * n, n }], rad: 66 + 4 * n + 44 };
+    const inner = Math.floor(n * .4); return { rings: [{ r: 82, n: inner }, { r: 150, n: n - inner }], rad: 150 + 44 }; };
+  const info = Object.fromEntries(placeIds.map(id => [id, rings(id)]));
+  // neighbours stay neighbours: walk the learned map instead of sorting by name
+  const adj = {}; for (const e of g.edges) if (e.type === 'ADJACENT_TO') { (adj[e.source] = adj[e.source] || []).push(e.target); (adj[e.target] = adj[e.target] || []).push(e.source); }
+  const order = []; const left = new Set(placeIds.sort());
+  while (left.size) { let cur = [...left].sort((a, b) => (adj[b] || []).length - (adj[a] || []).length)[0];
+    while (cur && left.has(cur)) { order.push(cur); left.delete(cur); cur = (adj[cur] || []).filter(x => left.has(x)).sort()[0]; } }
+  const n = order.length, maxRad = Math.max(0, ...order.map(id => info[id].rad));
+  const R = n <= 1 ? 0 : n === 2 ? maxRad * 1.2 + 40 : Math.max(240, (2 * maxRad + 30) / (2 * Math.sin(Math.PI / n)));
+  const pos = {};
+  order.forEach((id, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / Math.max(1, n); pos[id] = { x: R * Math.cos(a), y: R * Math.sin(a) }; });
+  for (const id of order) {
+    const c = pos[id], objs = (byPlace[id.slice(4)] || []).sort(); let k = 0;
+    for (const ring of info[id].rings) for (let j = 0; j < ring.n; j++, k++) { const a = j * 2 * Math.PI / ring.n + (ring.r > 100 ? .5 : .2); pos[objs[k]] = { x: c.x + ring.r * Math.cos(a), y: c.y + ring.r * Math.sin(a) }; }
+  }
+  for (const nd of g.nodes) if (nd.kind === 'Robot') { const e = g.edges.find(x => x.source === nd.id), c = e && pos[e.target]; if (c) pos[nd.id] = { x: c.x + 40, y: c.y - 40 }; }
+  for (const [id, p] of Object.entries(pos)) if (nodes.get(id)) nodes.update({ id, x: p.x, y: p.y });
+}
+let userMoved = false; net.on('dragStart', () => userMoved = true); net.on('zoom', e => { if (e.direction) userMoved = true; });
+let syncing = Promise.resolve();
 function syncGraph() {
   syncing = syncing.then(async () => {
     const asked = lens;
-    const g = await api('/api/graph?lens=' + asked);
+    const g = await api('/api/graph?lens=' + asked + ($('#namsent').checked ? '&nams=true' : ''));
     if (asked !== lens) return;                                // the user switched lens while this was loading
     const seen = new Set();
+    colorPlaces(g.nodes.filter(n => n.kind === 'Place').map(n => n.label));
+    const relCount = {}; for (const e of g.edges) if (!NOLABEL.has(e.type)) relCount[e.type] = (relCount[e.type] || 0) + 1;
+    const relHtml = Object.entries(relCount).map(([t, c]) => `<span class="rel${hiddenRel.has(t) ? ' off' : ''}" data-rel="${t}" title="click to show or hide"><u style="background:${relColor(t)}"></u>${esc(t.replace(/_/g, ' ').toLowerCase())} ${c}</span>`).join('');
+    $('#legend').innerHTML = lens === 'long' ? Object.entries(placeColors).map(([p, c]) => `<span><i style="background:${c}"></i>${esc(p)}</span>`).join('') + '<span><i style="background:var(--gone)"></i>possibly gone</span><span><i style="background:var(--ink)"></i>robot</span>' + (relHtml ? '<br>' + relHtml : '') : LEGEND_MEM;
     for (const n of g.nodes) {
       seen.add(n.id); const b = baseOf(n);
-      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind,
-        title:(n.source === 'nams' ? 'stored by NAMS' + (n.review ? ' (flagged: possible duplicate)' : '') + (n.detail ? ': ' + n.detail : '') : (n.detail || '')),
+      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind, font:nodeFont(n), margin:10,
+        title:(n.in_nams ? 'also stored in NAMS' + (n.detail ? ': ' + n.detail : '') : n.source === 'nams' ? 'stored by NAMS' + (n.review ? ' (flagged: possible duplicate)' : '') + (n.detail ? ': ' + n.detail : '') : (n.detail || '')),
         shapeProperties:{ borderDashes: n.source === 'nams' ? [4, 3] : false }, borderWidth: n.source === 'nams' ? 3 : 2 };
       if (!nodes.get(n.id)) {                                  // newly appeared: grow in from nothing
         nodes.add({ ...view, size:2 });
-        tween(2, b.size, 500, v => nodes.get(n.id) && nodes.update({ id:n.id, size:v }));
-      } else nodes.update({ ...view, size:b.size });
+        if (b.size) tween(2, b.size, 500, v => nodes.get(n.id) && nodes.update({ id:n.id, size:v }));
+      } else nodes.update({ ...view, size:b.size || undefined });
     }
     for (const id of nodes.getIds()) if (!seen.has(id)) {      // vanished: fade then remove
       tween(nodes.get(id).size || 14, 0, 500, v => nodes.get(id) && nodes.update({ id, size:v }), () => nodes.remove(id));
@@ -198,19 +348,29 @@ function syncGraph() {
     for (const e of g.edges) {
       const id = edgeId(e); eseen.add(id);
       if (!edges.get(id)) {
-        edges.add({ id, from:e.source, to:e.target, label:SOFT.has(e.type) ? '' : e.type, dashes:SOFT.has(e.type), color:{ color:css('--mute'), opacity:SOFT.has(e.type) ? .3 : 1 }, width:SOFT.has(e.type) ? 1 : 1.5 });
-        if (!SOFT.has(e.type) && e.memory === 'long') flashEdge(id, css('--new'));
+        const fact = !NOLABEL.has(e.type), base = fact ? relColor(e.type) : css('--mute');
+        edges.add({ id, from:e.source, to:e.target, label: fact ? e.type.replace(/_/g, ' ').toLowerCase() : '', title:e.type.replace(/_/g, ' ').toLowerCase(), dashes: SOFT.has(e.type) || e.type === 'POSSIBLY_MOVED_FROM', length:e.type === 'LOCATED_AT' ? 50 : (e.type === 'CURRENTLY_IN' ? 60 : 130),
+          _rel:e.type, _base:base, hidden: hiddenRel.has(e.type), font:{ size:9, color:base, face:FONT, strokeWidth:4, strokeColor:css('--canvas'), align:'middle' },
+          color:{ color:base, opacity:SOFT.has(e.type) ? .35 : (e.type === 'LOCATED_AT' ? .45 : 1) }, width: fact ? 2.2 : 1 });
+        if (fact && e.memory === 'long') flashEdge(id, css('--new'));
       }
     }
-    for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, '#f85149'); setTimeout(() => edges.remove(id), 900); }
-    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} edges`;
+    for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, css('--bad')); setTimeout(() => edges.remove(id), 900); }
+    applyLayout(g);
+    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} links`;
     if (g.nodes.length !== window._lastNodeCount) {  // keep every node in view as the graph grows
       window._lastNodeCount = g.nodes.length;
-      setTimeout(() => net.fit({ animation: { duration: 600, easingFunction: 'easeInOutQuad' } }), 1200);
+      for (const ms of [900, 2600, 5000]) setTimeout(() => !userMoved && net.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } }), ms);
     }
-  }).catch(e => log('error', 'graph: ' + e.message));
+  }).catch(e => log('bad', 'graph: ' + e.message));
   return syncing;
 }
+$('#find').oninput = e => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) { net.unselectAll(); net.fit(); return; }
+  const ids = nodes.getIds().filter(id => String(nodes.get(id).label || '').toLowerCase().includes(q));
+  net.selectNodes(ids); if (ids.length) net.fit({ nodes:ids, animation:{ duration:400 } });
+};
 
 /* ---------- video overlay ---------- */
 let chipTimer;
@@ -218,7 +378,7 @@ function showChips(objs) {
   for (const z of ['left','center','right']) $('#z-' + z).innerHTML = '';
   for (const o of objs) {
     const el = document.createElement('div'); el.className = 'chip' + (o.new ? ' new' : '');
-    el.textContent = `${o.new ? '✨ ' : ''}${o.color !== 'unknown' ? o.color + ' ' : ''}${o.label} ${Math.round(o.conf * 100)}%`;
+    el.textContent = `${o.color !== 'unknown' ? o.color + ' ' : ''}${o.label} ${Math.round(o.conf * 100)}%`;
     ($('#z-' + (['left','center','right'].includes(o.zone) ? o.zone : 'center'))).appendChild(el);
   }
   clearTimeout(chipTimer); chipTimer = setTimeout(() => ['left','center','right'].forEach(z => $('#z-' + z).innerHTML = ''), 9000);
@@ -226,35 +386,36 @@ function showChips(objs) {
 
 /* ---------- log + chat ---------- */
 function log(kind, html) {
-  const d = document.createElement('div'); d.innerHTML = `<span style="opacity:.6">${new Date().toLocaleTimeString()}</span> <span class="k-${kind}">${html}</span>`;
+  const d = document.createElement('div'); d.innerHTML = `<span style="opacity:.55">${new Date().toLocaleTimeString()}</span> <span class="k-${kind}">${html}</span>`;
   const L = $('#log'); L.prepend(d); while (L.children.length > 80) L.lastChild.remove();
 }
 function add(cls, text, evidence) {
   const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text;
   if (evidence && evidence.length) {
     const e = document.createElement('details');
-    e.innerHTML = '<summary>Evidence: ' + evidence.map(t => esc(t.tool)).join(' → ') + '</summary><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>';
+    e.innerHTML = '<summary>Lookups: ' + evidence.map(t => esc(t.tool)).join(' → ') + '</summary><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>';
     d.appendChild(e);
   }
   $('#chat').appendChild(d); $('#chat').scrollTop = 1e9; return d;
 }
-$('#f').onsubmit = async e => {
-  e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; $('#q').value = '';
-  add('u', q); const w = add('a', '…');
+async function ask(q) {
+  add('u', q); const w = add('a', '...');
   try { const r = await post('/api/ask', { question:q }); w.remove(); add('a', r.answer, r.evidence); }
   catch (err) { w.textContent = 'Error: ' + err.message; }
-};
+}
+$('#f').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if (!q) return; $('#q').value = ''; ask(q); };
+document.querySelectorAll('#sugg button').forEach(b => b.onclick = () => ask(b.textContent));
 
 /* ---------- live events (SSE) ---------- */
 function connect() {
   const es = new EventSource('/api/events');
   es.onopen = () => { $('#conn').textContent = 'live'; $('#dot').classList.add('on'); };
-  es.onerror = () => { $('#conn').textContent = 'reconnecting…'; $('#dot').classList.remove('on'); };
+  es.onerror = () => { $('#conn').textContent = 'reconnecting'; $('#dot').classList.remove('on'); };
   es.addEventListener('status', e => {
     const d = JSON.parse(e.data); $('#scan').classList.toggle('on', d.state === 'perceiving');
-    $('#vstat').textContent = d.state === 'perceiving' ? 'analysing frame…' : (d.note || '');
+    $('#vstat').textContent = d.state === 'perceiving' ? 'analysing frame' : (/identical/.test(d.note || '') ? '' : (d.note || ''));
   });
-  es.addEventListener('error', e => { if (e.data) { const d = JSON.parse(e.data); log('miss', '⚠ ' + esc(d.error)); $('#scan').classList.remove('on'); } });
+  es.addEventListener('error', e => { if (e.data) { const d = JSON.parse(e.data); log('bad', 'error: ' + esc(d.error)); $('#scan').classList.remove('on'); } });
   es.addEventListener('observation', async e => {
     const d = JSON.parse(e.data);
     $('#scan').classList.remove('on'); $('#vstat').textContent = '';
@@ -262,22 +423,23 @@ function connect() {
     const n = d.objects.filter(o => o.new).map(o => o.label);
     log('new', `<b>${esc(d.location)}</b> · ${d.objects.length} seen` + (n.length ? ` · new: ${esc(n.join(', '))}` : '') + (d.missed.length ? ` · <span class="k-miss">missed: ${esc(d.missed.map(m => m.label + (m.status === 'possibly_gone' ? ' (possibly gone)' : '')).join(', '))}</span>` : '') + ` — ${esc(d.summary)}`);
     if (d.misses_counted === false && d.overlap != null && d.overlap < 1) log('ask', `view overlap ${Math.round(d.overlap * 100)}%: absences not counted (partial view)`);
-    (d.moved_hypotheses || []).forEach(h => log('ask', `💡 a ${esc(h.label)} appeared that looks like one that went missing elsewhere (confidence ${Math.round(h.confidence * 100)}%): a guess, not a fact`));
+    (d.moved_hypotheses || []).forEach(h => log('ask', `a ${esc(h.label)} appeared that looks like one that went missing elsewhere (${Math.round(h.confidence * 100)}%): a guess, not a fact`));
     await syncGraph();
     d.objects.forEach(o => glow(o.id, o.new ? css('--new') : css('--seen')));
     d.missed.forEach(m => glow(m.id, css('--miss'), 2200));
     d.relations.forEach(r => flashEdge(`${r.a}|${r.predicate}|${r.b}`, css('--new')));
-    glow('loc:' + d.location, css('--loc'));
+    glow('loc:' + d.location, css('--new'));
     refreshStats();
   });
   es.addEventListener('place', e => {
     const d = JSON.parse(e.data);
-    if (d.uncertain) log('ask', `🧭 not sure the robot is still in <b>${esc(d.name)}</b>: ${esc(d.reason)}`);
-    else log('new', `🧭 ${d.new ? 'new place discovered' : 'moved'}: <b>${esc(d.name)}</b>${d.previous ? ' (from ' + esc(d.previous) + ')' : ''} · ${esc(d.reason)}`);
-    refreshStats(); if (!$('#placeswrap').hidden) loadPlaces();
+    if (d.learned_room_type) log('ask', `<b>${esc(d.name)}</b> looks like a ${esc(d.learned_room_type)}`);
+    else if (d.uncertain) log('ask', `not sure the robot is still in <b>${esc(d.name)}</b>: ${esc(d.reason)}`);
+    else log('new', `${d.new ? 'new place discovered' : 'moved to'} <b>${esc(d.name)}</b>${d.previous ? ' (from ' + esc(d.previous) + ')' : ''} · ${esc(d.reason || '')}`);
+    refreshStats(); if (!$('#placesview').hidden) loadPlaces();
   });
   es.addEventListener('drive', e => {
-    const d = JSON.parse(e.data); log('ask', `drive: ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
+    const d = JSON.parse(e.data); log('ask', `drive ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
   });
   es.addEventListener('memory', () => { refreshSummary(); if (lens !== 'long') syncGraph(); });  // a Q&A was just saved
   es.addEventListener('query', e => {
@@ -288,15 +450,29 @@ function connect() {
 }
 
 /* ---------- controls / state ---------- */
+let needleDeg = 0;
 async function refreshStats() {
   const s = await api('/api/state');
-  const pl = s.place || {}; $('#loc').textContent = '📍 ' + s.location + (pl.mode === 'manual' ? ' · manual' : ' · auto' + (pl.confidence != null ? ' ' + Math.round(pl.confidence * 100) + '%' : '')) + (pl.uncertain ? ' · checking…' : '') + (pl.heading_deg != null ? ' · 🧭 ' + Math.round(pl.heading_deg) + '°' : '');
-  $('#loc').title = pl.reason || ''; $('#autoloc').style.opacity = pl.mode === 'manual' ? 1 : .45; const ns = s.nams_status || {}; $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS: key rejected' : (s.nams ? `NAMS on · ${ns.synced_observations || 0} synced${ns.failed ? ' · ' + ns.failed + ' errors' : ''}` : 'NAMS off'); $('#nams').title = ns.last_error || ''; $('#nams').style.color = ns.auth === 'invalid' ? '#f85149' : '';
-  $('#stats').textContent = `${s.stats.objects} objects · ${s.stats.observations} observations · ${s.stats.possibly_gone} possibly gone`;
+  const pl = s.place || {};
+  $('#pname').textContent = pl.recognised === false ? 'Looking around' : (s.location || '--');
+  $('#pmode').textContent = pl.mode === 'manual' ? 'manual' : 'auto' + (pl.confidence != null ? ' ' + Math.round(pl.confidence * 100) + '%' : '');
+  $('#pmode').className = 'tag' + (pl.uncertain ? ' warn' : '');
+  $('#pmeta').innerHTML = [pl.room_type && pl.room_type !== 'unknown' ? 'ROOM ' + esc(pl.room_type) : '', pl.uncertain ? 'CHECKING...' : '', pl.heading_deg == null ? 'NO HEADING' : (d => d < 3 ? 'FACING THE ENTRY DIRECTION' : d + ' DEG ' + (((pl.heading_deg + 180) % 360 - 180) > 0 ? 'LEFT' : 'RIGHT') + ' OF ENTRY')(Math.round(Math.abs((pl.heading_deg + 180) % 360 - 180)))].filter(Boolean).join('<br>');
+  $('#pname').title = pl.reason || '';
+  $('#phint').hidden = !pl.hint || pl.mode === 'manual'; $('#phint').textContent = (pl.hint || '') + ' Press NEW ROOM if so.';
+  $('#autoloc').style.opacity = pl.mode === 'manual' ? 1 : .45;
+  const h = pl.heading_deg;  // the dial: the needle points where the robot faces, relative to its entry direction (left turns raise the angle)
+  if (h != null) { const want = -h, d = ((want - needleDeg + 180) % 360 + 360) % 360 - 180; needleDeg += d; }   // shortest way round: no spinning when the angle wraps past 0
+  $('#needle').style.transform = `rotate(${needleDeg}deg)`; $('#needle').style.opacity = h == null ? .25 : 1;
+  const ns = s.nams_status || {};
+  $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS key rejected' : (s.nams ? `NAMS ${ns.synced_observations || 0}` + (ns.failed ? ` · ${ns.failed} err` : '') : 'NAMS off');
+  $('#nams').className = 'tag' + (ns.auth === 'invalid' ? ' bad' : (s.nams ? ' ok' : '')); $('#nams').title = ns.last_error || '';
+  $('#k-places').textContent = s.stats.locations ?? 0; $('#k-objects').textContent = s.stats.objects; $('#k-sightings').textContent = s.stats.observations;
+  $('#k-gone').textContent = s.stats.possibly_gone; $('#k-gone').className = s.stats.possibly_gone ? 'warn' : '';
   $('#watch').textContent = s.watching ? 'Stop camera' : 'Start camera'; $('#watch').dataset.on = s.watching ? '1' : '0';
   const lap = (s.camera_name || '').startsWith('webcam');
-  $('#fps').textContent = s.watching || s.fps ? `${lap ? 'LAPTOP WEBCAM' : (s.camera_name ? 'robot camera' : '')} · ${s.fps} fps` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
-  $('#fps').style.color = lap ? '#f85149' : '';
+  $('#fps').textContent = s.watching || s.fps ? `${lap ? 'LAPTOP WEBCAM' : (s.camera_name ? 'ROBOT CAMERA' : '')} · ${s.fps} FPS` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
+  $('#fps').style.color = lap ? 'var(--bad)' : '';
   if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
   $('#demo').hidden = s.memory !== 'fake';   // the scripted demo only exists on throwaway memory, never on your real graph
   refreshSummary();
@@ -304,48 +480,71 @@ async function refreshStats() {
 $('#watch').onclick = async () => {
   const on = $('#watch').dataset.on === '1';
   try { await post('/api/watch/' + (on ? 'stop' : 'start')); $('#vstat').textContent = ''; }
-  catch (e) { let m = e.message; try { m = JSON.parse(m).detail || m; } catch (_) {} $('#vstat').textContent = m; log('miss', '⚠ ' + esc(m)); }
+  catch (e) { let m = e.message; try { m = JSON.parse(m).detail || m; } catch (_) {} $('#vstat').textContent = m; log('miss', esc(m)); }
   setTimeout(refreshStats, 1200);
 };
-$('#demo').onclick = () => post('/api/demo/replay?delay=2.5&scenario=home').then(() => log('new', 'demo replay started'));
 $('#setloc').onclick = async () => { const n = $('#locin').value.trim(); if (n) { await post('/api/location', { name:n }); $('#locin').value = ''; refreshStats(); } };
+$('#demo').onclick = () => post('/api/demo/replay?delay=2.5&scenario=home').then(() => log('new', 'demo replay started'));
+$('#newroom').onclick = async () => {
+  const st = await api('/api/state'), kind = (st.place && st.place.room_type && st.place.room_type !== 'unknown') ? st.place.room_type : 'Room';
+  const base = kind.replace(/\b\w/g, c => c.toUpperCase()), names = new Set((await api('/api/places')).places.map(p => p.name));
+  let i = 2; while (names.has(base + ' ' + i)) i++;
+  const n = prompt('Name of the new room (the robot is in it now)', base + ' ' + i); if (!n) return;
+  try { await post('/api/location', { name:n }); await post('/api/place', { mode:'auto' }); log('new', 'new room: <b>' + esc(n) + '</b>'); } catch (e) { alert(e.message); }
+  refreshStats();
+};
 $('#autoloc').onclick = async () => { await post('/api/place', { mode:'auto' }); refreshStats(); };
 
-/* ---------- memory lenses + ontology tab ---------- */
+/* ---------- theme ---------- */
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t; try { localStorage.setItem('pm_theme', t); } catch (e) {}
+  net.setOptions({ nodes:{ font:{ color:css('--ink'), size:11, face:FONT } }, edges:{ font:{ color:css('--mute'), size:9, face:FONT } } });
+  edges.clear(); setLens(lens);
+  if (!$('#placesview').hidden) loadPlaces(); if (!$('#schemaview').hidden) loadOntology();
+}
+$('#theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+
+/* ---------- lenses + tabs ---------- */
 function paintLens() { document.querySelectorAll('.lens').forEach(b => b.classList.toggle('on', b.dataset.lens === lens)); }
-function setLens(l) { lens = l; paintLens(); nodes.clear(); edges.clear(); window._lastNodeCount = -1; syncGraph(); }
+function setLens(l) { lens = l; userMoved = false; paintLens(); nodes.clear(); edges.clear(); window._lastNodeCount = -1; syncGraph(); }
 document.querySelectorAll('.lens').forEach(b => b.onclick = () => setLens(b.dataset.lens));
+$('#namsent').onchange = () => setLens(lens);
+$('#legend').addEventListener('click', e => { const t = e.target.closest('.rel'); if (!t) return; const r = t.dataset.rel; hiddenRel.has(r) ? hiddenRel.delete(r) : hiddenRel.add(r);
+  edges.update(edges.get().filter(x => x._rel === r).map(x => ({ id:x.id, hidden:hiddenRel.has(r) }))); t.classList.toggle('off', hiddenRel.has(r)); });
 async function refreshSummary() {
   try {
     const m = await api('/api/memory/summary');
-    $('#c-short').textContent = `${m.short.observations} obs · ${m.short.messages} msgs`;
+    $('#c-short').textContent = `${m.short.observations} sightings · ${m.short.messages} messages`;
     $('#c-long').textContent = `${m.long.objects} objects · ${m.long.relationships} facts`;
     $('#c-reasoning').textContent = `${m.reasoning.steps} steps · ${m.reasoning.tool_calls} lookups`;
   } catch (e) {}
 }
-let ontoNet = null, ontoLoaded = false;
-document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === b));
+const VIEWS = { graph:'#graphview', places:'#placesview', onto:'#schemaview', timeline:'#timelineview' };
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
   const t = b.dataset.tab;
-  $('#graphwrap').hidden = t !== 'graph'; $('#lenses').hidden = t !== 'graph'; $('#ontowrap').hidden = t !== 'onto'; $('#placeswrap').hidden = t !== 'places';
-  if (t === 'onto') loadOntology(); else if (t === 'places') loadPlaces(); else setTimeout(() => net.fit(), 100);
+  for (const [k, sel] of Object.entries(VIEWS)) $(sel).hidden = k !== t;
+  $('#lenses').style.visibility = t === 'graph' ? 'visible' : 'hidden';
+  const fail = e => { $(VIEWS[t]).insertAdjacentHTML('afterbegin', '<div style="padding:14px;color:var(--bad);font:12px var(--mono)">Could not load this view: ' + esc(e.message || e) + '</div>'); };
+  try { if (t === 'onto') loadOntology().catch(fail); else if (t === 'places') loadPlaces().catch(fail); else if (t === 'timeline') loadTimeline().catch(fail); else setTimeout(() => { net.redraw(); net.fit(); }, 100); } catch (e) { fail(e); }
 });
+
 /* ---------- places: where the robot is and how rooms connect ---------- */
 let placesNet = null;
 async function loadPlaces() {
   const d = await api('/api/places'), cur = d.current.name, M = MEM();
-  const nodesP = d.places.map(p => ({ id:p.name, label:`${p.name}\n${p.present} here${p.possibly_gone ? ' · ' + p.possibly_gone + ' gone' : ''}`, shape:'box', margin:10,
-    color:{ background: p.name === cur ? M.short : M.long, border: p.name === cur ? css('--ink') : M.long }, borderWidth: p.name === cur ? 4 : 2, font:{ color:'#111', size:13 },
+  const nodesP = d.places.map(p => ({ id:p.name, label:`${p.name}\n${p.present} here${p.possibly_gone ? ' · ' + p.possibly_gone + ' missing' : ''}`, shape:'box', margin:12,
+    color:{ background: p.name === cur ? css('--accent') : M.long, border: p.name === cur ? css('--ink') : M.long }, borderWidth: p.name === cur ? 3 : 1, font:{ color:'#fff', size:12, face:FONT },
     title:`${p.room_type}${p.provisional ? ' (discovered automatically: rename it)' : ''}` }));
   const seen = new Set(), edgesP = [];
-  for (const p of d.places) for (const a of p.adjacent) { const k = [p.name, a.place].sort().join('|'); if (!seen.has(k)) { seen.add(k); edgesP.push({ from:p.name, to:a.place, label:`${a.times}×`, width:1 + Math.min(5, a.times), color:{ color:css('--mute') }, font:{ size:10, color:css('--mute'), strokeWidth:0 } }); } }
+  for (const p of d.places) for (const a of p.adjacent) { const k = [p.name, a.place].sort().join('|'); if (!seen.has(k)) { seen.add(k); edgesP.push({ from:p.name, to:a.place, label:`${a.times}x`, width:1 + Math.min(5, a.times), color:{ color:css('--mute') }, font:{ size:10, color:css('--mute'), strokeWidth:0, face:FONT } }); } }
   const data = { nodes:new vis.DataSet(nodesP), edges:new vis.DataSet(edgesP) };
   if (placesNet) placesNet.destroy();
   placesNet = new vis.Network($('#placesmap'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-90, springLength:150 }, stabilization:{ iterations:150 } }, interaction:{ hover:true } });
   placesNet.once('stabilizationIterationsDone', () => placesNet.fit());
-  $('#placeslist').innerHTML = '<table><tr><th>Place</th><th>Room</th><th>Here</th><th>Gone</th><th>Sightings</th><th>Last seen</th><th></th></tr>' + d.places.map(p =>
-    `<tr${p.name === cur ? ' class="cur"' : ''}><td>${p.name === cur ? '📍 ' : ''}${esc(p.name)}${p.provisional ? ' <span class="tag">new</span>' : ''}</td><td>${esc(p.room_type)}</td><td>${p.present}</td><td>${p.possibly_gone}</td><td>${p.sightings}</td><td>${esc((p.last_seen || '').slice(0, 16).replace('T', ' '))}</td>`
-    + `<td><button class="ghost sm" data-act="rename" data-p="${esc(p.name)}">Rename</button> <button class="ghost sm" data-act="merge" data-p="${esc(p.name)}">Merge into…</button></td></tr>`).join('') + '</table>';
+  $('#placeslist').innerHTML = '<table><tr><th>Place</th><th>Room</th><th>Here</th><th>Missing</th><th>Sightings</th><th>Last seen</th><th></th></tr>' + d.places.map(p =>
+    `<tr${p.name === cur ? ' class="cur"' : ''}><td>${esc(p.name)}${p.name === cur ? ' <span class="tag ok">here</span>' : ''}${p.provisional ? ' <span class="tag">auto</span>' : ''}</td><td>${esc(p.room_type)}</td><td>${p.present}</td><td>${p.possibly_gone}</td><td>${p.sightings}</td><td>${esc((p.last_seen || '').slice(0, 16).replace('T', ' '))}</td>`
+    + `<td><button class="sm" data-act="rename" data-p="${esc(p.name)}">Rename</button> <button class="sm" data-act="merge" data-p="${esc(p.name)}">Merge</button></td></tr>`).join('') + '</table>';
   document.querySelectorAll('#placeslist button').forEach(b => b.onclick = async () => {
     const name = b.dataset.p;
     try {
@@ -356,29 +555,60 @@ async function loadPlaces() {
   });
 }
 
+/* ---------- timeline ---------- */
+async function loadTimeline() {
+  const rows = await api('/api/timeline?limit=80');
+  $('#timeline').innerHTML = rows.length ? rows.map(r => `<div class="tl"><span class="t">${esc((r.ts || '').slice(5, 19).replace('T', ' '))}</span><span><span class="tag">${esc(r.location || 'no place')}</span></span><span class="t">${r.n ?? 0} seen</span><span class="s">${esc(r.summary || '')}</span></div>`).join('')
+    : '<div class="tl"><span class="t">No sightings yet.</span></div>';
+}
+
+/* ---------- ontology ---------- */
+let ontoNet = null;
+const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Location', 'Object', 'Person'] },
+                short:{ y:60, label:'SHORT-TERM MEMORY: what is happening', order:['Session', 'Sighting', 'Dialogue', 'Utterance'] },
+                reasoning:{ y:270, label:'REASONING MEMORY: how answers were reached', order:['ReasoningStep', 'Lookup'] } };
 async function loadOntology() {
-  const o = await api('/api/ontology'), M = MEM();
-  const sz = n => 18 + 7 * Math.log2(1 + (n.count || 0));
-  const N = o.nodes.map(n => ({ id:n.id, label:`${n.label}\n(${n.count})`, shape:'ellipse', size:sz(n), margin:10,
-    color:{ background:M[n.memory], border:M[n.memory] }, font:{ color:'#111', size:13, multi:false }, _n:n }));
-  const E = o.edges.map((e, i) => ({ id:'e' + i, from:e.source, to:e.target, label:e.type + (e.count != null ? ` (${e.count})` : ''), arrows:'to',
-    color:{ color:M[e.memory] }, font:{ size:10, color:css('--mute'), strokeWidth:0 }, smooth:{ type:'curvedCW', roundness:.2 }, _e:e }));
+  const o = await api('/api/ontology'), M = MEM(), GAP = 230;
+  const pos = {};
+  for (const [layer, lane] of Object.entries(LANES)) {
+    const ids = [...lane.order, ...o.nodes.filter(n => n.memory === layer && !lane.order.includes(n.id)).map(n => n.id)];
+    ids.forEach((id, i) => pos[id] = { x: (i - (ids.length - 1) / 2) * GAP, y: lane.y });
+  }
+  const N = o.nodes.filter(n => pos[n.id]).map(n => ({ id:n.id, shape:'circle', x:pos[n.id].x, y:pos[n.id].y, fixed:true,
+    label: `${n.aura_label}\n${n.count}`, margin: 10 + 3.5 * Math.log2(1 + (n.count || 0)),
+    color:{ background:M[n.memory], border:M[n.memory], highlight:{ background:M[n.memory], border:css('--ink') } }, font:{ color:'#fff', size:12, face:FONT }, _n:n,
+    title: n.label !== n.aura_label ? `${n.label} in the NAMS ontology, :${n.aura_label} in Aura` : '' }));
+  // one arrow per pair of types, listing every relationship between them (7 parallel arrows on top of each other are unreadable)
+  const groups = {};
+  for (const e of o.edges) (groups[e.source + '>' + e.target] = groups[e.source + '>' + e.target] || []).push(e);
+  const E = Object.entries(groups).map(([k, list], i) => { const e0 = list[0], rev = !!groups[e0.target + '>' + e0.source] && e0.source !== e0.target;
+    const names = list.map(e => e.type + (e.count != null ? ` ${e.count}` : ''));
+    return { id:'e' + i, from:e0.source, to:e0.target, arrows:'to', width:1.4 + Math.min(2, list.length * .3),
+      label: names.length <= 4 ? names.join('\n') : names.slice(0, 3).join('\n') + `\n+${names.length - 3} more`,
+      color:{ color:M[e0.memory], highlight:M[e0.memory], opacity:.9 }, font:{ size:10, color:css('--ink'), face:FONT, strokeWidth:5, strokeColor:css('--canvas'), align:'middle' },
+      smooth: e0.source === e0.target ? undefined : { type: rev ? 'curvedCW' : 'continuous', roundness: rev ? .25 : .1 }, selfReference:{ size:34, angle:Math.PI / 4 }, _list:list }; });
   const data = { nodes:new vis.DataSet(N), edges:new vis.DataSet(E) };
   if (ontoNet) ontoNet.destroy();
-  ontoNet = new vis.Network($('#onto'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-120, springLength:170, damping:.6 }, stabilization:{ iterations:200 } },
-    nodes:{ borderWidth:2 }, edges:{ width:1.5 }, interaction:{ hover:true } });
-  ontoNet.once('stabilizationIterationsDone', () => ontoNet.fit());
+  ontoNet = new vis.Network($('#onto'), data, { physics:{ enabled:false }, interaction:{ hover:true }, nodes:{ borderWidth:2 } });
+  ontoNet.on('beforeDrawing', ctx => {   // the three memory layers as labelled bands
+    const dark = document.documentElement.dataset.theme === 'dark';
+    for (const [layer, lane] of Object.entries(LANES)) {
+      ctx.fillStyle = M[layer] + (dark ? '14' : '1c'); ctx.fillRect(-640, lane.y - 95, 1280, 190);
+      ctx.fillStyle = M[layer]; ctx.font = '600 11px ' + FONT; ctx.textAlign = 'left'; ctx.fillText(lane.label, -626, lane.y - 78);
+    }
+  });
+  setTimeout(() => ontoNet.fit({ nodes:[], animation:false }), 60);
   ontoNet.on('click', p => {
     const box = $('#ontodetail');
     if (p.nodes.length) { const n = data.nodes.get(p.nodes[0])._n;
-      box.innerHTML = `<b>${esc(n.label)}</b> <span class="tag">${esc(o.layers[n.memory])}</span>${n.pole ? ` <span class="tag">${esc(n.pole)}</span>` : ''}${n.pii ? ' <span class="tag">personal data</span>' : ''}<br>${esc(n.description)}<br>`
-        + `<span style="color:var(--mute)">Stored in Aura as :${esc(n.aura_label)} · ${n.count} now · properties: ${esc(n.properties.join(', ') || 'none')}</span>`; }
-    else if (p.edges.length) { const e = data.edges.get(p.edges[0])._e;
-      box.innerHTML = `<b>${esc(e.type)}</b> <span class="tag">${esc(o.layers[e.memory])}</span><br>(${esc(e.source)}) → (${esc(e.target)})<br>${esc(e.description || '')}${e.count != null ? `<br><span style="color:var(--mute)">${e.count} in your graph</span>` : ''}`; }
+      box.innerHTML = `<b>${esc(n.aura_label)}</b>${n.label !== n.aura_label ? ` <span class="tag">${esc(n.label)} in NAMS</span>` : ''} <span class="tag">${esc(o.layers[n.memory])}</span>${n.pole ? ` <span class="tag">${esc(n.pole)}</span>` : ''}${n.pii ? ' <span class="tag warn">personal data</span>' : ''}<br>${esc(n.description)}<br>`
+        + `<span style="color:var(--mute)">${n.count} now · properties: ${esc(n.properties.join(', ') || 'none')}</span>`; }
+    else if (p.edges.length) { const list = data.edges.get(p.edges[0])._list, e0 = list[0];
+      box.innerHTML = `<b>${esc(e0.source)} → ${esc(e0.target)}</b><br>` + list.map(e => `<div><span class="tag">${esc(e.type)}</span> ${esc(e.description || '')}${e.count != null ? ` <span style="color:var(--mute)">${e.count} in your graph</span>` : ''}</div>`).join(''); }
   });
   const nams = o.nams || {};
   $('#ontolegend').innerHTML = Object.entries(o.layers).map(([k, v]) => `<span><i style="background:${M[k]}"></i>${esc(v)}</span>`).join('')
-    + `<span>source: ${esc(o.source)}</span><span>NAMS: ${nams.auth === 'ok' ? 'connected' : nams.auth === 'invalid' ? 'key rejected' : 'not checked'}</span>`;
+    + `<span>circle size: how many exist</span><span>NAMS: ${nams.auth === 'ok' ? 'connected' : nams.auth === 'invalid' ? 'key rejected' : 'not checked'}</span>`;
 }
 
 /* ---------- keyboard drive ---------- */
@@ -394,8 +624,8 @@ const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
 function paintPad() {
   document.querySelectorAll('#pad button[data-k]').forEach(b => { const a = KEYMAP[b.dataset.k]; b.classList.toggle('on', !!a && held.has(a)); b.disabled = !armed; });
   $('#drive').classList.toggle('armed', armed);
-  $('#dstate').textContent = armed ? 'ARMED' : 'disarmed'; $('#dstate').style.color = armed ? 'var(--miss)' : '';
-  $('#arm').textContent = armed ? 'Disarm (Esc)' : 'Enable keyboard drive'; $('#spd').textContent = SPEEDS[speed];
+  $('#dstate').textContent = armed ? 'ARMED' : 'disarmed'; $('#dstate').className = 'tag' + (armed ? ' warn' : '');
+  $('#arm').textContent = armed ? 'Disarm (Esc)' : 'Enable keys'; $('#spd').textContent = SPEEDS[speed];
 }
 function stopAll() { held.clear(); send({ stop:true }); send({ cmd:{ x:0, y:0, yaw:0 } }); paintPad(); }
 function connectDrive() {
@@ -444,11 +674,19 @@ async function refreshDrive() {
   try {
     const s = await api('/api/drive/state');
     const rb = s.rosbridge;
-    $('#rstate').textContent = rb ? (rb.connected ? 'robot connected (rosbridge)' : 'robot not reachable') : (s.robot_online ? 'robot online' : 'robot offline');
-    $('#rstate').style.color = (rb ? rb.connected : s.robot_online) ? 'var(--new)' : '';
-    const hint = rb ? (rb.connected ? '' : 'Cannot reach the rosbridge of the robot (' + rb.url + '): ' + (rb.error || 'connecting...') + '. Is the laptop on the Wi-Fi of the robot?')
+    const up = rb ? rb.connected : s.robot_online;
+    $('#rstate').textContent = rb ? (rb.connected ? 'ROBOT CONNECTED' : 'ROBOT NOT REACHABLE') : (s.robot_online ? 'ROBOT ONLINE' : 'ROBOT OFFLINE');
+    $('#rstate').style.color = up ? 'var(--new)' : '';
+    const bt = $('#batt'), bar = $('#battbar'), kb = $('#k-batt');
+    if (rb && rb.battery_v != null) {
+      bt.textContent = `BATTERY ${rb.battery_v.toFixed(1)} V · ~${rb.battery_pct}%` + (rb.battery_level === 'low' ? ' · CHARGE SOON' : '');
+      bt.style.color = rb.battery_level === 'low' ? 'var(--miss)' : '';
+      bar.style.width = rb.battery_pct + '%'; bar.className = rb.battery_level === 'low' ? 'low' : '';
+      kb.textContent = rb.battery_pct + '%'; kb.className = rb.battery_level === 'low' ? 'warn' : '';
+    } else { bt.textContent = ''; bar.style.width = 0; kb.textContent = '--'; kb.className = ''; }
+    const hint = rb ? (rb.connected ? '' : 'Cannot reach the rosbridge of the robot (' + rb.url + '): ' + (rb.error || 'connecting...') + '. Is the laptop on the same Wi-Fi?')
                     : 'Robot is not polling this computer, so nothing will move. Start puppy_drive.py on the robot (see the terminal where you ran robot-test).';
-    const bad = armed && (rb ? !rb.connected : !s.robot_online);
+    const bad = armed && !up;
     if (bad) $('#dwarn').textContent = hint; else if (/^(Robot is not polling|Cannot reach)/.test($('#dwarn').textContent)) $('#dwarn').textContent = '';
     const v = $('#vstat');
     if (s.moving) v.textContent = 'moving: analysis paused'; else if (v.textContent.startsWith('moving')) v.textContent = '';
