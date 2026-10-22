@@ -48,6 +48,8 @@ uv run puppy-mind serve       # UI at http://localhost:8000
 Without the robot: `CAMERA_SOURCE=webcam:0 uv run puppy-mind watch`, or `folder:./frames` to replay photos.
 With the robot: see [docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md).
 
+Looking at the graph in Aura itself: use the per-question queries in [docs/AURA_VIEWS.md](docs/AURA_VIEWS.md), not `MATCH (n)-[r]->(m)`.
+
 ## Live view (camera + animated graph)
 `uv run puppy-mind serve`, open http://localhost:8000.
 * **Live camera**: MJPEG at `/api/stream`. Frames come from the robot (`robot/puppy_streamer.py` pushes ~3 fps to `/api/frame`)

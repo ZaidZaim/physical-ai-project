@@ -13,7 +13,7 @@ Place {placeId,name,roomType,visits}
 ```
 Labels in Aura are `Item` (ontology: Object), `Place` (Location), `Robot` (Agent), `Sighting` (a camera frame); see
 [ONTOLOGY_REVIEW.md](ONTOLOGY_REVIEW.md) for the modeling review against Neo4j best practices.
-Model, scenes, and PDF mapping: PDF's `OBSERVED`, `LOCATED_AT`, `NEXT_TO`, `CONTAINS`(= inverse of `INSIDE`),
+Model, scenes, and PDF mapping: PDF's `OBSERVED` (= `(Sighting)-[:DETECTED]->(Item)` of the robot's sessions), `LOCATED_AT`, `NEXT_TO`, `CONTAINS`(= inverse of `INSIDE`),
 `PREVIOUSLY_SEEN_AT` (= older `LOCATED_AT` edges / `DETECTED` history) are all represented.
 
 ## Ingestion pipeline (graph.Memory.ingest)
