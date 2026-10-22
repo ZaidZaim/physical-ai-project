@@ -50,6 +50,9 @@ try:
     m.ensure_place(LIVING, "living room", True)
     k1 = ing(KITCHEN, "kitchen", ("zzfridge", "white", "left"), ("zzchair", "brown", "center"), ("zzstove", "black", "right"))
     l1 = ing(LIVING, "living room", ("zzsofa", "grey", "left"), ("zzchair", "brown", "center"), ("zztv", "black", "right"))
+    fresh = m._read("MATCH (s:Sighting {source:$src})-[:TAKEN_AT]->(l:Place)<-[:LOCATED_AT]-(o:Item) "
+                    "RETURN [k IN keys(s) + keys(l) + keys(o) WHERE k CONTAINS '_'] AS snake LIMIT 1", src=SRC)
+    check("fresh writes use camelCase keys (before any migration runs)", fresh and not fresh[0]["snake"], fresh)
     ch = m._read("MATCH (o:Item {label:'zzchair'})-[:LOCATED_AT]->(l:Place) RETURN o.itemId AS id, l.name AS place ORDER BY l.name")
     check("the same kind of chair in two places is two different objects", len(ch) == 2 and ch[0]["id"] != ch[1]["id"], [c["place"][-8:] for c in ch])
 
