@@ -28,7 +28,7 @@ ALREADY_FACING_DEG = 12.0
 
 @dataclass
 class Plan:
-    kind: str  # turn | scan | here | route | unknown_route | no_heading | not_found
+    kind: str  # turn | scan | here | route | unknown_route | no_heading | no_place | not_found
     message: str
     target: dict[str, Any] | None = None
     turn_deg: float | None = None  # counter-clockwise positive (left), like the heading

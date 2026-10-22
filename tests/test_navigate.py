@@ -302,3 +302,13 @@ def test_brain_seen_now_matches_label_and_colour(brain):
     assert brain._seen_now({"label": "cat", "color": "gray"}, 1) is None
     assert brain._seen_now({"label": "cat", "color": "unknown"}, 1)["zone"] == "left"
     assert brain._seen_now({"label": "cat", "color": "gray", "id": "x"}, 1) is not None
+
+
+def test_brain_says_it_does_not_know_the_room_before_recognising_one(brain):
+    brain.observe_scene(scene(("cat", "gray", "left"), ("door", "white", "center")), location="Hallway")  # pinned: no recognition
+    brain.place_mode, brain.tracker.current, brain.location = "auto", None, "Demo Area"  # a fresh start in auto mode
+    brain.drive.arm(True)
+    out = brain.go_to("cat")
+    assert out["plan"]["kind"] == "no_place" and "Hallway" in out["plan"]["message"] and "Demo Area" not in out["plan"]["message"]
+    assert "run" not in out and not brain.drive.auto
+

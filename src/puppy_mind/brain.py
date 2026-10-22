@@ -21,7 +21,7 @@ from .config import Settings, get_settings
 from .drive import SETTLE_S, DriveState
 from .graph import Memory, now_iso
 from .models import Scene
-from .navigate import Navigator, pick_target, plan_go_to
+from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
@@ -322,6 +322,10 @@ class Brain:
     def go_to(self, label: str, color: str | None = None, execute: bool = True) -> dict[str, Any]:
         here, heading = self.location, self.heading.value()
         target = pick_target(self.mem.find_object(label, color), here)
+        if target and self.place_mode == "auto" and self.tracker.current is None:  # still on the default name: not a real place
+            where = f" It was last seen in {target['location']}." if target.get("location") else ""
+            return {"plan": Plan("no_place", f"I don't know which room I'm in yet.{where} Start the camera so I can recognise "
+                                             "the room, then ask again.", target).as_dict()}
         route = bearing = None
         if target and target.get("location") and target["location"] != here:
             route = self.mem.route_between(here, target["location"])
