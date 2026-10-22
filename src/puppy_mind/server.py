@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     if url:  # drive through the robot's own rosbridge: nothing to run on the robot
         from .rosbridge import RosbridgeDriver
 
-        brain.rosbridge = RosbridgeDriver(url, brain.drive, on_imu=brain.heading.feed).start()
+        brain.rosbridge = RosbridgeDriver(url, brain.drive, on_imu=lambda wz: brain.heading.feed(wz, still=not brain.drive.moving)).start()
     yield
     if getattr(brain, "rosbridge", None):
         brain.rosbridge.close()

@@ -84,8 +84,8 @@ class Brain:
         self._room_checks: dict[str, int] = {}
         self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
         self.heading_epoch = now_iso()  # when the current heading frame began: bearings recorded before it are in another frame
-        self.obs_seq = 0  # stored observations so far; the navigator waits for it to move
-        self.last_objects: list[dict] = []  # what the latest stored observation detected (label, color, zone)
+        self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
+        self.last_objects: list[dict] = []  # what the latest checked view showed (label, color, zone; id once stored)
         self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
                              seen_fn=self._seen_now, fov_deg=self.s.camera_fov_deg, settle_s=SETTLE_S,
                              obs_wait_s=self.s.watch_interval_s * 2 + 5)
@@ -141,6 +141,7 @@ class Brain:
             res = self.observe_frame(jpeg, source=source, location=location)
             if "skipped" in res:
                 self.bus.publish("status", {"state": "idle", "note": res["skipped"]})
+            self.obs_seq += 1  # a near-duplicate keeps last_objects: same view, same things
         except Exception as e:  # keep the loop alive through API/network errors
             self.bus.publish("error", {"error": str(e)[:300]})
         finally:
@@ -161,6 +162,7 @@ class Brain:
 
     def observe_scene(self, scene: Scene, *, source: str = "camera", location: str | None = None,
                       jpeg: bytes | None = None, ts: str | None = None) -> dict[str, Any]:
+        self.last_objects = [{"label": o.label.lower(), "color": o.color.lower(), "zone": o.zone} for o in scene.objects]
         if not scene.objects:  # blur, darkness, a turn in progress: says nothing about the world, so it is not stored (and cannot cause misses)
             return {"skipped": "nothing recognised in this frame", "location": self.location}
         uncertain, place_conf, changed = False, None, False
@@ -208,7 +210,7 @@ class Brain:
         if hasattr(self.mem, "set_robot_place"):
             self.mem.set_robot_place(loc, heading)
         self._remember_view(loc, jpeg)
-        self.last_objects, self.obs_seq = res["objects"], self.obs_seq + 1
+        self.last_objects = res["objects"]
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {

@@ -52,21 +52,31 @@ def direction_words(rel_deg: float) -> str:
 
 
 class HeadingTracker:
-    def __init__(self, stale_s: float = 3.0, deadband_rad_s: float = 0.004):
+    """Integrates the gyro yaw rate. The PuppyPi's gyro has a constant bias (measured: about -0.42 deg/s, 25 deg a minute, standing
+    still), so the bias is estimated while the robot is still and subtracted; otherwise a bearing from a minute ago points the wrong way."""
+
+    def __init__(self, stale_s: float = 3.0, deadband_rad_s: float = 0.004, bias_tau_s: float = 8.0, still_rad_s: float = 0.02):
         self.stale_s, self.deadband = stale_s, deadband_rad_s
+        self.bias_tau, self.still_rad_s = bias_tau_s, still_rad_s
+        self.bias = 0.0  # rad/s, slow average of the rate while still
         self._yaw = 0.0  # radians since reset
         self._t: float | None = None
         self._last_msg: float | None = None
         self._lock = threading.Lock()
 
-    def feed(self, wz: float, t: float | None = None) -> None:
-        """One gyro sample: yaw rate in rad/s. t is a monotonic timestamp (defaults to now)."""
+    def feed(self, wz: float, t: float | None = None, still: bool | None = None) -> None:
+        """One gyro sample: yaw rate in rad/s. t is a monotonic timestamp (defaults to now). still: the robot is known to be standing
+        still (not commanded to move); None = guess from the rate itself. Still samples teach the bias."""
         now = time.monotonic() if t is None else t
         with self._lock:
             if self._t is not None:
                 dt = now - self._t
-                if 0.0 < dt < 0.5 and abs(wz) > self.deadband:  # the deadband stops a still gyro from creeping
-                    self._yaw += wz * dt
+                if 0.0 < dt < 0.5:
+                    if still or (still is None and abs(wz) < self.still_rad_s):
+                        self.bias += (wz - self.bias) * min(1.0, dt / self.bias_tau)
+                    rate = wz - self.bias
+                    if abs(rate) > self.deadband:  # the deadband stops a still gyro from creeping
+                        self._yaw += rate * dt
             self._t = now
             self._last_msg = time.monotonic()
 
