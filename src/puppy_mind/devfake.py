@@ -180,6 +180,9 @@ class FakeMemory:
             return best[0]
         return None
 
+    def object_ids_at(self, place):
+        return [o["id"] for o in self.objs.values() if o["loc"] == place]
+
     def merge_places(self, src, dst):
         if src == dst or src not in self.places or dst not in self.places:
             return False
