@@ -5,7 +5,7 @@ Two graphs, each doing what it is best at, cross-linked.
 | | Aura (`graph.py`) | NAMS (`nams.py`) |
 |---|---|---|
 | Role | Authoritative **physical world model** | **Semantic + episodic** memory around it |
-| Holds | Object / Location / Observation, `ON`/`NEXT_TO`... with `since`/`until`/`ended_by`, `possibly_gone`, miss counters | Entities (Robot, Place, PhysicalObject, Person if consented), asserted relationships, a **narrative log**, Q&A, reasoning traces |
+| Holds | Object / Location / Observation, `ON`/`NEXT_TO`... with `since`/`until`/`endedBy`, `possibly_gone`, miss counters | Entities (Robot, Place, PhysicalObject, Person if consented), asserted relationships, a **narrative log**, Q&A, reasoning traces |
 | Good at | Exact, temporal questions: *what is on the table now? what changed? where was X last seen?* | Meaning and recall: *what did a visitor ask earlier? what story did the day tell?* (NAMS builds Observations and Reflections from the narrative messages) |
 | Cannot | Fuzzy semantic recall | Update/delete relationships (create-only), update entity properties (name/description only), so it cannot be the time-aware truth |
 
@@ -34,7 +34,7 @@ The **Ontology** tab draws the schema itself: domain types from `ontology/puppy_
 ## What flows where
 Every observation (after Aura ingestion succeeds), on a background thread:
 1. **Entities** (bulk; NAMS resolves duplicates by name+type): `Robot` (PuppyPi), `Place` (e.g. Booth), `PhysicalObject` per object instance.
-   Look-alikes get distinct names (`black chair`, `black chair #2`). The NAMS id is stored back on the Aura node (`nams_id`, `nams_name`).
+   Look-alikes get distinct names (`black chair`, `black chair #2`). The NAMS id is stored back on the Aura node (`namsId`, `namsName`).
 2. **Relationships**: `OBSERVED` (robot to object, confidence), `LOCATED_AT` (new objects), and the spatial ones
    (`ON`, `INSIDE`, `NEXT_TO`, `NEAR`, `IN_FRONT_OF`, `BEHIND`) with `observed_at`, `observation_id`, `location`.
 3. **Narrative message** to an *observations* conversation: one block per observation (seen, new, spatial, possibly gone).

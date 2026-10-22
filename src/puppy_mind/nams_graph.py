@@ -32,8 +32,8 @@ def link_entities(mem) -> int:
     """(:Object)-[:MIRRORED_BY]->(:Entity) for every object we have mirrored into NAMS. Idempotent; skips entities NAMS has not written yet."""
     rows = mem._write(
         """
-        MATCH (o:Item) WHERE o.nams_id IS NOT NULL
-        MATCH (e:Entity {id: o.nams_id})
+        MATCH (o:Item) WHERE o.namsId IS NOT NULL
+        MATCH (e:Entity {id: o.namsId})
         MERGE (o)-[:MIRRORED_BY]->(e)
         RETURN count(*) AS n
         """
@@ -50,7 +50,7 @@ def link_step(mem, step_id: str, object_ids: list[str], attempts: int = 5) -> in
             """
             MATCH (st:AgentStep {id: $sid})
             UNWIND $ids AS oid
-            MATCH (o:Item {id: oid})
+            MATCH (o:Item {itemId: oid})
             MERGE (st)-[:RELIED_ON]->(o)
             RETURN count(*) AS n
             """,
@@ -90,7 +90,7 @@ def entities(mem, limit: int = 60) -> dict[str, list]:
     ids = [e["id"] for e in ents]
     rel = mem._read("MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity) WHERE a.id IN $ids AND b.id IN $ids "
                     "RETURN a.id AS a, b.id AS b, coalesce(r.predicate, 'related') AS predicate", ids=ids)
-    mirror = mem._read("MATCH (o:Item)-[:MIRRORED_BY]->(e:Entity) WHERE e.id IN $ids RETURN o.id AS a, e.id AS b", ids=ids)
+    mirror = mem._read("MATCH (o:Item)-[:MIRRORED_BY]->(e:Entity) WHERE e.id IN $ids RETURN o.itemId AS a, e.id AS b", ids=ids)
     return {"entities": ents, "related": rel, "mirrored": mirror}
 
 
@@ -120,7 +120,7 @@ def reasoning(mem, limit: int = 8) -> dict[str, list]:
     )
     ids = [s["id"] for s in steps]
     tools = mem._read("MATCH (st:AgentStep)-[:USED_TOOL]->(t:ToolCall) WHERE st.id IN $ids RETURN st.id AS a, t.id AS id, t.toolName AS name", ids=ids)
-    relied = mem._read("MATCH (st:AgentStep)-[:RELIED_ON]->(o:Item) WHERE st.id IN $ids RETURN st.id AS a, o.id AS b", ids=ids)
+    relied = mem._read("MATCH (st:AgentStep)-[:RELIED_ON]->(o:Item) WHERE st.id IN $ids RETURN st.id AS a, o.itemId AS b", ids=ids)
     return {"steps": steps, "tools": tools, "relied": relied}
 
 
@@ -160,7 +160,7 @@ def add_to_snapshot(mem, lens: str, node, edge, show_entities: bool = True, node
                 edge("nstep:" + t["a"], "ntool:" + t["id"], "MADE_LOOKUP", "reasoning")
             ids = sorted({r["b"] for r in d["relied"]})
             if ids:
-                for n in mem._read("MATCH (o:Item) WHERE o.id IN $ids RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status", ids=ids):
+                for n in mem._read("MATCH (o:Item) WHERE o.itemId IN $ids RETURN o.itemId AS id, o.label AS label, o.color AS color, o.status AS status", ids=ids):
                     node(n["id"], "Object", n["label"], "long", color=n["color"], status=n["status"])
             for r in d["relied"]:
                 edge("nstep:" + r["a"], r["b"], "RELIED_ON", "reasoning")

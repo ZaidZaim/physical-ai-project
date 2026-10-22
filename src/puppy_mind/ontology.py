@@ -5,8 +5,8 @@ Memory layers (context-graph model, as in the Neo4j agent-memory design):
   long-term   what is known: entities and facts (Robot, Place, PhysicalObject, Person) and the spatial relationships between them
   reasoning   how answers were reached: ReasoningStep -> Lookup, with RELIED_ON links to the entities that mattered
 
-The domain part comes from ontology/puppy_pi.json (the same file `nams-setup` sends to NAMS). Aura stores PhysicalObject as :Object and
-Place as :Location; counts below are live from Aura.
+The domain part comes from ontology/puppy_pi.json (the same file `nams-setup` sends to NAMS). Aura stores the ontology's Object as :Item,
+Location as :Place and Agent as :Robot (see AURA_LABEL); counts below are live from Aura.
 """
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ AURA_LABEL = {"Agent": "Robot", "Location": "Place", "Object": "Item"}  # ontolo
 
 # agent-memory types (not in the domain file): label, memory layer, description, properties
 MEMORY_TYPES = [
-    ("Session", "short", "One run of the app; groups the observations and conversation of that run.", ["id", "started_at"]),
-    ("Sighting", "short", "One analysed camera frame: what was seen at a place at a time.", ["id", "ts", "summary", "source", "n_objects"]),
-    ("Dialogue", "short", "A chat with the robot (one per session).", ["id", "started_at"]),
+    ("Session", "short", "One run of the app; groups the observations and conversation of that run.", ["id", "startedAt"]),
+    ("Sighting", "short", "One analysed camera frame: what was seen at a place at a time.", ["id", "ts", "summary", "source", "objectCount"]),
+    ("Dialogue", "short", "A chat with the robot (one per session).", ["id", "startedAt"]),
     ("Utterance", "short", "One question or answer, chained in order with FOLLOWED_BY.", ["id", "role", "content", "ts"]),
     ("ReasoningStep", "reasoning", "One reasoning step: the action taken and why, with its result.", ["id", "action", "reasoning", "result", "ts"]),
     ("Lookup", "reasoning", "One memory lookup made during a step: tool name, input, output.", ["id", "name", "input", "output", "seq"]),
@@ -33,7 +33,7 @@ MEMORY_EDGES = [
     ("CURRENTLY_IN", "Agent", "Location", "long", "where the robot is now (one edge, moved as it moves; carries heading)"),
     ("DETECTED", "Sighting", "Object", "short", "this frame showed the object (with confidence and bearing)"),
     ("MISSED", "Sighting", "Object", "short", "expected here but not detected (not proof it is gone)"),
-    ("AT", "Sighting", "Location", "short", "where the frame was taken"),
+    ("TAKEN_AT", "Sighting", "Location", "short", "where the frame was taken"),
     ("IN_SESSION", "Sighting", "Session", "short", ""),
     ("IN_SESSION", "Dialogue", "Session", "short", ""),
     ("HAS_UTTERANCE", "Dialogue", "Utterance", "short", ""),

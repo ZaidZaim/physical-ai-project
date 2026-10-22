@@ -1,15 +1,16 @@
 """Neo4j (Aura) contextual memory: ingestion with entity matching + temporal queries.
 
-Model
-  (Robot)-[:OBSERVED]->(Object)
-  (Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:AT]->(Place)   (the robot of a sighting is reached via its session: no
-                                                                          per-sighting edge into Robot, which would make it a supernode)
-  (Sighting)-[:DETECTED {confidence, zone}]->(Object)
-  (Sighting)-[:MISSED]->(Object)           evidence of absence (not proof of removal)
-  (Object)-[:LOCATED_AT {first_seen,last_seen,count}]->(Place)
-  (Object)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,last_confirmed}]->(Object)
+Model (property keys camelCase; Python/JSON field names stay snake_case via RETURN aliases)
+  (Robot)-[:OBSERVED]->(Item)
+  (Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:TAKEN_AT]->(Place)   (the robot of a sighting is reached via its session:
+                                                                             no per-sighting edge into Robot, which would make it a supernode)
+  (Sighting)-[:DETECTED {confidence, zone, bearing}]->(Item)
+  (Sighting)-[:MISSED]->(Item)           evidence of absence (not proof of removal)
+  (Item)-[:LOCATED_AT {firstSeen,lastSeen,count}]->(Place)
+  (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed,lastObs,endedBy}]->(Item)
+  Item {itemId,label,color,status,firstSeen,lastSeen,seenCount,missCount,lastZone,lastBearing}   Place {placeId,name,roomType,visits}
 
-Object.status: present | possibly_gone (>= MISS_THRESHOLD consecutive misses at the same location)
+Item.status: present | possibly_gone (>= MISS_THRESHOLD consecutive misses at the same location)
 """
 from __future__ import annotations
 
@@ -29,6 +30,21 @@ from .pose import bearing_of, in_view
 from .spatial import TRANSIENT
 
 REL_ALT = "|".join(PREDICATES)
+# Keys older versions stored, renamed on startup to Neo4j's camelCase convention (ids qualified: itemId, placeId).
+RENAMED_NODE_KEYS = {
+    "Item": {"id": "itemId", "first_seen": "firstSeen", "last_seen": "lastSeen", "seen_count": "seenCount", "miss_count": "missCount",
+             "last_zone": "lastZone", "last_bearing": "lastBearing", "last_confidence": "lastConfidence", "nams_id": "namsId",
+             "nams_name": "namsName"},
+    "Place": {"id": "placeId", "room_type": "roomType", "created_at": "createdAt", "last_visit": "lastVisit"},
+    "Sighting": {"n_objects": "objectCount", "room_type": "roomType", "place_confidence": "placeConfidence", "image_ref": "imageRef"},
+    "Session": {"started_at": "startedAt"},
+    "Dialogue": {"started_at": "startedAt"},
+}
+RENAMED_REL_KEYS = {
+    "LOCATED_AT": {"first_seen": "firstSeen", "last_seen": "lastSeen"},
+    "ADJACENT_TO": {"first_seen": "firstSeen", "last_seen": "lastSeen"},
+    **{p: {"ended_by": "endedBy", "last_confirmed": "lastConfirmed", "last_obs": "lastObs"} for p in PREDICATES},
+}
 _WRITE_WORDS = re.compile(
     r"\b(create|merge|delete|detach|set|remove|drop|load|foreach|call\s+(apoc|dbms))\b", re.I
 )
@@ -82,7 +98,6 @@ class Memory:
                 pass
         self._write("MATCH (o:Object) WHERE NOT o:Entity AND o.id STARTS WITH 'obj-' SET o:Item REMOVE o:Object")
         self._write("MATCH (l:Location) WHERE NOT l:Entity AND (l.id IS NULL OR l.id STARTS WITH 'plc-') SET l:Place REMOVE l:Location")
-        self._write("MATCH (l:Place) WHERE l.id IS NULL SET l.id = 'plc-' + substring(randomUUID(), 0, 8)")  # every place gets a stable id
         # (Sighting)-[:CAPTURED_BY]->(Robot) made Robot a supernode (one edge per frame) and is derivable via Session: keep RAN, drop it
         self._write("MATCH (r:Robot)-[:CAPTURED_BY]-(:Sighting)-[:IN_SESSION]->(s:Session) MERGE (r)-[:RAN]->(s)")
         self._write("MATCH (:Sighting)-[c:CAPTURED_BY]->(:Robot) DELETE c")
@@ -91,16 +106,38 @@ class Memory:
                 self._write(q)
             except ClientError:
                 pass
+        self._write("MATCH (s:Sighting)-[a:AT]->(p:Place) MERGE (s)-[:TAKEN_AT]->(p) DELETE a")  # AT read too tersely
+
+    def _migrate_keys(self) -> None:
+        """Rename property keys older versions stored (snake_case, bare `id`) to camelCase. Idempotent: a no-op once done.
+
+        NAMS's own nodes can carry one of our labels (its extracted entities get their type as a label, e.g. a :Session:Entity), so
+        anything with :Entity is left alone. The constraints on the old keys are dropped first; init_schema creates the new ones.
+        """
+        for q in ("DROP CONSTRAINT item_id IF EXISTS", "DROP CONSTRAINT place_id IF EXISTS", "DROP CONSTRAINT item_seen_count_type IF EXISTS"):
+            try:
+                self._write(q)
+            except ClientError:
+                pass
+        for label, keys in RENAMED_NODE_KEYS.items():
+            self._write(
+                f"UNWIND $pairs AS p MATCH (n:{label}) WHERE n[p.old] IS NOT NULL AND NOT n:Entity SET n[p.new] = n[p.old], n[p.old] = null",
+                pairs=[{"old": o, "new": n} for o, n in keys.items()])
+        for rel, keys in RENAMED_REL_KEYS.items():
+            self._write(f"UNWIND $pairs AS p MATCH ()-[r:{rel}]->() WHERE r[p.old] IS NOT NULL SET r[p.new] = r[p.old], r[p.old] = null",
+                        pairs=[{"old": o, "new": n} for o, n in keys.items()])
+        self._write("MATCH (l:Place) WHERE l.placeId IS NULL SET l.placeId = 'plc-' + substring(randomUUID(), 0, 8)")  # every place gets a stable id
 
     def init_schema(self) -> None:
         self._migrate_labels()
+        self._migrate_keys()
         for q in [
-            "CREATE CONSTRAINT item_id IF NOT EXISTS FOR (n:Item) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT item_item_id IF NOT EXISTS FOR (n:Item) REQUIRE n.itemId IS UNIQUE",
             "CREATE CONSTRAINT sighting_id IF NOT EXISTS FOR (n:Sighting) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT place_name IF NOT EXISTS FOR (n:Place) REQUIRE n.name IS UNIQUE",
             "CREATE CONSTRAINT robot_name IF NOT EXISTS FOR (n:Robot) REQUIRE n.name IS UNIQUE",
-            "CREATE CONSTRAINT place_id IF NOT EXISTS FOR (n:Place) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT place_place_id IF NOT EXISTS FOR (n:Place) REQUIRE n.placeId IS UNIQUE",
             "CREATE CONSTRAINT dialogue_id IF NOT EXISTS FOR (n:Dialogue) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT utterance_id IF NOT EXISTS FOR (n:Utterance) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT reasoning_step_id IF NOT EXISTS FOR (n:ReasoningStep) REQUIRE n.id IS UNIQUE",
@@ -120,7 +157,7 @@ class Memory:
             "CREATE CONSTRAINT sighting_ts_exists IF NOT EXISTS FOR (n:Sighting) REQUIRE n.ts IS NOT NULL",
             "CREATE CONSTRAINT sighting_ts_type IF NOT EXISTS FOR (n:Sighting) REQUIRE n.ts IS :: ZONED DATETIME",
             "CREATE CONSTRAINT item_status_type IF NOT EXISTS FOR (n:Item) REQUIRE n.status IS :: STRING",
-            "CREATE CONSTRAINT item_seen_count_type IF NOT EXISTS FOR (n:Item) REQUIRE n.seen_count IS :: INTEGER",
+            "CREATE CONSTRAINT item_seen_count_integer IF NOT EXISTS FOR (n:Item) REQUIRE n.seenCount IS :: INTEGER",
         ]:
             try:
                 self._write(q)
@@ -129,15 +166,16 @@ class Memory:
         self._write("MERGE (:Robot {name:$n})", n=self.s.robot_name)
 
     def reset(self) -> None:
-        """Delete all memory THIS APP owns. Never touches labels owned by NAMS (Entity, Conversation, Message, ...)."""
+        """Delete all memory THIS APP owns. Never touches NAMS's nodes (labels Entity, Conversation, Message, ...), not even one
+        that carries one of our labels: NAMS gives an extracted entity its type as a label (a "Session" event became :Session:Entity)."""
         for lbl in ("Sighting", "Item", "Session", "Place", "Robot", "Dialogue", "Utterance", "ReasoningStep", "Lookup"):
-            self._write(f"MATCH (n:{lbl}) DETACH DELETE n")
+            self._write(f"MATCH (n:{lbl}) WHERE NOT n:Entity DETACH DELETE n")
 
     def start_session(self, session_id: str | None = None) -> str:
         sid = session_id or f"session-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         self._write(
             "MERGE (r:Robot {name:$r}) "
-            "MERGE (s:Session {id:$sid}) ON CREATE SET s.started_at=datetime($ts) "
+            "MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt=datetime($ts) "
             "MERGE (r)-[:RAN]->(s)",
             sid=sid, ts=now_iso(), r=self.s.robot_name,
         )
@@ -174,8 +212,8 @@ class Memory:
             """
             MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$loc})
             OPTIONAL MATCH (o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.active
-            RETURN o.id AS id, o.label AS label, coalesce(o.color,'unknown') AS color,
-                   coalesce(o.last_zone,'unknown') AS zone, o.status AS status, o.last_bearing AS bearing,
+            RETURN o.itemId AS id, o.label AS label, coalesce(o.color,'unknown') AS color,
+                   coalesce(o.lastZone,'unknown') AS zone, o.status AS status, o.lastBearing AS bearing,
                    collect(DISTINCT [type(r), b.label]) AS anchors
             """,
             loc=location, preds=list(PREDICATES),
@@ -252,32 +290,32 @@ class Memory:
         self._write(
             """
             MERGE (l:Place {name:$loc})
-              ON CREATE SET l.id = 'plc-' + substring(randomUUID(), 0, 8), l.room_type = coalesce($room, 'unknown'), l.provisional = false,
-                            l.created_at = datetime($ts), l.visits = 0
+              ON CREATE SET l.placeId = 'plc-' + substring(randomUUID(), 0, 8), l.roomType = coalesce($room, 'unknown'), l.provisional = false,
+                            l.createdAt = datetime($ts), l.visits = 0
             MERGE (r:Robot {name:$robot})
-            MERGE (s:Session {id:$sid}) ON CREATE SET s.started_at = datetime($ts)
+            MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt = datetime($ts)
             CREATE (ob:Sighting {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
                                     image_ref:$img, n_objects:$n, room_type:$room, overlap:$overlap,
                                     place_confidence:$pc, heading:$heading})
             MERGE (r)-[:RAN]->(s)
             MERGE (ob)-[:IN_SESSION]->(s)
-            MERGE (ob)-[:AT]->(l)
+            MERGE (ob)-[:TAKEN_AT]->(l)
             WITH ob, l, r
             UNWIND $dets AS d
-            MERGE (o:Item {id:d.id})
-              ON CREATE SET o.label=d.label, o.first_seen=datetime($ts), o.seen_count=0, o.miss_count=0
+            MERGE (o:Item {itemId:d.id})
+              ON CREATE SET o.label=d.label, o.firstSeen=datetime($ts), o.seenCount=0, o.missCount=0
             SET o.color = CASE WHEN d.color IN ['unknown',''] THEN coalesce(o.color,'unknown') ELSE d.color END,
                 o.description = CASE WHEN d.description='' THEN o.description ELSE d.description END,
-                o.last_seen=datetime($ts), o.last_zone=d.zone, o.last_confidence=d.conf,
-                o.last_bearing = CASE WHEN d.bearing IS NULL THEN o.last_bearing ELSE d.bearing END,
-                o.seen_count=o.seen_count+1, o.miss_count=0, o.status='present'
+                o.lastSeen=datetime($ts), o.lastZone=d.zone, o.lastConfidence=d.conf,
+                o.lastBearing = CASE WHEN d.bearing IS NULL THEN o.lastBearing ELSE d.bearing END,
+                o.seenCount=o.seenCount+1, o.missCount=0, o.status='present'
             MERGE (ob)-[dt:DETECTED]->(o)
             SET dt.confidence = d.conf, dt.zone = d.zone, dt.bearing = d.bearing  // SET accepts a null bearing; MERGE would refuse it
             MERGE (r)-[ro:OBSERVED]->(o) ON CREATE SET ro.first=datetime($ts)
             SET ro.last=datetime($ts)
             MERGE (o)-[la:LOCATED_AT]->(l)
-              ON CREATE SET la.first_seen=datetime($ts), la.count=0
-            SET la.last_seen=datetime($ts), la.count=la.count+1
+              ON CREATE SET la.firstSeen=datetime($ts), la.count=0
+            SET la.lastSeen=datetime($ts), la.count=la.count+1
             """,
             loc=location, robot=self.s.robot_name, sid=session_id, ts=ts, obs=obs_id,
             summary=scene.summary, source=source, img=image_ref, n=len(det_rows), dets=det_rows,
@@ -295,11 +333,11 @@ class Memory:
             self._write(
                 f"""
                 UNWIND $items AS it
-                MATCH (a:Item {{id:it.a}}), (b:Item {{id:it.b}})
+                MATCH (a:Item {{itemId:it.a}}), (b:Item {{itemId:it.b}})
                 MERGE (a)-[r:{pred}]->(b)
                   ON CREATE SET r.since=datetime($ts), r.count=0
-                SET r.active=true, r.until=null, r.ended_by=null, r.last_confirmed=datetime($ts),
-                    r.count=r.count+1, r.confidence=it.conf, r.last_obs=$obs
+                SET r.active=true, r.until=null, r.endedBy=null, r.lastConfirmed=datetime($ts),
+                    r.count=r.count+1, r.confidence=it.conf, r.lastObs=$obs
                 """,
                 items=items, ts=ts, obs=obs_id,
             )
@@ -309,9 +347,9 @@ class Memory:
             self._write(
                 f"""
                 MATCH (a:Item)-[old:{pred}]->(:Item)
-                WHERE a.id IN $vis AND old.active AND old.last_obs <> $obs
-                  AND EXISTS {{ (a)-[cur:{pred}]->(:Item) WHERE cur.last_obs = $obs }}
-                SET old.active=false, old.until=datetime($ts), old.ended_by='superseded'
+                WHERE a.itemId IN $vis AND old.active AND old.lastObs <> $obs
+                  AND EXISTS {{ (a)-[cur:{pred}]->(:Item) WHERE cur.lastObs = $obs }}
+                SET old.active=false, old.until=datetime($ts), old.endedBy='superseded'
                 """,
                 vis=visible, ts=ts, obs=obs_id,
             )
@@ -319,8 +357,8 @@ class Memory:
         self._write(
             f"""
             MATCH (a:Item)-[r:{REL_ALT}]->(b:Item)
-            WHERE a.id IN $vis AND b.id IN $vis AND r.active AND r.last_obs <> $obs
-            SET r.active=false, r.until=datetime($ts), r.ended_by='not_reseen'
+            WHERE a.itemId IN $vis AND b.itemId IN $vis AND r.active AND r.lastObs <> $obs
+            SET r.active=false, r.until=datetime($ts), r.endedBy='not_reseen'
             """,
             vis=visible, ts=ts, obs=obs_id,
         )
@@ -331,11 +369,11 @@ class Memory:
             """
             MATCH (ob:Sighting {id:$obs})
             MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$loc})
-            WHERE NOT o.id IN $vis AND o.status IN ['present','possibly_gone'] AND o.id IN $elig
-            SET o.miss_count = coalesce(o.miss_count,0)+1
-            SET o.status = CASE WHEN o.miss_count >= $thr THEN 'possibly_gone' ELSE o.status END
+            WHERE NOT o.itemId IN $vis AND o.status IN ['present','possibly_gone'] AND o.itemId IN $elig
+            SET o.missCount = coalesce(o.missCount,0)+1
+            SET o.status = CASE WHEN o.missCount >= $thr THEN 'possibly_gone' ELSE o.status END
             MERGE (ob)-[:MISSED]->(o)
-            RETURN o.id AS id, o.label AS label, o.miss_count AS misses, o.status AS status
+            RETURN o.itemId AS id, o.label AS label, o.missCount AS misses, o.status AS status
             """,
             loc=location, vis=visible, obs=obs_id, thr=self.s.miss_threshold, elig=eligible,
         )
@@ -345,8 +383,8 @@ class Memory:
             self._write(
                 f"""
                 MATCH (a:Item)-[r:{REL_ALT}]->(:Item)
-                WHERE a.id IN $gone AND r.active
-                SET r.active=false, r.until=datetime($ts), r.ended_by='possibly_gone'
+                WHERE a.itemId IN $gone AND r.active
+                SET r.active=false, r.until=datetime($ts), r.endedBy='possibly_gone'
                 """,
                 gone=gone_ids, ts=ts,
             )
@@ -372,15 +410,15 @@ class Memory:
     def current_view(self, location: str | None = None) -> dict[str, Any]:
         rows = self._read(
             """
-            MATCH (ob:Sighting) WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
+            MATCH (ob:Sighting) WHERE $loc IS NULL OR EXISTS { (ob)-[:TAKEN_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
             WITH ob ORDER BY ob.ts DESC LIMIT 1
             OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Item)
-            OPTIONAL MATCH (o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.last_obs = ob.id
+            OPTIONAL MATCH (o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.lastObs = ob.id
             RETURN ob.id AS observation, toString(ob.ts) AS ts, ob.summary AS summary,
-                   [x IN collect(DISTINCT {id:o.id, label:o.label, color:o.color, zone:d.zone,
+                   [x IN collect(DISTINCT {id:o.itemId, label:o.label, color:o.color, zone:d.zone,
                                            confidence:d.confidence}) WHERE x.id IS NOT NULL] AS objects,
-                   [x IN collect(DISTINCT {subject:o.label+' '+o.id, predicate:type(r),
-                                           object:b.label+' '+b.id}) WHERE x.predicate IS NOT NULL] AS relations
+                   [x IN collect(DISTINCT {subject:o.label+' '+o.itemId, predicate:type(r),
+                                           object:b.label+' '+b.itemId}) WHERE x.predicate IS NOT NULL] AS relations
             """,
             loc=location, preds=list(PREDICATES),
         )
@@ -400,22 +438,22 @@ class Memory:
               AND ($color IS NULL OR toLower(coalesce(o.color,'')) = toLower($color))
             CALL (o) {
               OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Place)
-              RETURN l.name AS location ORDER BY la.last_seen DESC LIMIT 1
+              RETURN l.name AS location ORDER BY la.lastSeen DESC LIMIT 1
             }
-            RETURN o.id AS id, o.label AS label, o.color AS color, o.description AS description,
-                   o.status AS status, o.miss_count AS consecutive_misses, o.seen_count AS times_seen,
-                   toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
-                   o.last_zone AS last_zone, o.last_bearing AS last_bearing, location,
+            RETURN o.itemId AS id, o.label AS label, o.color AS color, o.description AS description,
+                   o.status AS status, o.missCount AS consecutive_misses, o.seenCount AS times_seen,
+                   toString(o.firstSeen) AS first_seen, toString(o.lastSeen) AS last_seen,
+                   o.lastZone AS last_zone, o.lastBearing AS last_bearing, location,
                    [(o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.active |
-                      {predicate: type(r), target: b.label + ' ' + b.id, since: toString(r.since)}] AS active_relations,
-                   [(o)-[mv:POSSIBLY_MOVED_FROM]->(c:Item) | {object: coalesce(c.color, 'unknown') + ' ' + c.label, id: c.id,
+                      {predicate: type(r), target: b.label + ' ' + b.itemId, since: toString(r.since)}] AS active_relations,
+                   [(o)-[mv:POSSIBLY_MOVED_FROM]->(c:Item) | {object: coalesce(c.color, 'unknown') + ' ' + c.label, id: c.itemId,
                       place: head([(c)-[:LOCATED_AT]->(pl:Place) | pl.name]), confidence: mv.confidence}] AS maybe_moved_from,
-                   [(n:Item)-[mv2:POSSIBLY_MOVED_FROM]->(o) | {object: coalesce(n.color, 'unknown') + ' ' + n.label, id: n.id,
+                   [(n:Item)-[mv2:POSSIBLY_MOVED_FROM]->(o) | {object: coalesce(n.color, 'unknown') + ' ' + n.label, id: n.itemId,
                       place: head([(n)-[:LOCATED_AT]->(pl2:Place) | pl2.name]), confidence: mv2.confidence}] AS maybe_moved_to,
                    [(o)-[h]->(hb:Item) WHERE type(h) IN $preds |
-                      {predicate: type(h), target: hb.label + ' ' + hb.id, currently: h.active,
-                       last_seen_so: toString(h.last_confirmed), ended_by: h.ended_by}][..8] AS relation_history
-            ORDER BY o.last_seen DESC LIMIT $limit
+                      {predicate: type(h), target: hb.label + ' ' + hb.itemId, currently: h.active,
+                       last_seen_so: toString(h.lastConfirmed), ended_by: h.endedBy}][..8] AS relation_history
+            ORDER BY o.lastSeen DESC LIMIT $limit
             """,
             label=label, color=color, preds=list(PREDICATES), limit=limit,
         )
@@ -436,11 +474,11 @@ class Memory:
                 MATCH {pattern}
                 WHERE (toLower(b.label) CONTAINS toLower($t) OR toLower($t) CONTAINS toLower(b.label))
                   AND (size($qc) = 0 OR toLower(coalesce(b.color, '')) IN $qc) AND a <> b AND ($ended OR r.active)
-                RETURN a.id AS id, a.label AS label, a.color AS color, '{p}' AS relation, b.label+' '+b.id AS target,
+                RETURN a.itemId AS id, a.label AS label, a.color AS color, '{p}' AS relation, b.label+' '+b.itemId AS target,
                        r.active AS currently, a.status AS status,
-                       toString(r.since) AS since, toString(r.last_confirmed) AS last_confirmed,
-                       toString(r.until) AS until, r.ended_by AS ended_by, r.count AS times_confirmed
-                ORDER BY r.last_confirmed DESC LIMIT 30
+                       toString(r.since) AS since, toString(r.lastConfirmed) AS last_confirmed,
+                       toString(r.until) AS until, r.endedBy AS ended_by, r.count AS times_confirmed
+                ORDER BY r.lastConfirmed DESC LIMIT 30
                 """,
                 t=target_label, ended=include_ended, qc=qc,
             )
@@ -449,9 +487,9 @@ class Memory:
     def object_history(self, object_id: str, limit: int = 25) -> dict[str, Any]:
         obs = self._read(
             """
-            MATCH (o:Item {id:$id})
+            MATCH (o:Item {itemId:$id})
             OPTIONAL MATCH (ob:Sighting)-[d:DETECTED]->(o)
-            OPTIONAL MATCH (ob)-[:AT]->(l:Place)
+            OPTIONAL MATCH (ob)-[:TAKEN_AT]->(l:Place)
             WITH o, ob, d, l ORDER BY ob.ts DESC LIMIT $limit
             RETURN o.label AS label, o.color AS color,
                    collect({observation:ob.id, ts:toString(ob.ts), location:l.name,
@@ -461,10 +499,10 @@ class Memory:
         )
         rels = self._read(
             f"""
-            MATCH (o:Item {{id:$id}})-[r:{REL_ALT}]-(x:Item)
-            RETURN type(r) AS predicate, startNode(r).id = $id AS outgoing, x.label+' '+x.id AS other,
-                   r.active AS currently, toString(r.since) AS since, toString(r.last_confirmed) AS last_seen_so,
-                   toString(r.until) AS until, r.ended_by AS ended_by
+            MATCH (o:Item {{itemId:$id}})-[r:{REL_ALT}]-(x:Item)
+            RETURN type(r) AS predicate, startNode(r).itemId = $id AS outgoing, x.label+' '+x.itemId AS other,
+                   r.active AS currently, toString(r.since) AS since, toString(r.lastConfirmed) AS last_seen_so,
+                   toString(r.until) AS until, r.endedBy AS ended_by
             ORDER BY r.since DESC LIMIT 30
             """,
             id=object_id,
@@ -474,14 +512,14 @@ class Memory:
     def first_observation(self, location: str | None = None) -> dict[str, Any]:
         rows = self._read(
             """
-            MATCH (ob:Sighting) WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
+            MATCH (ob:Sighting) WHERE $loc IS NULL OR EXISTS { (ob)-[:TAKEN_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
             WITH ob ORDER BY ob.ts ASC LIMIT 1
             OPTIONAL MATCH (ob)-[d:DETECTED]->(o:Item)
-            OPTIONAL MATCH (o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.last_obs = ob.id
+            OPTIONAL MATCH (o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.lastObs = ob.id
             RETURN ob.id AS observation, toString(ob.ts) AS ts, ob.summary AS summary,
-                   [x IN collect(DISTINCT {label:o.label, color:o.color, id:o.id}) WHERE x.id IS NOT NULL] AS objects,
-                   [x IN collect(DISTINCT {subject:o.label+' '+o.id, predicate:type(r),
-                                           object:b.label+' '+b.id}) WHERE x.predicate IS NOT NULL] AS relations
+                   [x IN collect(DISTINCT {label:o.label, color:o.color, id:o.itemId}) WHERE x.id IS NOT NULL] AS objects,
+                   [x IN collect(DISTINCT {subject:o.label+' '+o.itemId, predicate:type(r),
+                                           object:b.label+' '+b.itemId}) WHERE x.predicate IS NOT NULL] AS relations
             """,
             loc=location, preds=list(PREDICATES),
         )
@@ -500,10 +538,10 @@ class Memory:
         baseline = [o["label"] for o in first.get("objects", [])] if first.get("ts") == base else []
         appeared = self._read(
             """
-            MATCH (o:Item) WHERE o.first_seen > datetime($since)
+            MATCH (o:Item) WHERE o.firstSeen > datetime($since)
               AND ($loc IS NULL OR EXISTS { (o)-[:LOCATED_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) })
-            RETURN o.id AS id, o.label AS label, o.color AS color, toString(o.first_seen) AS first_seen, o.status AS status
-            ORDER BY o.first_seen
+            RETURN o.itemId AS id, o.label AS label, o.color AS color, toString(o.firstSeen) AS first_seen, o.status AS status
+            ORDER BY o.firstSeen
             """,
             since=base, loc=location,
         )
@@ -511,8 +549,8 @@ class Memory:
             """
             MATCH (o:Item) WHERE o.status = 'possibly_gone'
               AND ($loc IS NULL OR EXISTS { (o)-[:LOCATED_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) })
-            RETURN o.id AS id, o.label AS label, o.color AS color, toString(o.last_seen) AS last_seen,
-                   o.miss_count AS consecutive_misses
+            RETURN o.itemId AS id, o.label AS label, o.color AS color, toString(o.lastSeen) AS last_seen,
+                   o.missCount AS consecutive_misses
             """,
             loc=location,
         )
@@ -521,10 +559,10 @@ class Memory:
             MATCH (a:Item)-[r:{REL_ALT}]->(b:Item)
             WHERE (r.since > datetime($since) OR r.until > datetime($since))
               AND ($loc IS NULL OR EXISTS {{ (a)-[:LOCATED_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }})
-            RETURN a.label + ' ' + a.id AS subject, a.label AS subject_label, a.color AS subject_color,
+            RETURN a.label + ' ' + a.itemId AS subject, a.label AS subject_label, a.color AS subject_color,
                    type(r) AS predicate, b.label AS object_label, b.color AS object_color,
-                   r.active AS currently, toString(r.since) AS since, toString(r.last_confirmed) AS last_seen_so,
-                   toString(r.until) AS until, r.ended_by AS ended_by
+                   r.active AS currently, toString(r.since) AS since, toString(r.lastConfirmed) AS last_seen_so,
+                   toString(r.until) AS until, r.endedBy AS ended_by
             ORDER BY coalesce(r.until, r.since) DESC LIMIT 40
             """,
             since=base, loc=location,
@@ -558,20 +596,20 @@ class Memory:
             """
             MATCH (o:Item)-[:LOCATED_AT]->(l:Place)
             WHERE $loc IS NULL OR toLower(l.name) = toLower($loc)
-            RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status,
-                   toString(o.first_seen) AS first_seen, toString(o.last_seen) AS last_seen,
-                   o.seen_count AS times_seen, o.miss_count AS consecutive_misses, l.name AS location,
+            RETURN o.itemId AS id, o.label AS label, o.color AS color, o.status AS status,
+                   toString(o.firstSeen) AS first_seen, toString(o.lastSeen) AS last_seen,
+                   o.seenCount AS times_seen, o.missCount AS consecutive_misses, l.name AS location,
                    [(o)-[r]->(b:Item) WHERE type(r) IN $preds |
-                      {predicate: type(r), target: b.label + ' ' + b.id, currently: r.active,
-                       last_seen_so: toString(r.last_confirmed), ended_by: r.ended_by}] AS relations
-            ORDER BY o.first_seen
+                      {predicate: type(r), target: b.label + ' ' + b.itemId, currently: r.active,
+                       last_seen_so: toString(r.lastConfirmed), ended_by: r.endedBy}] AS relations
+            ORDER BY o.firstSeen
             """,
             loc=location, preds=list(PREDICATES),
         )
         span = self._read(
             """
             MATCH (ob:Sighting)
-            WHERE $loc IS NULL OR EXISTS { (ob)-[:AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
+            WHERE $loc IS NULL OR EXISTS { (ob)-[:TAKEN_AT]->(l:Place) WHERE toLower(l.name) = toLower($loc) }
             RETURN count(ob) AS observations, toString(min(ob.ts)) AS first_observation, toString(max(ob.ts)) AS last_observation
             """,
             loc=location,
@@ -582,9 +620,9 @@ class Memory:
         return self._read(
             """
             MATCH (ob:Sighting)
-            OPTIONAL MATCH (ob)-[:AT]->(l:Place)
+            OPTIONAL MATCH (ob)-[:TAKEN_AT]->(l:Place)
             RETURN ob.id AS id, toString(ob.ts) AS ts, l.name AS location, ob.summary AS summary,
-                   ob.n_objects AS n
+                   ob.objectCount AS n
             ORDER BY ob.ts DESC LIMIT $limit
             """,
             limit=limit,
@@ -610,9 +648,9 @@ class Memory:
             CALL (l) {
               OPTIONAL MATCH (o:Item)-[:LOCATED_AT]->(l)
               RETURN collect(CASE WHEN o IS NULL THEN NULL ELSE
-                {label: o.label, color: coalesce(o.color, 'unknown'), seen: o.seen_count, status: o.status} END) AS objects
+                {label: o.label, color: coalesce(o.color, 'unknown'), seen: o.seenCount, status: o.status} END) AS objects
             }
-            RETURN l.name AS name, coalesce(l.room_type, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
+            RETURN l.name AS name, coalesce(l.roomType, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
                    coalesce(l.visits, 0) AS visits, objects
             ORDER BY l.name
             """
@@ -622,9 +660,9 @@ class Memory:
         rows = self._write(
             """
             MERGE (l:Place {name: $name})
-              ON CREATE SET l.id = 'plc-' + substring(randomUUID(), 0, 8), l.room_type = $room, l.provisional = $prov,
-                            l.created_at = datetime($ts), l.visits = 0
-            RETURN l.id AS id
+              ON CREATE SET l.placeId = 'plc-' + substring(randomUUID(), 0, 8), l.roomType = $room, l.provisional = $prov,
+                            l.createdAt = datetime($ts), l.visits = 0
+            RETURN l.placeId AS id
             """,
             name=name, room=room_type or "unknown", prov=provisional, ts=now_iso(),
         )
@@ -635,9 +673,9 @@ class Memory:
         self._write(
             """
             MATCH (l:Place {name: $name})
-            SET l.visits = coalesce(l.visits, 0) + 1, l.last_visit = datetime($ts),
-                l.room_type = CASE WHEN coalesce(l.room_type, 'unknown') IN ['unknown', 'other'] AND NOT coalesce($room, 'unknown') IN ['unknown', 'other', '']
-                                   THEN $room ELSE coalesce(l.room_type, 'unknown') END
+            SET l.visits = coalesce(l.visits, 0) + 1, l.lastVisit = datetime($ts),
+                l.roomType = CASE WHEN coalesce(l.roomType, 'unknown') IN ['unknown', 'other'] AND NOT coalesce($room, 'unknown') IN ['unknown', 'other', '']
+                                   THEN $room ELSE coalesce(l.roomType, 'unknown') END
             """,
             name=name, room=room_type, ts=now_iso(),
         )
@@ -651,40 +689,40 @@ class Memory:
         return self._read(
             f"""
             MATCH (a:Item)-[:LOCATED_AT]->(l:Place)<-[:LOCATED_AT]-(b:Item)
-            WHERE a.id < b.id AND a.label = b.label AND {color_ok} AND ($place IS NULL OR l.name = $place)
+            WHERE a.itemId < b.itemId AND a.label = b.label AND {color_ok} AND ($place IS NULL OR l.name = $place)
               AND NOT EXISTS {{ (s:Sighting)-[:DETECTED]->(a) WHERE (s)-[:DETECTED]->(b) }}
-            WITH a, b, l, CASE WHEN a.seen_count >= b.seen_count THEN [a, b] ELSE [b, a] END AS kd
-            RETURN l.name AS place, kd[0].id AS keep, kd[1].id AS drop, a.label AS label, kd[0].color AS keep_color, kd[1].color AS drop_color
+            WITH a, b, l, CASE WHEN a.seenCount >= b.seenCount THEN [a, b] ELSE [b, a] END AS kd
+            RETURN l.name AS place, kd[0].itemId AS keep, kd[1].itemId AS drop, a.label AS label, kd[0].color AS keep_color, kd[1].color AS drop_color
             """, place=place)
 
     def merge_objects(self, keep: str, drop: str) -> bool:
         """Fold Object drop into keep: sightings, relations, counters. Used for duplicates of one real thing."""
-        if keep == drop or not self._read("MATCH (a:Item {id: $k}), (b:Item {id: $d}) RETURN count(*) AS c", k=keep, d=drop)[0]["c"]:
+        if keep == drop or not self._read("MATCH (a:Item {itemId: $k}), (b:Item {itemId: $d}) RETURN count(*) AS c", k=keep, d=drop)[0]["c"]:
             return False
         self._write(
             """
-            MATCH (s:Sighting)-[d:DETECTED]->(x:Item {id: $d}), (k:Item {id: $k})
+            MATCH (s:Sighting)-[d:DETECTED]->(x:Item {itemId: $d}), (k:Item {itemId: $k})
             MERGE (s)-[d2:DETECTED]->(k) SET d2 += properties(d)
             DELETE d
             """, k=keep, d=drop)
         for pred in PREDICATES:
             self._write(
                 f"""
-                MATCH (x:Item {{id: $d}})-[r:{pred}]->(o:Item), (k:Item {{id: $k}}) WHERE o.id <> $k
+                MATCH (x:Item {{itemId: $d}})-[r:{pred}]->(o:Item), (k:Item {{itemId: $k}}) WHERE o.itemId <> $k
                 MERGE (k)-[r2:{pred}]->(o) ON CREATE SET r2 = properties(r)
                 WITH r DELETE r
                 """, k=keep, d=drop)
             self._write(
                 f"""
-                MATCH (o:Item)-[r:{pred}]->(x:Item {{id: $d}}), (k:Item {{id: $k}}) WHERE o.id <> $k
+                MATCH (o:Item)-[r:{pred}]->(x:Item {{itemId: $d}}), (k:Item {{itemId: $k}}) WHERE o.itemId <> $k
                 MERGE (o)-[r2:{pred}]->(k) ON CREATE SET r2 = properties(r)
                 WITH r DELETE r
                 """, k=keep, d=drop)
         self._write(
             """
-            MATCH (k:Item {id: $k}), (x:Item {id: $d})
-            SET k.seen_count = coalesce(k.seen_count, 0) + coalesce(x.seen_count, 0), k.miss_count = 0, k.status = 'present',
-                k.first_seen = CASE WHEN x.first_seen < k.first_seen THEN x.first_seen ELSE k.first_seen END
+            MATCH (k:Item {itemId: $k}), (x:Item {itemId: $d})
+            SET k.seenCount = coalesce(k.seenCount, 0) + coalesce(x.seenCount, 0), k.missCount = 0, k.status = 'present',
+                k.firstSeen = CASE WHEN x.firstSeen < k.firstSeen THEN x.firstSeen ELSE k.firstSeen END
             DETACH DELETE x
             """, k=keep, d=drop)
         return True
@@ -709,12 +747,12 @@ class Memory:
         """Clean start for the spatial data: every Place, the Objects in them and the Sightings at them. Dialogue and reasoning
         history are kept. NAMS entities are not touched here (run nams-sync --rebuild afterwards)."""
         q = self._read(
-            "MATCH (l:Place) OPTIONAL MATCH (o:Item)-[:LOCATED_AT]->(l) OPTIONAL MATCH (x:Sighting)-[:AT]->(l) "
+            "MATCH (l:Place) OPTIONAL MATCH (o:Item)-[:LOCATED_AT]->(l) OPTIONAL MATCH (x:Sighting)-[:TAKEN_AT]->(l) "
             "RETURN count(DISTINCT l) AS places, count(DISTINCT o) AS objects, count(DISTINCT x) AS sightings")[0]
         if not dry_run:
-            self._write("MATCH (o:Item) DETACH DELETE o")
-            self._write("MATCH (x:Sighting) DETACH DELETE x")
-            self._write("MATCH (l:Place) DETACH DELETE l")
+            self._write("MATCH (o:Item) WHERE NOT o:Entity DETACH DELETE o")
+            self._write("MATCH (x:Sighting) WHERE NOT x:Entity DETACH DELETE x")
+            self._write("MATCH (l:Place) WHERE NOT l:Entity DETACH DELETE l")
         return dict(q)
 
     def set_robot_place(self, place: str, heading: float | None = None) -> None:
@@ -735,12 +773,12 @@ class Memory:
         Without this a place keeps 'unknown' forever and the resolver cannot tell it apart from other rooms by room type."""
         rows = self._write(
             """
-            MATCH (l:Place {name: $name}) WHERE coalesce(l.room_type, 'unknown') IN ['unknown', 'other', '']
-            MATCH (x:Sighting)-[:AT]->(l) WHERE x.room_type IS NOT NULL AND NOT x.room_type IN ['unknown', 'other', '']
-            WITH l, x.room_type AS rt, count(*) AS c ORDER BY c DESC
+            MATCH (l:Place {name: $name}) WHERE coalesce(l.roomType, 'unknown') IN ['unknown', 'other', '']
+            MATCH (x:Sighting)-[:TAKEN_AT]->(l) WHERE x.roomType IS NOT NULL AND NOT x.roomType IN ['unknown', 'other', '']
+            WITH l, x.roomType AS rt, count(*) AS c ORDER BY c DESC
             WITH l, collect({rt: rt, c: c}) AS votes WHERE votes[0].c >= $min
-            SET l.room_type = votes[0].rt
-            RETURN l.room_type AS rt
+            SET l.roomType = votes[0].rt
+            RETURN l.roomType AS rt
             """, name=name, min=min_votes)
         return rows[0]["rt"] if rows else None
 
@@ -751,8 +789,8 @@ class Memory:
             """
             MATCH (x:Place {name: $x}), (y:Place {name: $y}) WHERE x <> y
             MERGE (x)-[r:ADJACENT_TO]->(y)
-              ON CREATE SET r.first_seen = datetime($ts), r.count = 0
-            SET r.count = r.count + 1, r.last_seen = datetime($ts)
+              ON CREATE SET r.firstSeen = datetime($ts), r.count = 0
+            SET r.count = r.count + 1, r.lastSeen = datetime($ts)
             """,
             x=x, y=y, ts=now_iso(),
         )
@@ -767,8 +805,8 @@ class Memory:
         """Group a place's objects into runs of time: a new group starts when more than gap_s passes between two objects' last_seen.
         A hint for splitting a place that mixed several rooms (the robot was carried between them under one name); the person confirms."""
         rows = self._read(
-            "MATCH (o:Item)-[:LOCATED_AT]->(:Place {name: $p}) RETURN o.id AS id, o.label AS label, o.color AS color, "
-            "toString(o.last_seen) AS ts, o.last_seen.epochSeconds AS t ORDER BY o.last_seen", p=place)
+            "MATCH (o:Item)-[:LOCATED_AT]->(:Place {name: $p}) RETURN o.itemId AS id, o.label AS label, o.color AS color, "
+            "toString(o.lastSeen) AS ts, o.lastSeen.epochSeconds AS t ORDER BY o.lastSeen", p=place)
         groups: list[list[dict[str, Any]]] = []
         for r in rows:
             if not groups or r["t"] - groups[-1][-1]["t"] > gap_s:
@@ -799,19 +837,19 @@ class Memory:
         moved = self._write(
             """
             MATCH (s:Place {name: $s}), (d:Place {name: $d})
-            MATCH (o:Item)-[r:LOCATED_AT]->(s) WHERE o.id IN $ids
+            MATCH (o:Item)-[r:LOCATED_AT]->(s) WHERE o.itemId IN $ids
             MERGE (o)-[r2:LOCATED_AT]->(d)
-              ON CREATE SET r2.first_seen = r.first_seen, r2.last_seen = r.last_seen, r2.count = r.count
+              ON CREATE SET r2.firstSeen = r.firstSeen, r2.lastSeen = r.lastSeen, r2.count = r.count
             DELETE r
-            SET o.status = 'present', o.miss_count = 0
+            SET o.status = 'present', o.missCount = 0
             RETURN count(o) AS c
             """, s=src, d=dst, ids=object_ids)[0]["c"]
         self._write(
             """
-            MATCH (x:Sighting)-[a:AT]->(s:Place {name: $s}), (d:Place {name: $d})
-            WITH x, a, d, [(x)-[:DETECTED]->(o:Item) | o.id] AS seen
+            MATCH (x:Sighting)-[a:TAKEN_AT]->(s:Place {name: $s}), (d:Place {name: $d})
+            WITH x, a, d, [(x)-[:DETECTED]->(o:Item) | o.itemId] AS seen
             WHERE size(seen) > 0 AND all(i IN seen WHERE i IN $ids)
-            MERGE (x)-[:AT]->(d) DELETE a
+            MERGE (x)-[:TAKEN_AT]->(d) DELETE a
             """, s=src, d=dst, ids=object_ids)
         self.prune_cross_place_facts()
         return moved
@@ -826,17 +864,17 @@ class Memory:
             """
             MATCH (o:Item)-[r:LOCATED_AT]->(s:Place {name: $s}), (d:Place {name: $d})
             MERGE (o)-[r2:LOCATED_AT]->(d)
-              ON CREATE SET r2.first_seen = r.first_seen, r2.last_seen = r.last_seen, r2.count = r.count
+              ON CREATE SET r2.firstSeen = r.firstSeen, r2.lastSeen = r.lastSeen, r2.count = r.count
             DELETE r
             """, s=src, d=dst)
-        self._write("MATCH (x:Sighting)-[r:AT]->(s:Place {name: $s}), (d:Place {name: $d}) MERGE (x)-[:AT]->(d) DELETE r", s=src, d=dst)
+        self._write("MATCH (x:Sighting)-[r:TAKEN_AT]->(s:Place {name: $s}), (d:Place {name: $d}) MERGE (x)-[:TAKEN_AT]->(d) DELETE r", s=src, d=dst)
         self._write(
             """
             MATCH (s:Place {name: $s})-[r:ADJACENT_TO]-(n:Place), (d:Place {name: $d}) WHERE n <> d AND n <> s
             WITH d, n, sum(r.count) AS c
             WITH d, n, c, CASE WHEN d.name < n.name THEN [d, n] ELSE [n, d] END AS ordered
             WITH ordered[0] AS x, ordered[1] AS y, c
-            MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.first_seen = datetime(), a.count = 0
+            MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.firstSeen = datetime(), a.count = 0
             SET a.count = a.count + c
             """, s=src, d=dst)
         self._write("MATCH (s:Place {name: $s}) DETACH DELETE s", s=src)
@@ -852,14 +890,14 @@ class Memory:
                      sum(CASE WHEN o.status = 'possibly_gone' THEN 1 ELSE 0 END) AS possibly_gone
             }
             CALL (l) {
-              OPTIONAL MATCH (s:Sighting)-[:AT]->(l)
+              OPTIONAL MATCH (s:Sighting)-[:TAKEN_AT]->(l)
               RETURN count(s) AS sightings, toString(max(s.ts)) AS last_seen
             }
             CALL (l) {
               OPTIONAL MATCH (l)-[r:ADJACENT_TO]-(n:Place)
               RETURN collect(CASE WHEN n IS NULL THEN NULL ELSE {place: n.name, times: r.count} END) AS adjacent
             }
-            RETURN l.id AS id, l.name AS name, coalesce(l.room_type, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
+            RETURN l.placeId AS id, l.name AS name, coalesce(l.roomType, 'unknown') AS room_type, coalesce(l.provisional, false) AS provisional,
                    coalesce(l.visits, 0) AS visits, objects, present, possibly_gone, sightings, last_seen, adjacent
             ORDER BY sightings DESC, name
             """
@@ -873,8 +911,8 @@ class Memory:
         return self._write(
             """
             UNWIND $ids AS nid
-            MATCH (n:Item {id: nid})
-            MATCH (c:Item) WHERE c.id <> n.id AND c.label = n.label AND c.status = 'possibly_gone'
+            MATCH (n:Item {itemId: nid})
+            MATCH (c:Item) WHERE c.itemId <> n.itemId AND c.label = n.label AND c.status = 'possibly_gone'
               AND coalesce(c.color, 'unknown') = coalesce(n.color, 'unknown')
               AND NOT EXISTS { (c)-[:LOCATED_AT]->(l:Place {name: $place}) }
             WITH n, collect(c) AS cands
@@ -884,14 +922,14 @@ class Memory:
               ON CREATE SET r.since = datetime($ts)
             SET r.confidence = round(100.0 * f * (CASE WHEN k = 1 THEN 0.6 ELSE 0.6 / k END)) / 100.0,
                 r.basis = 'same kind and colour, and the original stopped being seen elsewhere'
-            RETURN n.id AS new_id, c.id AS old_id, n.label AS label, r.confidence AS confidence
+            RETURN n.itemId AS new_id, c.itemId AS old_id, n.label AS label, r.confidence AS confidence
             """,
             ids=new_ids, place=place, ts=ts,
         )
 
     def clear_nams_links(self) -> int:
         """Forget which NAMS entity mirrors each object (used before a rebuild). Touches only our Object nodes."""
-        rows = self._write("MATCH (o:Item) WHERE o.nams_id IS NOT NULL REMOVE o.nams_id, o.nams_name RETURN count(o) AS n")
+        rows = self._write("MATCH (o:Item) WHERE o.namsId IS NOT NULL REMOVE o.namsId, o.namsName RETURN count(o) AS n")
         return rows[0]["n"] if rows else 0
 
     def mirror_links(self) -> int:
@@ -906,27 +944,27 @@ class Memory:
 
     def nams_links(self) -> dict[str, dict]:
         """object id -> {id, name} of the NAMS entity mirroring it (so a restart keeps identities)."""
-        rows = self._read("MATCH (o:Item) WHERE o.nams_id IS NOT NULL RETURN o.id AS id, o.nams_id AS nams_id, o.nams_name AS name")
+        rows = self._read("MATCH (o:Item) WHERE o.namsId IS NOT NULL RETURN o.itemId AS id, o.namsId AS nams_id, o.namsName AS name")
         return {r["id"]: {"id": r["nams_id"], "name": r["name"]} for r in rows}
 
     def set_nams_links(self, links: list[dict]) -> None:
-        self._write("UNWIND $l AS x MATCH (o:Item {id:x.id}) SET o.nams_id = x.nams_id, o.nams_name = x.name", l=links)
+        self._write("UNWIND $l AS x MATCH (o:Item {itemId:x.id}) SET o.namsId = x.nams_id, o.namsName = x.name", l=links)
 
     def export_for_nams(self, location: str | None = None) -> dict[str, Any]:
         objs = self._read(
             """
             MATCH (o:Item)-[:LOCATED_AT]->(l:Place)
             WHERE $loc IS NULL OR toLower(l.name) = toLower($loc)
-            RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status,
-                   toString(o.last_seen) AS last_seen, l.name AS location
-            ORDER BY o.first_seen
+            RETURN o.itemId AS id, o.label AS label, o.color AS color, o.status AS status,
+                   toString(o.lastSeen) AS last_seen, l.name AS location
+            ORDER BY o.firstSeen
             """,
             loc=location,
         )
         rels = self._read(
             f"""
             MATCH (a:Item)-[r:{REL_ALT}]->(b:Item) WHERE r.active
-            RETURN a.id AS a, type(r) AS predicate, b.id AS b, toString(r.since) AS since
+            RETURN a.itemId AS a, type(r) AS predicate, b.itemId AS b, toString(r.since) AS since
             """
         )
         return {"objects": objs, "relations": rels}
@@ -935,7 +973,7 @@ class Memory:
         return self._read(
             """
             RETURN count { (:Item) } AS objects, count { (:Sighting) } AS observations,
-                   count { (:Place) } AS locations, count { (:Session) } AS sessions,
+                   count { (:Place) } AS locations, count { (s:Session) WHERE NOT s:Entity } AS sessions,
                    count { (:Item {status:'present'}) } AS present,
                    count { (:Item {status:'possibly_gone'}) } AS possibly_gone
             """
@@ -959,7 +997,7 @@ class Memory:
         def work(tx) -> None:
             tx.run(
                 """
-                MERGE (c:Dialogue {id:$sid}) ON CREATE SET c.started_at = datetime($ts)
+                MERGE (c:Dialogue {id:$sid}) ON CREATE SET c.startedAt = datetime($ts)
                 WITH c
                 CALL (c) {
                   OPTIONAL MATCH (c)-[:HAS_UTTERANCE]->(l:Utterance) WHERE NOT (l)-[:FOLLOWED_BY]->()
@@ -997,7 +1035,7 @@ class Memory:
                 """
                 MATCH (st:ReasoningStep {id:$stid}), (a:Utterance {id:$aid})
                 UNWIND $ids AS oid
-                MATCH (o:Item {id:oid})
+                MATCH (o:Item {itemId:oid})
                 MERGE (st)-[:RELIED_ON]->(o)
                 MERGE (a)-[:ABOUT]->(o)
                 """,
@@ -1012,7 +1050,7 @@ class Memory:
         return self._read(
             """
             RETURN count { (:Item) } AS Item, count { (:Place) } AS Place, count { (:Robot) } AS Robot,
-                   count { (:Sighting) } AS Sighting, count { (:Session) } AS Session,
+                   count { (:Sighting) } AS Sighting, count { (s:Session) WHERE NOT s:Entity } AS Session,
                    count { (:Dialogue) } AS Dialogue, count { (:Utterance) } AS Utterance,
                    count { (:ReasoningStep) } AS ReasoningStep, count { (:Lookup) } AS Lookup
             """
@@ -1072,11 +1110,11 @@ class Memory:
         )
         self._write("MATCH (ob:Sighting) WHERE ob.source IN $fake DETACH DELETE ob", fake=fake)
         gone = self._write(
-            "MATCH (l:Place) WHERE NOT EXISTS { (:Item)-[:LOCATED_AT]->(l) } AND NOT EXISTS { (:Sighting)-[:AT]->(l) } "
+            "MATCH (l:Place) WHERE NOT l:Entity AND NOT EXISTS { (:Item)-[:LOCATED_AT]->(l) } AND NOT EXISTS { (:Sighting)-[:TAKEN_AT]->(l) } "
             "DETACH DELETE l RETURN count(l) AS n"
         )
         sess = self._write(
-            "MATCH (s:Session) WHERE NOT EXISTS { (:Sighting)-[:IN_SESSION]->(s) } AND NOT EXISTS { (:Dialogue)-[:IN_SESSION]->(s) } "
+            "MATCH (s:Session) WHERE NOT s:Entity AND NOT EXISTS { (:Sighting)-[:IN_SESSION]->(s) } AND NOT EXISTS { (:Dialogue)-[:IN_SESSION]->(s) } "
             "DETACH DELETE s RETURN count(s) AS n"
         )
         counts["places"] = gone[0]["n"] if gone else 0
@@ -1100,8 +1138,8 @@ class Memory:
         def entity_nodes(ids: list[str] | None = None) -> None:
             for n in self._read(
                 """
-                MATCH (n) WHERE (n:Item OR n:Place) AND ($ids IS NULL OR n.id IN $ids)
-                RETURN CASE WHEN n:Item THEN n.id ELSE 'loc:' + n.name END AS id, CASE WHEN n:Item THEN 'Object' ELSE labels(n)[0] END AS kind,
+                MATCH (n) WHERE (n:Item OR n:Place) AND ($ids IS NULL OR coalesce(n.itemId, n.placeId) IN $ids)
+                RETURN CASE WHEN n:Item THEN n.itemId ELSE 'loc:' + n.name END AS id, CASE WHEN n:Item THEN 'Object' ELSE labels(n)[0] END AS kind,
                        coalesce(n.label, n.name) AS label, n.color AS color, n.status AS status,
                        CASE WHEN n:Item THEN head([(n)-[:LOCATED_AT]->(p:Place) | p.name]) ELSE n.name END AS place LIMIT $limit
                 """, ids=ids, limit=limit):
@@ -1112,7 +1150,7 @@ class Memory:
             for e in self._read(
                 """
                 MATCH (a:Item)-[r]->(b) WHERE (b:Item OR b:Place) AND type(r) IN $types AND coalesce(r.active, true)
-                RETURN a.id AS source, CASE WHEN b:Item THEN b.id ELSE 'loc:' + b.name END AS target, type(r) AS type LIMIT $limit
+                RETURN a.itemId AS source, CASE WHEN b:Item THEN b.itemId ELSE 'loc:' + b.name END AS target, type(r) AS type LIMIT $limit
                 """, types=list(PREDICATES) + ["LOCATED_AT", "POSSIBLY_MOVED_FROM"], limit=limit * 3):
                 edge(e["source"], e["target"], e["type"], "long")
             for e in self._read("MATCH (a:Place)-[r:ADJACENT_TO]->(b:Place) RETURN 'loc:' + a.name AS source, 'loc:' + b.name AS target, r.count AS n"):
@@ -1125,8 +1163,8 @@ class Memory:
             obs = self._read(
                 """
                 MATCH (ob:Sighting) WITH ob ORDER BY ob.ts DESC LIMIT 12
-                OPTIONAL MATCH (ob)-[:AT]->(l:Place)
-                RETURN ob.id AS id, toString(ob.ts) AS ts, ob.n_objects AS n, ob.summary AS summary, l.name AS location
+                OPTIONAL MATCH (ob)-[:TAKEN_AT]->(l:Place)
+                RETURN ob.id AS id, toString(ob.ts) AS ts, ob.objectCount AS n, ob.summary AS summary, l.name AS location
                 ORDER BY ob.ts
                 """)
             for o in obs:
@@ -1134,7 +1172,7 @@ class Memory:
             for a, b in zip(obs, obs[1:]):
                 edge(a["id"], b["id"], "THEN", "short")
             ids = [o["id"] for o in obs]
-            det = self._read("MATCH (ob:Sighting)-[:DETECTED]->(o:Item) WHERE ob.id IN $ids RETURN ob.id AS a, o.id AS b", ids=ids)
+            det = self._read("MATCH (ob:Sighting)-[:DETECTED]->(o:Item) WHERE ob.id IN $ids RETURN ob.id AS a, o.itemId AS b", ids=ids)
             entity_nodes(sorted({d["b"] for d in det}))
             for d in det:
                 edge(d["a"], d["b"], "DETECTED", "short")
@@ -1165,7 +1203,7 @@ class Memory:
             for t in self._read("MATCH (st:ReasoningStep)-[:MADE_LOOKUP]->(tc:Lookup) WHERE st.id IN $ids RETURN st.id AS a, tc.id AS id, tc.name AS name, tc.seq AS seq ORDER BY tc.seq", ids=sids):
                 node(t["id"], "Lookup", t["name"], "reasoning")
                 edge(t["a"], t["id"], "MADE_LOOKUP", "reasoning")
-            infl = self._read("MATCH (st:ReasoningStep)-[:RELIED_ON]->(o:Item) WHERE st.id IN $ids RETURN st.id AS a, o.id AS b", ids=sids)
+            infl = self._read("MATCH (st:ReasoningStep)-[:RELIED_ON]->(o:Item) WHERE st.id IN $ids RETURN st.id AS a, o.itemId AS b", ids=sids)
             entity_nodes(sorted({d["b"] for d in infl}))
             for d in infl:
                 edge(d["a"], d["b"], "RELIED_ON", "reasoning")
