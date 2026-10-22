@@ -71,7 +71,7 @@ class FakeMemory:
             o = self.objs.setdefault(oid, {"id": oid, "label": d.label, "color": d.color, "loc": loc, "status": "present", "miss": 0})
             o.update(zone=d.zone, status="present", miss=0, last_seen=ts)
             if heading is not None:
-                o["bearing"] = bearing_of(d.zone, heading, fov)
+                o["bearing"], o["bearing_ts"] = bearing_of(d.zone, heading, fov), ts
             if d.color != "unknown":
                 o["color"] = d.color
             rows.append({"id": oid, "label": d.label, "color": o["color"], "description": d.description,
@@ -121,6 +121,39 @@ class FakeMemory:
     def note_transition(self, a, b):
         key = tuple(sorted((a, b)))
         self.adj[key] = self.adj.get(key, 0) + 1
+
+    def route_between(self, a, b, max_hops=8):
+        if a == b:
+            return [a]
+        nbrs: dict[str, set] = {}
+        for x, y in self.adj:
+            nbrs.setdefault(x, set()).add(y)
+            nbrs.setdefault(y, set()).add(x)
+        paths, seen = [[a]], {a}
+        while paths:
+            path = paths.pop(0)
+            if len(path) > max_hops:
+                break
+            for n in sorted(nbrs.get(path[-1], ())):
+                if n == b:
+                    return path + [n]
+                if n not in seen:
+                    seen.add(n)
+                    paths.append(path + [n])
+        return None
+
+    def find_object(self, label, color=None, limit=10):
+        rows = [{"id": o["id"], "label": o["label"], "color": o["color"], "status": o["status"], "location": o["loc"],
+                 "last_seen": o.get("last_seen"), "last_zone": o.get("zone"), "last_bearing": o.get("bearing")}
+                for o in self.objs.values()
+                if (label.lower() in o["label"].lower() or o["label"].lower() in label.lower()) and (color is None or o["color"] == color)]
+        return sorted(rows, key=lambda r: r["last_seen"] or "", reverse=True)[:limit]
+
+    def bearing_since(self, item_id, place, since_iso):
+        o = self.objs.get(item_id)
+        if not o or o["loc"] != place or o.get("bearing") is None or (o.get("bearing_ts") or "") < since_iso:
+            return None
+        return o["bearing"]
 
     def rename_place(self, old, new):
         if old == new or new in self.places or old not in self.places:

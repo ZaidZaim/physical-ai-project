@@ -18,9 +18,10 @@ from typing import Any
 
 from .agent import Agent
 from .config import Settings, get_settings
-from .drive import DriveState
+from .drive import SETTLE_S, DriveState
 from .graph import Memory, now_iso
 from .models import Scene
+from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
@@ -82,6 +83,12 @@ class Brain:
         self._place_frames: dict[str, list[tuple[int, bytes]]] = {}  # a few recent views per place, RAM only: used to tell two similar rooms apart
         self._room_checks: dict[str, int] = {}
         self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
+        self.heading_epoch = now_iso()  # when the current heading frame began: bearings recorded before it are in another frame
+        self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
+        self.last_objects: list[dict] = []  # what the latest checked view showed (label, color, zone; id once stored)
+        self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
+                             seen_fn=self._seen_now, fov_deg=self.s.camera_fov_deg, settle_s=SETTLE_S,
+                             obs_wait_s=self.s.watch_interval_s * 2 + 5)
         self._deferred: list[tuple] = []  # frames held back while a change of place is unconfirmed
         self.frame: bytes | None = None
         self.frame_id = 0
@@ -103,6 +110,7 @@ class Brain:
                 self.perception = Perception(self.s)
             self.agent = Agent(self.s, self.mem, self.nams)
             self.agent.place_fn = self.place_info
+            self.agent.go_fn = self.go_to
 
     @property
     def fps(self) -> float:
@@ -133,6 +141,7 @@ class Brain:
             res = self.observe_frame(jpeg, source=source, location=location)
             if "skipped" in res:
                 self.bus.publish("status", {"state": "idle", "note": res["skipped"]})
+            self.obs_seq += 1  # a near-duplicate keeps last_objects: same view, same things
         except Exception as e:  # keep the loop alive through API/network errors
             self.bus.publish("error", {"error": str(e)[:300]})
         finally:
@@ -153,6 +162,7 @@ class Brain:
 
     def observe_scene(self, scene: Scene, *, source: str = "camera", location: str | None = None,
                       jpeg: bytes | None = None, ts: str | None = None) -> dict[str, Any]:
+        self.last_objects = [{"label": o.label.lower(), "color": o.color.lower(), "zone": o.zone} for o in scene.objects]
         if not scene.objects:  # blur, darkness, a turn in progress: says nothing about the world, so it is not stored (and cannot cause misses)
             return {"skipped": "nothing recognised in this frame", "location": self.location}
         uncertain, place_conf, changed = False, None, False
@@ -200,6 +210,7 @@ class Brain:
         if hasattr(self.mem, "set_robot_place"):
             self.mem.set_robot_place(loc, heading)
         self._remember_view(loc, jpeg)
+        self.last_objects = res["objects"]
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {
@@ -241,7 +252,7 @@ class Brain:
             self.mem.touch_place(name, scene.room_type)
             self.location = name
             self._room_checks.clear()
-            self.heading.reset()  # new place, new origin: 0 degrees = the way we face on arrival
+            self._new_heading_frame()  # new place, new origin: 0 degrees = the way we face on arrival
             if prev and prev != name and hasattr(self.mem, "consolidate_duplicates"):
                 try:  # leaving a place: tidy look-alikes of one thing seen from two angles
                     self.mem.consolidate_duplicates(prev)
@@ -301,13 +312,51 @@ class Brain:
         return {**self.place_state, "mode": self.place_mode, "name": self.location, "recognised": self.tracker.current is not None or self.place_mode == "manual", "heading_deg": self.heading.value(),
                 "heading_source": "imu gyro (relative to entry, drifts)" if self.heading.value() is not None else None}
 
+    def _new_heading_frame(self) -> None:
+        if self.nav.state.get("active"):  # the frame the turn was planned in is gone
+            self.nav.cancel("I changed place, so the direction I was turning to no longer applies")
+        self.heading.reset()
+        self.heading_epoch = now_iso()
+
+    # ---- phase 5: go where you last saw it (turn in place / look around; never walks on its own)
+    def go_to(self, label: str, color: str | None = None, execute: bool = True) -> dict[str, Any]:
+        here, heading = self.location, self.heading.value()
+        target = pick_target(self.mem.find_object(label, color), here)
+        if target and here not in {p.name for p in self._places()}:  # e.g. still on the default name before a room is recognised
+            where = f" It was last seen in {target['location']}." if target.get("location") else ""
+            return {"plan": Plan("no_place", f"I don't know which room I'm in yet.{where} Start the camera so I can recognise "
+                                             "the room, then ask again.", target).as_dict()}
+        route = bearing = None
+        if target and target.get("location") and target["location"] != here:
+            route = self.mem.route_between(here, target["location"])
+        elif target and heading is not None:
+            bearing = self.mem.bearing_since(target["id"], here, self.heading_epoch)
+        plan = plan_go_to(target, here, heading, bearing, route)
+        out: dict[str, Any] = {"plan": plan.as_dict()}
+        if plan.kind == "scan" and not (self.perception and self.fps > 0):
+            out["run"] = {"started": False, "reason": "To look around I need the camera running with frame analysis on. Start the camera and ask again."}
+        elif execute and plan.kind in ("turn", "scan"):
+            out["run"] = self.nav.start(plan)
+        return out
+
+    def _seen_now(self, target: dict, seq: int) -> dict | None:
+        """Did the latest stored observation detect the target? Same label; colour must agree when both are known."""
+        want_c = (target.get("color") or "unknown").lower()
+        for o in self.last_objects:
+            if o["label"].lower() != str(target.get("label", "")).lower():
+                continue
+            c = (o.get("color") or "unknown").lower()
+            if o.get("id") == target.get("id") or want_c == "unknown" or c in ("unknown", want_c):
+                return {"zone": o.get("zone", "center"), "id": o.get("id")}
+        return None
+
     def set_place_manual(self, name: str) -> str:
         name = name.strip()
         if not name:
             return self.location
         self.mem.ensure_place(name, self.place_state.get("room_type") or "unknown", False)  # a room you name by hand is the kind of room being seen now
         self.location, self.place_mode = name, "manual"
-        self.heading.reset()
+        self._new_heading_frame()
         self.tracker.set_current(name)
         self.place_state = {"mode": "manual", "name": name, "confidence": None, "reason": "set by you", "room_type": "unknown", "uncertain": False}
         self._moved = True  # the view is about to change

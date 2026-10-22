@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     if url:  # drive through the robot's own rosbridge: nothing to run on the robot
         from .rosbridge import RosbridgeDriver
 
-        brain.rosbridge = RosbridgeDriver(url, brain.drive, on_imu=brain.heading.feed).start()
+        brain.rosbridge = RosbridgeDriver(url, brain.drive, on_imu=lambda wz: brain.heading.feed(wz, still=not brain.drive.moving)).start()
     yield
     if getattr(brain, "rosbridge", None):
         brain.rosbridge.close()
@@ -70,6 +70,12 @@ class Rename(BaseModel):
 class Merge(BaseModel):
     src: str
     dst: str
+
+
+class GoTo(BaseModel):
+    label: str
+    color: str | None = None
+    execute: bool = True
 
 
 @app.get("/")
@@ -352,3 +358,21 @@ def drive_state():
     rb = getattr(brain, "rosbridge", None)
     st["rosbridge"] = rb.status() if rb else None
     return st
+
+
+# ---------------------------------------------------------------- phase 5: go where you last saw it
+@app.post("/api/nav/go")
+def nav_go(body: GoTo):
+    """Plan (and, only if driving is armed, start) a turn toward a remembered object. Never walks; see navigate.py."""
+    return brain.go_to(body.label, body.color, execute=body.execute)
+
+
+@app.post("/api/nav/cancel")
+def nav_cancel():
+    brain.nav.cancel("cancelled")
+    return brain.nav.state
+
+
+@app.get("/api/nav")
+def nav_state():
+    return brain.nav.state

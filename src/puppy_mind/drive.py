@@ -6,6 +6,8 @@ Safety model (every layer fails toward stopping):
     stops talking (tab closed, network drop, key stuck) yields zeros.
   * The robot polls this state; if it cannot reach the brain it stops on its own (puppy_drive.py).
   * Absolute speed limits live on the robot, not here.
+  * Automatic motion (navigate.py) only ever happens while the UI has armed, and the person always wins: any key they press or a
+    stop hands control straight back to them. Their 10 Hz zero heartbeat does not count as a key, so it cannot clobber the turn.
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ class DriveState:
         self.robot_seen = 0.0
         self.robot_applied: dict[str, float] = {}
         self._moving_until = 0.0
+        self._auto = False  # the navigator is driving (only while armed; any user input ends it)
 
     # ---- controller side
     def arm(self, on: bool) -> None:
@@ -41,15 +44,22 @@ class DriveState:
             self.armed = bool(on)
             if not on:
                 self._x = self._y = self._yaw = 0.0
+                self._auto = False
 
     def set_speed(self, level: int) -> None:
         with self._lock:
             self.speed = int(max(1, min(3, level)))
 
-    def command(self, x: float, y: float, yaw: float) -> None:
+    def command(self, x: float, y: float, yaw: float, source: str = "user") -> None:
         with self._lock:
             if not self.armed:
                 return
+            if source == "auto" and not self._auto:  # the navigator was cancelled: its late commands must not move the robot
+                return
+            if source == "user" and self._auto:
+                if not (x or y or yaw):  # the UI's heartbeat while no key is held: let the navigator keep turning
+                    return
+                self._auto = False  # a key press takes over
             self._x, self._y, self._yaw = _clamp(x), _clamp(y), _clamp(yaw)
             self._stamp = time.monotonic()
             if self._x or self._y or self._yaw:
@@ -59,6 +69,27 @@ class DriveState:
         with self._lock:
             self._x = self._y = self._yaw = 0.0
             self._stamp = time.monotonic()
+            self._auto = False
+
+    def begin_auto(self) -> bool:
+        """The navigator asks to drive. Only possible while armed (the person has said motion is OK)."""
+        with self._lock:
+            if not self.armed:
+                return False
+            self._auto = True
+            return True
+
+    def end_auto(self) -> None:
+        with self._lock:
+            if self._auto:
+                self._x = self._y = self._yaw = 0.0
+                self._stamp = time.monotonic()
+            self._auto = False
+
+    @property
+    def auto(self) -> bool:
+        with self._lock:
+            return self._auto
 
     def go_home(self) -> None:
         with self._lock:
@@ -92,6 +123,6 @@ class DriveState:
         c = self.current()
         with self._lock:
             online = (time.monotonic() - self.robot_seen) < 2.0 if self.robot_seen else False
-            return {"armed": c["armed"], "speed": self.speed, "cmd": {k: c[k] for k in ("x", "y", "yaw")},
+            return {"armed": c["armed"], "auto": self._auto, "speed": self.speed, "cmd": {k: c[k] for k in ("x", "y", "yaw")},
                     "moving": time.monotonic() < self._moving_until, "robot_online": online,
                     "robot_applied": self.robot_applied}

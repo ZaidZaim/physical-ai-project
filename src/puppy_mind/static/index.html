@@ -206,6 +206,7 @@
       <div class="vrow" style="margin-top:8px"><span id="rstate">robot offline</span><span id="batt"></span></div>
       <div class="meter"><i id="battbar"></i></div>
       <div id="dwarn" style="color:var(--miss);margin-top:8px;font:11px var(--mono)"></div>
+      <div id="nav" class="vrow" hidden><span id="navmsg"></span><button class="sm" id="navcancel">Cancel</button></div>
     </div>
   </aside>
 
@@ -448,6 +449,13 @@ function connect() {
   });
   es.addEventListener('drive', e => {
     const d = JSON.parse(e.data); log('ask', `drive ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
+  });
+  let navPhase = '';
+  es.addEventListener('nav', e => {  // phase 5: the robot turning to / looking for something (any drive key also cancels it)
+    const d = JSON.parse(e.data), rem = d.active && d.remaining_deg != null ? ` · ${Math.abs(Math.round(d.remaining_deg))}° to go` : '';
+    $('#nav').hidden = !d.active && !d.message; $('#navcancel').hidden = !d.active;
+    $('#navmsg').textContent = (d.message || '') + rem; $('#navmsg').style.color = d.phase === 'done' ? 'var(--new)' : d.active ? 'var(--accent)' : 'var(--miss)';
+    if (d.phase !== navPhase) { navPhase = d.phase; log(d.phase === 'done' ? 'new' : d.active ? 'ask' : 'miss', 'nav: ' + esc(d.message || d.phase)); }
   });
   es.addEventListener('memory', () => { refreshSummary(); if (lens !== 'long') syncGraph(); });  // a Q&A was just saved
   es.addEventListener('query', e => {
@@ -701,6 +709,7 @@ async function refreshDrive() {
   } catch (e) {}
 }
 paintPad(); setInterval(refreshDrive, 1500);
+$('#navcancel').addEventListener('click', () => post('/api/nav/cancel'));
 
 (async () => { await syncGraph(); await refreshStats(); connect(); setInterval(refreshStats, 2000); })();
 </script>

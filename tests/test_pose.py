@@ -67,3 +67,21 @@ def test_direction_words():
     assert direction_words(60) == "to your left" and direction_words(-60) == "to your right"
     assert direction_words(180) == "directly behind you"
     assert direction_words(130) == "behind you to the left"
+
+
+def test_a_biased_gyro_is_learned_while_still_and_subtracted():
+    h = HeadingTracker()
+    bias = -0.0073  # rad/s: the PuppyPi's gyro, standing still (about -0.42 deg/s)
+    t = 0.0
+    for _ in range(2000):  # 100 s still at 20 Hz
+        t += 0.05
+        h.feed(bias, t, still=True)
+    h.reset()
+    for _ in range(1200):  # another minute still: no creep once the bias is known
+        t += 0.05
+        h.feed(bias, t, still=True)
+    assert h.value() in (0.0, None) or abs(wrap180(h.value())) < 1.0
+    for _ in range(20):  # a real 1 s left turn at 0.5 rad/s still integrates (bias removed, not learned from the turn)
+        t += 0.05
+        h.feed(0.5 + bias, t, still=False)
+    assert abs(wrap180(h.value()) - 28.6) < 1.5
