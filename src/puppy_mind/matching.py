@@ -35,6 +35,16 @@ class Seen:
     anchors: frozenset[tuple[str, str]]
 
 
+# Colour words a vision model uses interchangeably for one thing (a 'white' cabinet in one frame is 'beige' or 'brown' in the next).
+FAMILIES = [{"white", "cream", "ivory", "beige", "off-white"}, {"brown", "tan", "beige", "wood", "wooden"},
+            {"black", "dark", "charcoal", "grey", "gray", "dark gray", "dark grey"}, {"transparent", "clear", "glass"}]
+COLOR_FAMILY = 0.15
+
+
+def _same_family(a: str, b: str) -> bool:
+    return any(a in f and b in f for f in FAMILIES)
+
+
 def _known(c: str) -> bool:
     return c not in ("", "unknown", "none")
 
@@ -44,7 +54,7 @@ def score(k: Known, s: Seen) -> float:
         return -1.0
     sc = LABEL_BASE
     if _known(k.color) and _known(s.color):
-        sc += COLOR_MATCH if k.color == s.color else COLOR_CLASH
+        sc += COLOR_MATCH if k.color == s.color else (COLOR_FAMILY if _same_family(k.color, s.color) else COLOR_CLASH)
     if k.zone == s.zone and s.zone != "unknown":
         sc += ZONE_MATCH
     if k.anchors & s.anchors:

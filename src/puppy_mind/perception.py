@@ -13,6 +13,8 @@ from openai import OpenAI
 from PIL import Image
 
 from .config import Settings
+from pydantic import BaseModel, Field
+
 from .models import ROOM_TYPES, Scene
 
 PROMPT = """You are the perception module of a small quadruped robot with a single low camera.
@@ -44,6 +46,24 @@ def _prepare(jpeg: bytes, max_side: int = 1024) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class RoomMatch(BaseModel):
+    same_room: bool = Field(description="true if the last image shows the SAME physical room as the reference images")
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(description="one short sentence naming the deciding clues (furniture, colours, walls, floor)")
+
+
+ROOM_PROMPT = """Several images follow. All but the LAST are reference views of ONE known room. The LAST image is the current view.
+Decide whether the current view shows the SAME physical room, or a DIFFERENT room that merely looks similar (for example a second
+bedroom, another hallway). The best clues are the particular furniture and its colours, wall colour, flooring, curtains, decoration.
+Lighting and viewpoint change and do not matter. A different bed, rug or wall colour means a different room. If the current view
+shows too little to tell (a blank wall, a close-up), answer same_room=true with low confidence."""
+
+
+# The room itself is not an object in it: a 'floor' or 'wall' can never go missing or be moved.
+SYNONYMS = {"staircase": "stairs", "doorway": "door", "couch": "sofa", "television": "tv", "rug": "carpet", "cupboard": "cabinet"}
+STRUCTURAL = {"floor", "wall", "walls", "ceiling", "ground", "room", "environment", "background", "space"}
 
 
 class Perception:
@@ -87,12 +107,29 @@ class Perception:
             raise RuntimeError(f"vision model refused: {resp.choices[0].message.refusal}")
         return self._post(scene)
 
+    def same_room(self, current: bytes, refs: list[bytes]) -> RoomMatch:
+        """Verify an ambiguous place decision: is this view the room we already know, or another one of the same kind?"""
+        content = [{"type": "text", "text": f"{len(refs)} reference view(s) of the known room, then the current view."}]
+        for r in refs:
+            content.append({"type": "image_url", "image_url": {"url": _prepare(r, 640), "detail": "low"}})
+        content.append({"type": "text", "text": "Current view:"})
+        content.append({"type": "image_url", "image_url": {"url": _prepare(current, 640), "detail": "low"}})
+        resp = self.client.chat.completions.parse(
+            model=self.s.vision_model,
+            messages=[{"role": "system", "content": ROOM_PROMPT}, {"role": "user", "content": content}],
+            response_format=RoomMatch, temperature=0,
+        )
+        m = resp.choices[0].message.parsed
+        if m is None:
+            raise RuntimeError(f"vision model refused: {resp.choices[0].message.refusal}")
+        return m
+
     def _post(self, scene: Scene) -> Scene:
         """Deterministic guardrails after the model: vocab filter, privacy, re-indexing."""
         s = self.s
-        keep = [o for o in scene.objects if not s.strict_vocab or o.label.lower() in s.vocab]
+        keep = [o for o in scene.objects if (not s.strict_vocab or o.label.lower() in s.vocab) and o.label.strip().lower() not in STRUCTURAL]
         for o in keep:
-            o.label = o.label.strip().lower()
+            o.label = SYNONYMS.get(o.label.strip().lower(), o.label.strip().lower())
             o.color = o.color.strip().lower() or "unknown"
             o.confidence = max(0.0, min(1.0, o.confidence))
             if o.label == "person" and not s.people_consent:

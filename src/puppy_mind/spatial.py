@@ -19,6 +19,8 @@ import math
 from dataclasses import dataclass, field
 
 UNINFORMATIVE_ROOMS = {"unknown", "other", ""}
+# Things that walk around say nothing about WHERE we are and are never 'missing': they do not count for place recognition or misses.
+TRANSIENT = {"person", "cat", "dog", "bird", "pet"}
 # Objects found in almost every room carry little evidence about WHICH room this is.
 COMMON_PRIOR = {"chair": 0.5, "table": 0.6, "door": 0.5, "box": 0.5, "bag": 0.6, "shoe": 0.6, "cable": 0.4, "person": 0.1, "cat": 0.3, "dog": 0.3}
 
@@ -41,6 +43,8 @@ class Decision:
     reason: str
     scores: dict[str, float]
     suggested_name: str | None = None
+    hint: str = ""            # a doubt worth showing the person (e.g. 'maybe a different room of the same kind')
+    weak: bool = False         # a 'stay' decision with little positive support (blank/thin frame, or a room that does not match)
 
 
 @dataclass
@@ -52,6 +56,7 @@ class TrackResult:
     confidence: float
     reason: str
     suggested_name: str | None = None
+    hint: str = ""
 
 
 def _color_match(a: str, b: str) -> float:
@@ -65,10 +70,13 @@ def _color_match(a: str, b: str) -> float:
 
 class PlaceResolver:
     def __init__(self, stay_threshold: float = 0.25, switch_threshold: float = 0.45, switch_margin: float = 0.2,
-                 min_objects_for_new: int = 2, room_bonus: float = 0.15, room_penalty: float = 0.8):
+                 min_objects_for_new: int = 2, room_bonus: float = 0.15, room_penalty: float = 0.8, strong_stay: float = 0.6,
+                 one_per_room: bool = True):
         self.stay_threshold, self.switch_threshold, self.switch_margin = stay_threshold, switch_threshold, switch_margin
         self.min_objects_for_new = min_objects_for_new
         self.room_bonus, self.room_penalty = room_bonus, room_penalty
+        self.strong_stay = strong_stay
+        self.one_per_room = one_per_room  # a home has one kitchen: a new view of a known KIND of room is that room, not a new place
 
     # ---- scoring
     @staticmethod
@@ -113,29 +121,42 @@ class PlaceResolver:
         scores = {p.name: round(self.score(view, room, room_conf, p, idf), 3) for p in places}
         if not informative:
             # A blank wall / blur: say nothing about where we are.
-            return Decision(current, False, True, scores.get(current or "", 0.0), "view has no usable evidence: staying put", scores)
+            return Decision(current, False, True, scores.get(current or "", 0.0), "view has no usable evidence: staying put", scores, weak=True)
         if current and current in scores:
             cur = scores[current]
             others = {k: v for k, v in scores.items() if k != current}
             best, best_s = (max(others.items(), key=lambda kv: kv[1]) if others else (None, 0.0))
             if best and best_s >= self.switch_threshold and best_s >= cur + self.switch_margin:
                 return Decision(best, False, False, best_s, f"matches '{best}' ({best_s:.2f}) much better than '{current}' ({cur:.2f})", scores)
-            if cur >= self.stay_threshold or (best_s < self.switch_threshold and len(view) < self.min_objects_for_new):
-                return Decision(current, False, True, cur, f"still looks like '{current}' ({cur:.2f})", scores)
             cur_place = next((p for p in places if p.name == current), None)
+            room_match = bool(cur_place and room not in UNINFORMATIVE_ROOMS and room == cur_place.room_type and room_conf >= 0.5)
+            room_clash = bool(cur_place and room not in UNINFORMATIVE_ROOMS and cur_place.room_type not in UNINFORMATIVE_ROOMS
+                              and room != cur_place.room_type and room_conf >= 0.5)  # the model says kitchen, we think living room
+            if not room_clash and (cur >= self.stay_threshold or (best_s < self.switch_threshold and len(view) < self.min_objects_for_new)):
+                return Decision(current, False, True, cur, f"still looks like '{current}' ({cur:.2f})", scores,
+                                weak=not room_match and (cur < self.strong_stay or len(view) < 2))  # one familiar object proves little
             if (cur_place and room not in UNINFORMATIVE_ROOMS and room == cur_place.room_type and room_conf >= 0.5
                     and best_s < self.switch_threshold):
                 # Same KIND of room and nothing else fits: this is another wall of the same room, not a second kitchen.
-                return Decision(current, False, True, max(cur, 0.3), f"another view of '{current}' (same kind of room, nothing else matches)", scores)
+                return Decision(current, False, True, max(cur, 0.3), f"another view of '{current}' (same kind of room, nothing else matches)", scores,
+                                hint=f"few of these objects are known in '{current}': a different {room}?" if cur < 0.3 and len(view) >= 3 else "")
         elif places:
             best, best_s = max(scores.items(), key=lambda kv: kv[1])
             if best_s >= self.switch_threshold:
                 return Decision(best, False, False, best_s, f"recognised as '{best}' ({best_s:.2f})", scores)
         best_s = max(scores.values(), default=0.0)
+        if self.one_per_room and room not in UNINFORMATIVE_ROOMS and room_conf >= 0.5:
+            same = [p for p in places if p.room_type == room and p.name != current]
+            if same:  # revisiting a kind of room we already know: the best-fitting one of that kind
+                pick = max(same, key=lambda p: scores.get(p.name, 0.0))
+                low = scores.get(pick.name, 0.0) < 0.3 and len(view) >= 3
+                return Decision(pick.name, False, False, max(scores.get(pick.name, 0.0), 0.5),
+                                f"another view of the {room}: same kind of room as '{pick.name}'", scores,
+                                hint=f"few of these objects are known in '{pick.name}': a different {room}?" if low else "")
         if len(view) >= self.min_objects_for_new or room not in UNINFORMATIVE_ROOMS:
             return Decision(None, True, False, 1.0 - best_s, f"matches no known place (best {best_s:.2f}): a new place", scores,
                             self.suggest_name(room, room_conf, places))
-        return Decision(current, False, True, best_s, "too little evidence to leave the current place", scores)
+        return Decision(current, False, True, best_s, "too little evidence to leave the current place", scores, weak=True)
 
     @staticmethod
     def suggest_name(room: str, room_conf: float, places: list[PlaceInfo]) -> str:
@@ -158,6 +179,7 @@ class PlaceTracker:
         self.current: str | None = None
         self._pending: tuple | None = None
         self._count = 0
+        self._neutral = 0  # consecutive weak 'stay' frames while a move is suspected
 
     def set_current(self, name: str | None) -> None:
         self.current, self._pending, self._count = name, None, 0
@@ -165,8 +187,15 @@ class PlaceTracker:
     def update(self, view: list[dict], room: str, room_conf: float, places: list[PlaceInfo]) -> TrackResult:
         d = self.resolver.decide(view, room, room_conf, places, self.current)
         if d.stay:
-            self._pending, self._count = None, 0
-            return TrackResult(self.current, False, False, False, d.confidence, d.reason)
+            if d.weak and self._pending is not None and self._neutral < 2:
+                # A blank, thin or room-mismatched frame says nothing about whether we left: keep the suspicion, but do not
+                # file the frame under the current place either.
+                self._neutral += 1
+                return TrackResult(self.current, False, False, True, d.confidence,
+                                   f"{d.reason}; move still suspected ({self._count}/{self.confirm})")
+            self._pending, self._count, self._neutral = None, 0, 0
+            return TrackResult(self.current, False, False, False, d.confidence, d.reason, hint=d.hint)
+        self._neutral = 0
         key = ("new",) if d.is_new else ("switch", d.place)
         self._count = self._count + 1 if key == self._pending else 1
         self._pending = key
@@ -175,7 +204,7 @@ class PlaceTracker:
             if d.is_new:
                 return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name)
             self.current = d.place
-            return TrackResult(d.place, True, False, False, d.confidence, d.reason)
+            return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint)
         return TrackResult(self.current, False, False, True, d.confidence,
                            f"{d.reason}; waiting for confirmation ({self._count}/{self.confirm})")
 

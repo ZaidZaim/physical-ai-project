@@ -25,3 +25,22 @@ The robot answers "where am I?" before "what is here?". The same chair in the ki
 - After upgrading, `nams-sync --rebuild` once so NAMS place entities use the new `name shortid` naming.
 
 Verification: `uv run python eval/verify_spatial.py` (isolated namespace on Aura, cleans up) and `uv run pytest`.
+
+## Schema labels (shared database)
+NAMS stores the entities it extracts under labels such as `Object`, `Location`, `Agent` and `Entity`. To keep the two apart, this app
+owns `Item` (a thing in a place), `Place`, `Robot`, `Sighting`, `Session`, `Dialogue`, `Utterance`, `ReasoningStep` and `Lookup`.
+Older databases are migrated automatically on start (nodes with our `obj-` / `plc-` ids move from `:Object` / `:Location`).
+`(Robot)-[:CURRENTLY_IN {heading}]->(Place)` is the robot's position; `(Place)-[:ADJACENT_TO {count}]-(Place)` is the learned map.
+
+## Recognition rules worth knowing
+- One place per kind of room: a new view of a room type the robot already knows is filed under that room (a home has one kitchen).
+  Use Merge in the Places tab if two rooms were created anyway.
+- People and pets are never used to recognise a place and never count as "missing".
+- Colour words from the vision model are treated as families (white/cream/beige, beige/brown, black/dark/grey) when matching objects.
+
+## Two rooms of the same kind (a second bedroom)
+Object lists cannot tell two bedrooms apart (both have a bed and a nightstand). When the resolver doubts (few known objects in a known
+kind of room) the app compares the picture itself: it asks the vision model whether the current view is the SAME physical room as up to
+three views it holds of that room (furniture, colours, walls, floor). A different room becomes its own place ("Bedroom 2") without any
+button. At most 3 checks per visit, one model call each. The reference views are kept in RAM only and are lost on restart; until the
+robot has seen a room again, the NEW ROOM button and the orange hint are the fallback.

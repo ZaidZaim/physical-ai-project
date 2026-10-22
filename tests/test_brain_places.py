@@ -80,7 +80,7 @@ def test_a_blank_wall_changes_nothing(brain):
     brain.observe_scene(KITCHEN)
     brain.observe_scene(KITCHEN)
     r = brain.observe_scene(WALL)
-    assert brain.location == "Kitchen" and not brain.place_state["uncertain"] and r["location"] == "Kitchen"
+    assert brain.location == "Kitchen" and not brain.place_state["uncertain"] and r["location"] == "Kitchen" and "skipped" in r  # nothing stored
 
 
 def test_looking_at_one_corner_of_a_room_is_not_evidence_that_the_rest_is_gone(brain):
@@ -167,3 +167,89 @@ def test_place_learns_its_room_type_from_its_own_frames():
     m.ingest(sc, session_id="s", location="Spot", source="t", room_type="hallway")
     assert m.learn_room_type("Spot") == "hallway"
     assert m.places["Spot"]["room_type"] == "hallway"
+
+
+def test_weak_frames_do_not_erase_a_suspected_move():
+    """Cabinet frames (kitchen) with unknown-room frames between them used to reset the confirmation count, so the robot stayed
+    'in the living room' and filed kitchen things there."""
+    for _ in range(3):
+        brain_scene = LIVING
+    from puppy_mind.spatial import PlaceInfo, PlaceTracker
+
+    places = [PlaceInfo("Living Room", "living room", objects=[{"label": "sofa", "color": "grey", "seen": 3, "status": "present"},
+                                                             {"label": "cabinet", "color": "white", "seen": 1, "status": "present"}]),
+              PlaceInfo("Kitchen", "kitchen", objects=[{"label": "fridge", "color": "white", "seen": 3, "status": "present"}])]
+    t = PlaceTracker(confirm_frames=2)
+    t.set_current("Living Room")
+    cab = [{"label": "cabinet", "color": "white"}]
+    r1 = t.update(cab, "kitchen", 0.9, places)            # looks like a kitchen
+    r2 = t.update(cab, "unknown", 0.0, places)            # a frame with no room cue: neither confirms nor cancels
+    assert r1.uncertain and r2.uncertain and not r2.changed
+    r3 = t.update(cab, "kitchen", 0.9, places)
+    assert r3.changed
+
+
+def test_a_known_kind_of_room_is_recognised_not_duplicated():
+    """Walking Hallway -> Kitchen -> Hallway used to create 'Hallway 2' because the clutter in the hallway had changed."""
+    from puppy_mind.spatial import PlaceInfo, PlaceTracker
+
+    places = [PlaceInfo("Hallway", "hallway", objects=[{"label": "doorway", "color": "unknown", "seen": 2, "status": "present"}]),
+              PlaceInfo("Kitchen", "kitchen", objects=[{"label": "cabinet", "color": "white", "seen": 3, "status": "present"}])]
+    t = PlaceTracker(confirm_frames=2)
+    t.set_current("Kitchen")
+    view = [{"label": "bag", "color": "multicolored"}, {"label": "box", "color": "black"}]
+    t.update(view, "hallway", 0.9, places)
+    r = t.update(view, "hallway", 0.9, places)
+    assert r.changed and not r.is_new and r.place == "Hallway"
+
+
+def test_people_and_pets_do_not_count_for_place_or_missing():
+    from puppy_mind.spatial import TRANSIENT
+
+    assert {"person", "cat"} <= TRANSIENT
+    brain_view = [o for o in ("person", "cat", "fridge") if o not in TRANSIENT]
+    assert brain_view == ["fridge"]
+
+
+def test_a_barely_known_view_of_a_known_kind_of_room_raises_a_doubt():
+    """A second bedroom looks like 'the bedroom': say so instead of silently extending the first."""
+    from puppy_mind.spatial import PlaceInfo, PlaceTracker
+
+    places = [PlaceInfo("Bedroom", "bedroom", objects=[{"label": "bed", "color": "white", "seen": 3, "status": "present"}, {"label": "desk", "color": "brown", "seen": 2, "status": "present"}]),
+              PlaceInfo("Hallway", "hallway", objects=[{"label": "door", "color": "brown", "seen": 2, "status": "present"}])]
+    t = PlaceTracker(confirm_frames=1)
+    t.set_current("Hallway")
+    view = [{"label": "nightstand", "color": "dark"}, {"label": "lamp", "color": "white"}, {"label": "carpet", "color": "grey"}]
+    r = t.update(view, "bedroom", 0.9, places)
+    assert r.place == "Bedroom" and "different bedroom" in r.hint
+
+
+def test_a_doubtful_room_is_checked_against_pictures_and_a_second_bedroom_gets_its_own_place(brain):
+    """The resolver doubts (few known objects in a known kind of room): the vision check decides, without any button."""
+    class FakePerception:
+        calls = 0
+
+        def same_room(self, current, refs):
+            FakePerception.calls += 1
+            from puppy_mind.perception import RoomMatch
+            return RoomMatch(same_room=False, confidence=0.9, reason="different bed and wall colour")
+
+    import io
+    from PIL import Image
+
+    def pic(left_bright):
+        im = Image.new("L", (32, 32), 40)
+        im.paste(220, (0, 0, 16, 32) if left_bright else (16, 0, 32, 32))
+        b = io.BytesIO(); im.convert("RGB").save(b, "JPEG"); return b.getvalue()
+
+    brain.perception = FakePerception()
+    bed1 = view("bedroom", ("bed", "white"), ("desk", "brown"), ("chair", "black"))
+    bed2 = view("bedroom", ("nightstand", "dark"), ("lamp", "white"), ("carpet", "grey"))
+    for _ in range(3):
+        brain.observe_scene(bed1, jpeg=pic(True))
+    assert brain.location == "Bedroom"
+    for _ in range(4):
+        brain.observe_scene(bed2, jpeg=pic(False))
+    assert brain.location == "Bedroom 2" and FakePerception.calls >= 1
+    names = {p["name"] for p in brain.mem.list_places()}
+    assert {"Bedroom", "Bedroom 2"} <= names

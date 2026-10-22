@@ -22,7 +22,7 @@ from .drive import DriveState
 from .graph import Memory, now_iso
 from .models import Scene
 from .pose import HeadingTracker
-from .spatial import PlaceInfo, PlaceResolver, PlaceTracker
+from .spatial import TRANSIENT, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
 from .sources import FolderSource, FrameSource, ahash, hamming
 
@@ -79,6 +79,8 @@ class Brain:
         self._place_ids: dict[str, str] = {}
         self._moved_view = False  # the first frame after a place change is a new view
         self._just_changed = False
+        self._place_frames: dict[str, list[tuple[int, bytes]]] = {}  # a few recent views per place, RAM only: used to tell two similar rooms apart
+        self._room_checks: dict[str, int] = {}
         self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
         self._deferred: list[tuple] = []  # frames held back while a change of place is unconfirmed
         self.frame: bytes | None = None
@@ -151,12 +153,16 @@ class Brain:
 
     def observe_scene(self, scene: Scene, *, source: str = "camera", location: str | None = None,
                       jpeg: bytes | None = None, ts: str | None = None) -> dict[str, Any]:
+        if not scene.objects:  # blur, darkness, a turn in progress: says nothing about the world, so it is not stored (and cannot cause misses)
+            return {"skipped": "nothing recognised in this frame", "location": self.location}
         uncertain, place_conf, changed = False, None, False
         if location:  # scripted callers (tests, replay) pin the place
             loc = location
         elif self.place_mode == "auto":
-            loc, uncertain, place_conf = self._resolve_place(scene)
+            loc, uncertain, place_conf = self._resolve_place(scene, jpeg)
             changed = self._just_changed
+            if self.tracker.current is None:  # no place recognised yet: do not file anything under the default name
+                return {"skipped": "no place recognised yet: waiting for a frame that shows enough", "location": loc}
         else:
             loc = self.location
         if uncertain:
@@ -187,6 +193,13 @@ class Brain:
         learned = self.mem.learn_room_type(loc) if hasattr(self.mem, "learn_room_type") else None
         if learned:
             self.bus.publish("place", {"name": loc, "learned_room_type": learned})
+            if loc.startswith("Unnamed area"):  # now we know what kind of room it is: say so
+                new = PlaceResolver.suggest_name(learned, 1.0, self._places())
+                if self.rename_place(loc, new):
+                    loc = new
+        if hasattr(self.mem, "set_robot_place"):
+            self.mem.set_robot_place(loc, heading)
+        self._remember_view(loc, jpeg)
         res["summary"] = scene.summary
         res["detected"] = [f"{o.label} ({o.color}, {o.confidence:.2f})" for o in scene.objects]
         self.bus.publish("observation", {
@@ -211,11 +224,12 @@ class Brain:
             self._place_ids[name] = self.mem.ensure_place(name, room, False)
         return self._place_ids[name]
 
-    def _resolve_place(self, scene: Scene) -> tuple[str, bool, float | None]:
+    def _resolve_place(self, scene: Scene, jpeg: bytes | None = None) -> tuple[str, bool, float | None]:
         """Decide which place this frame belongs to. Returns (place, uncertain, confidence)."""
-        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects if o.confidence >= self.s.min_confidence]
+        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects if o.confidence >= self.s.min_confidence and o.label.lower() not in TRANSIENT]
         prev = self.tracker.current  # None until a place has actually been recognised: the default name is not somewhere we came from
         r = self.tracker.update(view, scene.room_type, scene.room_confidence, self._places())
+        r = self._verify_room(r, scene, jpeg, view)
         self._just_changed = r.changed
         if r.changed:
             if r.is_new:
@@ -226,6 +240,7 @@ class Brain:
                 name = r.place  # type: ignore[assignment]
             self.mem.touch_place(name, scene.room_type)
             self.location = name
+            self._room_checks.clear()
             self.heading.reset()  # new place, new origin: 0 degrees = the way we face on arrival
             if prev and prev != name and hasattr(self.mem, "consolidate_duplicates"):
                 try:  # leaving a place: tidy look-alikes of one thing seen from two angles
@@ -233,8 +248,9 @@ class Brain:
                 except Exception:
                     pass
             if prev and prev != name:
-                self.mem.note_transition(prev, name)
-                self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
+                if not (r.is_new and self._room_of(prev) == scene.room_type):  # a 'jump' to a second room of the same kind is not adjacency
+                    self.mem.note_transition(prev, name)
+                    self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
                 self._moved_view = True
             self.bus.publish("place", {"name": name, "previous": prev, "new": r.is_new, "confidence": round(r.confidence, 2),
                                        "reason": r.reason, "room_type": scene.room_type})
@@ -243,18 +259,53 @@ class Brain:
         elif r.uncertain and r.reason != self.place_state.get("reason"):
             self.bus.publish("place", {"name": self.location, "uncertain": True, "reason": r.reason})
         self.place_state = {"mode": "auto", "name": self.location, "confidence": round(r.confidence, 2), "reason": r.reason,
-                            "room_type": scene.room_type, "uncertain": r.uncertain}
+                            "room_type": scene.room_type, "uncertain": r.uncertain, "hint": r.hint}
         return self.location, r.uncertain, r.confidence
 
+    def _verify_room(self, r: TrackResult, scene: Scene, jpeg: bytes | None, view: list[dict]) -> TrackResult:
+        """The resolver doubts it: few known objects, but this kind of room is known. Look at the pictures instead of guessing:
+        ask the vision model whether this is the SAME room as the views we hold of it. Another bedroom becomes 'Bedroom 2' by itself."""
+        cand = r.place
+        refs = [j for _, j in self._place_frames.get(cand or "", [])]
+        if not (r.hint and jpeg and self.perception and cand and refs and not r.is_new and not r.uncertain) or self._room_checks.get(cand, 0) >= 3:
+            return r
+        self._room_checks[cand] = self._room_checks.get(cand, 0) + 1
+        try:
+            m = self.perception.same_room(jpeg, refs)
+        except Exception as e:  # never let a failed check stop the robot: keep the resolver's answer
+            self.bus.publish("error", {"error": "room check failed: " + str(e)[:200]})
+            return r
+        self.bus.publish("place", {"name": cand, "reason": f"room check: {'same room' if m.same_room else 'a different room'} ({m.confidence:.0%}) {m.reason}"})
+        if m.same_room or m.confidence < 0.6:
+            return r
+        room = scene.room_type if scene.room_type not in ("unknown", "other", "") else (self._room_of(cand) or "room")
+        name = PlaceResolver.suggest_name(room, 1.0, self._places())
+        return TrackResult(None, True, True, False, m.confidence, f"a different {room} from '{cand}' ({m.reason})", suggested_name=name)
+
+    def _room_of(self, name: str) -> str | None:
+        return next((p.room_type for p in self._places() if p.name == name), None)
+
+    def _remember_view(self, loc: str, jpeg: bytes | None) -> None:
+        if not jpeg:
+            return
+        try:
+            h = ahash(jpeg)
+        except Exception:  # not a decodable picture: nothing to remember
+            return
+        frames = self._place_frames.setdefault(loc, [])
+        if all(hamming(h, fh) > 8 for fh, _ in frames):
+            frames.append((h, jpeg))
+            del frames[:-3]
+
     def place_info(self) -> dict[str, Any]:
-        return {**self.place_state, "mode": self.place_mode, "name": self.location, "heading_deg": self.heading.value(),
+        return {**self.place_state, "mode": self.place_mode, "name": self.location, "recognised": self.tracker.current is not None or self.place_mode == "manual", "heading_deg": self.heading.value(),
                 "heading_source": "imu gyro (relative to entry, drifts)" if self.heading.value() is not None else None}
 
     def set_place_manual(self, name: str) -> str:
         name = name.strip()
         if not name:
             return self.location
-        self.mem.ensure_place(name, "unknown", False)
+        self.mem.ensure_place(name, self.place_state.get("room_type") or "unknown", False)  # a room you name by hand is the kind of room being seen now
         self.location, self.place_mode = name, "manual"
         self.heading.reset()
         self.tracker.set_current(name)
