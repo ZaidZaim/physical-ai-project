@@ -32,7 +32,7 @@ def link_entities(mem) -> int:
     """(:Object)-[:MIRRORED_BY]->(:Entity) for every object we have mirrored into NAMS. Idempotent; skips entities NAMS has not written yet."""
     rows = mem._write(
         """
-        MATCH (o:Object) WHERE o.nams_id IS NOT NULL
+        MATCH (o:Item) WHERE o.nams_id IS NOT NULL
         MATCH (e:Entity {id: o.nams_id})
         MERGE (o)-[:MIRRORED_BY]->(e)
         RETURN count(*) AS n
@@ -50,7 +50,7 @@ def link_step(mem, step_id: str, object_ids: list[str], attempts: int = 5) -> in
             """
             MATCH (st:AgentStep {id: $sid})
             UNWIND $ids AS oid
-            MATCH (o:Object {id: oid})
+            MATCH (o:Item {id: oid})
             MERGE (st)-[:RELIED_ON]->(o)
             RETURN count(*) AS n
             """,
@@ -90,7 +90,7 @@ def entities(mem, limit: int = 60) -> dict[str, list]:
     ids = [e["id"] for e in ents]
     rel = mem._read("MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity) WHERE a.id IN $ids AND b.id IN $ids "
                     "RETURN a.id AS a, b.id AS b, coalesce(r.predicate, 'related') AS predicate", ids=ids)
-    mirror = mem._read("MATCH (o:Object)-[:MIRRORED_BY]->(e:Entity) WHERE e.id IN $ids RETURN o.id AS a, e.id AS b", ids=ids)
+    mirror = mem._read("MATCH (o:Item)-[:MIRRORED_BY]->(e:Entity) WHERE e.id IN $ids RETURN o.id AS a, e.id AS b", ids=ids)
     return {"entities": ents, "related": rel, "mirrored": mirror}
 
 
@@ -120,22 +120,27 @@ def reasoning(mem, limit: int = 8) -> dict[str, list]:
     )
     ids = [s["id"] for s in steps]
     tools = mem._read("MATCH (st:AgentStep)-[:USED_TOOL]->(t:ToolCall) WHERE st.id IN $ids RETURN st.id AS a, t.id AS id, t.toolName AS name", ids=ids)
-    relied = mem._read("MATCH (st:AgentStep)-[:RELIED_ON]->(o:Object) WHERE st.id IN $ids RETURN st.id AS a, o.id AS b", ids=ids)
+    relied = mem._read("MATCH (st:AgentStep)-[:RELIED_ON]->(o:Item) WHERE st.id IN $ids RETURN st.id AS a, o.id AS b", ids=ids)
     return {"steps": steps, "tools": tools, "relied": relied}
 
 
-def add_to_snapshot(mem, lens: str, node, edge) -> None:
+def add_to_snapshot(mem, lens: str, node, edge, show_entities: bool = True, nodes: dict | None = None) -> None:
     """Add NAMS-stored nodes to a lens snapshot via the caller's node()/edge() helpers. Never raises: NAMS data is optional."""
     try:
         if lens in ("long", "all"):
             d = entities(mem)
-            for e in d["entities"]:
-                node("ent:" + e["id"], "Entity", display_name(e["name"]), "long", source="nams", detail=f"{e['name']} ({e['type']}): {e['description'] or ''}", review=e["review"])
-            for r in d["related"]:
-                if r["predicate"] not in DUPLICATES_OF_OUR_FACTS:  # e.g. the robot observed X: information only NAMS holds
-                    edge("ent:" + r["a"], "ent:" + r["b"], r["predicate"], "long")
-            for r in d["mirrored"]:
-                edge(r["a"], "ent:" + r["b"], "MIRRORED_BY", "long")
+            if show_entities:
+                for e in d["entities"]:
+                    node("ent:" + e["id"], "Entity", display_name(e["name"]), "long", source="nams", detail=f"{e['name']} ({e['type']}): {e['description'] or ''}", review=e["review"])
+                for r in d["related"]:
+                    if r["predicate"] not in DUPLICATES_OF_OUR_FACTS:  # e.g. the robot observed X: information only NAMS holds
+                        edge("ent:" + r["a"], "ent:" + r["b"], r["predicate"], "long")
+                for r in d["mirrored"]:
+                    edge(r["a"], "ent:" + r["b"], "MIRRORED_BY", "long")
+            elif nodes is not None:  # entities hidden: just mark our own objects that NAMS also stores (one node per thing, not two)
+                for r in d["mirrored"]:
+                    if r["a"] in nodes:
+                        nodes[r["a"]]["in_nams"] = True
         if lens in ("short", "all"):
             d = conversation(mem)
             prev: dict[str, str] = {}
@@ -155,7 +160,7 @@ def add_to_snapshot(mem, lens: str, node, edge) -> None:
                 edge("nstep:" + t["a"], "ntool:" + t["id"], "MADE_LOOKUP", "reasoning")
             ids = sorted({r["b"] for r in d["relied"]})
             if ids:
-                for n in mem._read("MATCH (o:Object) WHERE o.id IN $ids RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status", ids=ids):
+                for n in mem._read("MATCH (o:Item) WHERE o.id IN $ids RETURN o.id AS id, o.label AS label, o.color AS color, o.status AS status", ids=ids):
                     node(n["id"], "Object", n["label"], "long", color=n["color"], status=n["status"])
             for r in d["relied"]:
                 edge("nstep:" + r["a"], r["b"], "RELIED_ON", "reasoning")

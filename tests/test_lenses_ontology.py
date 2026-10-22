@@ -28,14 +28,14 @@ def test_we_never_write_labels_that_nams_owns():
 
 
 def test_ontology_covers_three_memory_layers_and_edges_point_at_real_types():
-    o = ontology.build({"Object": 3, "Sighting": 5})
+    o = ontology.build({"Item": 3, "Sighting": 5})
     ids = {n["id"] for n in o["nodes"]}
     assert {n["memory"] for n in o["nodes"]} == {"short", "long", "reasoning"}
     assert {"Agent", "Object", "Location", "Sighting", "Utterance", "ReasoningStep", "Lookup"} <= ids
     for e in o["edges"]:
         assert e["source"] in ids and e["target"] in ids, e
     po = next(n for n in o["nodes"] if n["id"] == "Object")
-    assert po["aura_label"] == "Object" and po["count"] == 3
+    assert po["aura_label"] == "Item" and po["count"] == 3
     assert next(n for n in o["nodes"] if n["id"] == "Person")["pii"] is True
 
 
@@ -54,7 +54,7 @@ def make_fake():
 def test_lenses_separate_memory_types_and_share_entities_as_context():
     m, oid = make_fake()
     kinds = lambda lens: {n["kind"] for n in m.graph_snapshot(lens=lens)["nodes"]}
-    assert kinds("long") == {"Object", "Location"}
+    assert kinds("long") == {"Object", "Place"}
     assert {"Sighting", "Utterance", "Dialogue"} <= kinds("short")
     assert {"ReasoningStep", "Lookup"} <= kinds("reasoning") and "Utterance" not in kinds("reasoning")
     assert kinds("long") <= kinds("all") and {"ReasoningStep", "Sighting"} <= kinds("all")

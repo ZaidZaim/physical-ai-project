@@ -257,16 +257,21 @@ def watch(action: str):
     return {"watching": brain.watching}
 
 
+@app.get("/api/timeline")
+def timeline(limit: int = 60):
+    return brain.mem.timeline(max(1, min(limit, 200)))
+
+
 @app.get("/api/changes")
 def changes(since: str):
     return brain.mem.changes_since(since)
 
 
 @app.get("/api/graph")
-def graph(lens: str = "long"):
+def graph(lens: str = "long", nams: bool = False):
     if lens not in ("long", "short", "reasoning", "all"):
         raise HTTPException(400, "lens must be long, short, reasoning or all")
-    return brain.mem.graph_snapshot(lens=lens)
+    return brain.mem.graph_snapshot(lens=lens, nams_entities=nams)
 
 
 @app.get("/api/memory/summary")

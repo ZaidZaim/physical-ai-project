@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 ONTOLOGY_FILE = Path(__file__).parents[2] / "ontology" / "puppy_pi.json"
-AURA_LABEL = {"Agent": "Robot"}  # ontology type -> label stored in Aura (Object and Location keep their names)
+AURA_LABEL = {"Agent": "Robot", "Location": "Place", "Object": "Item"}  # ontology type -> label stored in Aura (NAMS owns :Location, so our places are :Place)
 
 # agent-memory types (not in the domain file): label, memory layer, description, properties
 MEMORY_TYPES = [

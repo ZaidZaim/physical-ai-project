@@ -200,7 +200,7 @@ class FakeMemory:
         return f"step-{uid}"
 
     def label_counts(self):
-        return {"Object": len(self.objs), "Location": len({o["loc"] for o in self.objs.values()}), "Robot": 1, "Sighting": len(self.obs),
+        return {"Item": len(self.objs), "Place": len({o["loc"] for o in self.objs.values()}), "Robot": 1, "Sighting": len(self.obs),
                 "Session": 1, "Dialogue": 1 if self.msgs else 0, "Utterance": len(self.msgs), "ReasoningStep": len(self.steps),
                 "Lookup": sum(len(s["tools"]) for s in self.steps)}
 
@@ -213,10 +213,10 @@ class FakeMemory:
     def memory_summary(self):
         c = self.label_counts()
         return {"short": {"observations": c["Sighting"], "messages": c["Utterance"], "conversations": c["Dialogue"]},
-                "long": {"objects": c["Object"], "places": c["Location"], "relationships": len(self.rels)},
+                "long": {"objects": c["Item"], "places": c["Place"], "relationships": len(self.rels)},
                 "reasoning": {"steps": c["ReasoningStep"], "tool_calls": c["Lookup"]}}
 
-    def graph_snapshot(self, limit=300, lens="long"):
+    def graph_snapshot(self, limit=300, lens="long", nams_entities=False):
         nodes, edges = {}, []
 
         def node(i, kind, label, memory, **x):
@@ -229,9 +229,9 @@ class FakeMemory:
         def entity(ids=None):
             for o in self.objs.values():
                 if ids is None or o["id"] in ids:
-                    node(o["id"], "Object", o["label"], "long", color=o["color"], status=o["status"])
+                    node(o["id"], "Object", o["label"], "long", color=o["color"], status=o["status"], place=o["loc"])
             for l in {o["loc"] for o in self.objs.values()}:
-                node(f"loc:{l}", "Location", l, "long")
+                node(f"loc:{l}", "Place", l, "long", place=l)
 
         if lens in ("long", "all"):
             entity()
