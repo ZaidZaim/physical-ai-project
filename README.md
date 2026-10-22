@@ -32,7 +32,7 @@ No Docker anywhere: Aura hosts the graph, NAMS hosts agent memory, the Pi only s
 | 2 Lookup | "What's on the table?" | `related_objects`, `find_object` tools |
 | 3 Analyze | "What changed?" | entity matching (`matching.py`), relation `since/until`, `changes_since` |
 | 4 Understand | "Where did you last see the red backpack?" | `object_history`, `first_observation`, evidence trace in every answer |
-| 5 Interact | "Go where you last saw it" | **not built**; the graph already stores `LOCATED_AT`/zones. Needs localisation + safety (see docs/ARCHITECTURE.md) |
+| 5 Interact | "Go where you last saw it" | `navigate.py`: turns in place to face it, or looks around for it; between rooms it gives the route for you to drive. Never walks on its own (see below) |
 
 ## Quick start
 ```bash
@@ -59,6 +59,20 @@ With the robot: see [docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md).
   left/centre/right third of the video they were seen in.
 * **`Demo replay`** plays a scripted booth day (`eval/scenarios/booth.json`) so you can watch the graph build without a robot.
 * **Dev only:** `PUPPY_FAKE_MEMORY=1` swaps Aura for an in-memory stand-in (nothing persists) to try the UI offline.
+
+## Go where you last saw it (phase 5)
+Ask *"turn to the cat"* / *"go to where you last saw my backpack"* in the chat (or `POST /api/nav/go {"label": "cat"}`).
+The robot has a gyro heading and the direction of each object it has seen, but **no obstacle sensing and no position in the room**, so
+it only does what is safe:
+* **same room, seen during this visit** → turns in place to face it (closed loop on the gyro; bearings from an earlier visit are in another
+  frame and are not trusted);
+* **same room, direction unknown** → looks around: turns in steps, lets the camera check each view, stops and centres when it sees it
+  (needs the camera running);
+* **another room** → the route over the learned room map (`Bathroom -> Hallway -> Dining Room`) for **you** to drive; once it recognises
+  the room, ask again.
+
+It only moves while you have armed **Enable keyboard drive**. Any key, Space, Esc, losing focus, a lost gyro, a stalled turn or a timeout
+stops it at once, and the 0.4 s dead-man still applies. The drive panel shows what it is doing, with a Cancel button.
 
 ## Keyboard drive
 Click **Enable keyboard drive** (nothing moves until you arm it). Hold keys, release to stop:

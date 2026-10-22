@@ -795,6 +795,27 @@ class Memory:
             x=x, y=y, ts=now_iso(),
         )
 
+    def route_between(self, a: str, b: str, max_hops: int = 8) -> list[str] | None:
+        """Shortest chain of places from a to b over the learned adjacency (undirected); None if they are not connected."""
+        if a == b:
+            return [a]
+        rows = self._read(
+            f"""
+            MATCH p = shortestPath((x:Place {{name: $a}})-[:ADJACENT_TO*..{int(max_hops)}]-(y:Place {{name: $b}}))
+            RETURN [n IN nodes(p) | n.name] AS route
+            """, a=a, b=b)
+        return rows[0]["route"] if rows else None
+
+    def bearing_since(self, item_id: str, place: str, since_iso: str) -> float | None:
+        """The object's bearing from its latest detection at `place` since `since_iso` (the current heading frame), else None."""
+        rows = self._read(
+            """
+            MATCH (s:Sighting)-[d:DETECTED]->(:Item {itemId: $id}), (s)-[:TAKEN_AT]->(:Place {name: $place})
+            WHERE s.ts >= datetime($since) AND d.bearing IS NOT NULL
+            RETURN d.bearing AS bearing ORDER BY s.ts DESC LIMIT 1
+            """, id=item_id, place=place, since=since_iso)
+        return rows[0]["bearing"] if rows else None
+
     def rename_place(self, old: str, new: str) -> bool:
         if old == new or self._read("MATCH (l:Place {name: $n}) RETURN count(l) AS c", n=new)[0]["c"]:
             return False

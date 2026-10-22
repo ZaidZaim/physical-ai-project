@@ -72,6 +72,12 @@ class Merge(BaseModel):
     dst: str
 
 
+class GoTo(BaseModel):
+    label: str
+    color: str | None = None
+    execute: bool = True
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
@@ -352,3 +358,21 @@ def drive_state():
     rb = getattr(brain, "rosbridge", None)
     st["rosbridge"] = rb.status() if rb else None
     return st
+
+
+# ---------------------------------------------------------------- phase 5: go where you last saw it
+@app.post("/api/nav/go")
+def nav_go(body: GoTo):
+    """Plan (and, only if driving is armed, start) a turn toward a remembered object. Never walks; see navigate.py."""
+    return brain.go_to(body.label, body.color, execute=body.execute)
+
+
+@app.post("/api/nav/cancel")
+def nav_cancel():
+    brain.nav.cancel("cancelled")
+    return brain.nav.state
+
+
+@app.get("/api/nav")
+def nav_state():
+    return brain.nav.state

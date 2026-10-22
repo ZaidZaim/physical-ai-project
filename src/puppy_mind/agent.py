@@ -45,6 +45,10 @@ Rules:
   A `maybe_moved_from` / `maybe_moved_to` entry is only a HYPOTHESIS (look-alike appeared elsewhere): say "might be the same X that was in ..." and
   give the confidence; never state it as fact. Use current_place for "where are you", places_overview for "which rooms do you know / what is in the
   kitchen / how do rooms connect". Rooms named "Unnamed area N" were discovered automatically and can be renamed by the user.
+- MOVING: only when the person asks you to go to / turn to / look for / face something, call go_to_object. It turns in place or looks
+  around; it NEVER walks, and between rooms it only gives a route for the person to drive. Report its `plan.message` and, when `run` is
+  present, whether it started (`run.started`; if not, `run.reason`, e.g. driving must be armed first). The turn finishes after you reply,
+  so say "turning now" rather than claiming you already face it. Never call it for a question that is only about where something is.
 - recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
   where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
 - For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
@@ -103,6 +107,11 @@ TOOLS = [
         "description": "Most recent observations (id, time, location, summary).",
         "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}}}},
     {"type": "function", "function": {
+        "name": "go_to_object",
+        "description": "Go where an object was last seen, as far as this robot safely can: in the same room it turns in place to face it "
+                       "(or looks around for it); in another room it returns the route for the person to drive. Only when asked to move.",
+        "parameters": {"type": "object", "properties": {"label": {"type": "string"}, "color": {"type": "string"}}, "required": ["label"]}}},
+    {"type": "function", "function": {
         "name": "read_cypher",
         "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:TAKEN_AT]->(Place), (Item)-[:LOCATED_AT {firstSeen,lastSeen,count}]->(Place {placeId,name,roomType,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed}]->(Item). Item{itemId,label,color,status,firstSeen,lastSeen,seenCount,missCount}. Sighting{id,ts,summary}. Property keys are camelCase.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
@@ -114,6 +123,7 @@ class Agent:
         self.s, self.mem, self.nams = s, mem, nams
         self.client = OpenAI(api_key=s.openai_api_key)
         self.place_fn = None  # set by Brain: returns where the robot is now
+        self.go_fn = None  # set by Brain: plans (and, if driving is armed, starts) a turn toward an object
         self.history: dict[str, list[dict]] = {}  # per-session short-term turns (also mirrored to NAMS)
 
     def _with_directions(self, rows: list[dict]) -> list[dict]:
@@ -144,6 +154,7 @@ class Agent:
             "places_overview": lambda: m.places_overview(),
             "recall_memory": lambda: self.nams.recall(a["query"], int(a.get("limit", 5))),
             "read_cypher": lambda: m.read_cypher(a["query"]),
+            "go_to_object": lambda: (self.go_fn(a["label"], a.get("color")) if self.go_fn else {"error": "moving is not available"}),
         }[name]()
 
     def ask(self, question: str, session_id: str) -> dict[str, Any]:
