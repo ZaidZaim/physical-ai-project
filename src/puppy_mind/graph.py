@@ -295,8 +295,8 @@ class Memory:
             MERGE (r:Robot {name:$robot})
             MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt = datetime($ts)
             CREATE (ob:Sighting {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
-                                    image_ref:$img, n_objects:$n, room_type:$room, overlap:$overlap,
-                                    place_confidence:$pc, heading:$heading})
+                                    imageRef:$img, objectCount:$n, roomType:$room, overlap:$overlap,
+                                    placeConfidence:$pc, heading:$heading})
             MERGE (r)-[:RAN]->(s)
             MERGE (ob)-[:IN_SESSION]->(s)
             MERGE (ob)-[:TAKEN_AT]->(l)
