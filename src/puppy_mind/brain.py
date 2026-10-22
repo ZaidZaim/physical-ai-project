@@ -322,7 +322,7 @@ class Brain:
     def go_to(self, label: str, color: str | None = None, execute: bool = True) -> dict[str, Any]:
         here, heading = self.location, self.heading.value()
         target = pick_target(self.mem.find_object(label, color), here)
-        if target and self.place_mode == "auto" and self.tracker.current is None:  # still on the default name: not a real place
+        if target and here not in {p.name for p in self._places()}:  # e.g. still on the default name before a room is recognised
             where = f" It was last seen in {target['location']}." if target.get("location") else ""
             return {"plan": Plan("no_place", f"I don't know which room I'm in yet.{where} Start the camera so I can recognise "
                                              "the room, then ask again.", target).as_dict()}

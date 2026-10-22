@@ -282,6 +282,8 @@ def test_brain_does_not_trust_a_bearing_from_an_earlier_visit(brain):
 
 def test_brain_gives_a_route_to_another_room(brain):
     brain.observe_scene(scene(("cat", "gray", "left"), ("door", "white", "center")), location="Hallway")
+    brain.mem.ensure_place("Living Room", "living room")
+    brain.mem.ensure_place("Kitchen", "kitchen")
     brain.mem.note_transition("Hallway", "Living Room")
     brain.mem.note_transition("Living Room", "Kitchen")
     brain.location = "Kitchen"
