@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Puppy Mind</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232a7f9e' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%232a7f9e'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cpath d='M11 8h12l2.5 11-4 8h-9l-4-8zM11 8L4 11l2 10 3-3M23 8l7 3-2 10-3-3' fill='none' stroke='%232a7f9e' stroke-width='2.4' stroke-linejoin='round' stroke-linecap='round'/%3E%3Ccircle cx='13.5' cy='15.5' r='2.6' fill='%23b9691a'/%3E%3Ccircle cx='20.5' cy='15.5' r='2.6' fill='%232f8f55'/%3E%3Ccircle cx='17' cy='22.5' r='2.8' fill='%237050cc'/%3E%3C/svg%3E">
 <script>
   // theme before first paint: saved choice, else the system setting
   (function () { let t = null; try { t = localStorage.getItem('pm_theme'); } catch (e) {}
@@ -27,7 +27,7 @@
   /* ---- top bar */
   header { display:flex; align-items:center; gap:16px; padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex:none }
   .brand { display:flex; align-items:center; gap:10px; min-width:0; flex:none }
-  .brand svg { width:26px; height:26px; flex:none }
+  .brand svg { width:30px; height:30px; flex:none }
   .brand b { display:block; font:600 14px/1 var(--mono); letter-spacing:.24em; text-transform:uppercase }
   .brand span { display:block; margin-top:4px; white-space:nowrap; font:8.5px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
   nav { display:flex; gap:4px }
@@ -131,7 +131,12 @@
 <body>
 <header>
   <div class="brand">
-    <svg viewBox="0 0 34 34" fill="none" stroke="var(--accent)" stroke-width="1.6"><circle cx="17" cy="17" r="14"/><circle cx="17" cy="17" r="8" stroke-opacity=".55"/><circle cx="17" cy="17" r="2.6" fill="var(--accent)" stroke="none"/><path d="M17 3v5M17 26v5M3 17h5M26 17h5" stroke-opacity=".8"/></svg>
+    <!-- robot-dog face; eyes and nose are a small graph, one node per memory layer -->
+    <svg viewBox="0 0 34 34" fill="none" stroke-linejoin="round" stroke-linecap="round" aria-label="Puppy Mind">
+      <path d="M11 8h12l2.5 11-4 8h-9l-4-8zM11 8L4 11l2 10 3-3M23 8l7 3-2 10-3-3" stroke="var(--accent)" stroke-width="1.7"/>
+      <path d="M13.5 15.5h7L17 22.5z" stroke="var(--mute)" stroke-width="1"/>
+      <circle cx="13.5" cy="15.5" r="2.1" fill="var(--long)"/><circle cx="20.5" cy="15.5" r="2.1" fill="var(--short)"/><circle cx="17" cy="22.5" r="2.3" fill="var(--reasoning)"/>
+    </svg>
     <div><b>Puppy Mind</b><span>Spatial memory · Physical AI</span></div>
   </div>
   <nav id="nav">
