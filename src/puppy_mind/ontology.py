@@ -29,6 +29,8 @@ MEMORY_TYPES = [
 MEMORY_EDGES = [
     ("ADJACENT_TO", "Location", "Location", "long", "the robot went from one place to the other (learned, with a count)"),
     ("POSSIBLY_MOVED_FROM", "Object", "Object", "long", "HYPOTHESIS: a look-alike appeared here after the original stopped being seen elsewhere"),
+    ("RAN", "Agent", "Session", "short", "the robot ran this session (a sighting's robot is reached through its session)"),
+    ("CURRENTLY_IN", "Agent", "Location", "long", "where the robot is now (one edge, moved as it moves; carries heading)"),
     ("DETECTED", "Sighting", "Object", "short", "this frame showed the object (with confidence and bearing)"),
     ("MISSED", "Sighting", "Object", "short", "expected here but not detected (not proof it is gone)"),
     ("AT", "Sighting", "Location", "short", "where the frame was taken"),
