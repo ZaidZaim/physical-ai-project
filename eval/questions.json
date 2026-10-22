@@ -1,0 +1,22 @@
+[
+  {"q": "What do you see right now?", "all_of": [["table"], ["bottle"], ["backpack"], ["chair"]], "forbid": []},
+  {"q": "What objects are on the table?", "all_of": [["bottle"]], "forbid": []},
+  {"q": "Is there a laptop on the table right now?", "all_of": [["not", "no longer", "isn't", "no "]], "forbid": []},
+  {"q": "Was the laptop on the table when you first looked at this booth?", "all_of": [["yes"], ["laptop"]], "forbid": []},
+  {"q": "Where did you last see the laptop?", "all_of": [["table"]], "forbid": []},
+  {"q": "What colour is the backpack?", "all_of": [["red"]], "forbid": []},
+  {"q": "Where is the red backpack?", "all_of": [["chair"]], "forbid": []},
+  {"q": "Was the backpack there at the start?", "all_of": [["no", "not", "appeared", "later"]], "forbid": []},
+  {"q": "What changed in this booth since the beginning?", "all_of": [["backpack"], ["laptop"]], "forbid": []},
+  {"q": "What new objects appeared?", "all_of": [["backpack"]], "forbid": []},
+  {"q": "Which objects might have been removed?", "all_of": [["laptop"]], "forbid": ["bottle was removed"]},
+  {"q": "Are you certain the laptop was taken away?", "all_of": [["not", "no ", "can't", "cannot", "unsure", "uncertain", "possibly"]], "forbid": []},
+  {"q": "How many chairs have you seen?", "all_of": [["1", "one", "a single"]], "forbid": []},
+  {"q": "What colour is the bottle?", "all_of": [["blue"]], "forbid": []},
+  {"q": "What is next to the chair?", "all_of": [["backpack", "table"]], "forbid": []},
+  {"q": "Did you ever see a monitor?", "all_of": [["no", "not", "never", "haven't"]], "forbid": []},
+  {"q": "Where is the table?", "all_of": [["booth"]], "forbid": []},
+  {"q": "When did you first see the backpack?", "all_of": [["backpack"], ["minute", "ago", "20", ":"]], "forbid": []},
+  {"q": "Is the bottle still on the table?", "all_of": [["yes", "still"]], "forbid": []},
+  {"q": "Summarise what you remember about this booth.", "all_of": [["table"], ["laptop"], ["backpack"]], "forbid": []}
+]

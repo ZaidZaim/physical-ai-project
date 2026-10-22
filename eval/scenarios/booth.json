@@ -1,0 +1,23 @@
+{
+  "location": "Booth",
+  "steps": [
+    {"t_min": 0, "summary": "A table with a silver laptop and a water bottle; a chair stands beside it.",
+     "objects": ["table:brown:center", "laptop:silver:center", "bottle:blue:right", "chair:black:left"],
+     "relations": ["1 ON 0", "2 ON 0", "3 NEXT_TO 0"]},
+    {"t_min": 10, "summary": "Same table setup, laptop and bottle still on it.",
+     "objects": ["table:brown:center", "laptop:silver:center", "bottle:blue:right", "chair:black:left"],
+     "relations": ["1 ON 0", "2 ON 0", "3 NEXT_TO 0"]},
+    {"t_min": 20, "summary": "A red backpack has appeared next to the chair.",
+     "objects": ["table:brown:center", "laptop:silver:center", "bottle:blue:right", "chair:black:left", "backpack:red:left"],
+     "relations": ["1 ON 0", "2 ON 0", "3 NEXT_TO 0", "4 NEXT_TO 3"]},
+    {"t_min": 30, "summary": "Table with bottle and backpack; the laptop is not visible.",
+     "objects": ["table:brown:center", "bottle:blue:right", "chair:black:left", "backpack:red:left"],
+     "relations": ["1 ON 0", "3 NEXT_TO 2"]},
+    {"t_min": 40, "summary": "Table with bottle; laptop still not visible.",
+     "objects": ["table:brown:center", "bottle:blue:right", "chair:black:left", "backpack:red:left"],
+     "relations": ["1 ON 0", "3 NEXT_TO 2"]},
+    {"t_min": 50, "summary": "Table with bottle; laptop still not visible.",
+     "objects": ["table:brown:center", "bottle:blue:right", "chair:black:left", "backpack:red:left"],
+     "relations": ["1 ON 0", "3 NEXT_TO 2"]}
+  ]
+}

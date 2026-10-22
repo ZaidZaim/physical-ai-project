@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {"t_min": 0, "room": "kitchen", "summary": "A kitchen: fridge, stove, table and a chair.",
+     "objects": ["fridge:white:left", "stove:black:right", "table:brown:center", "chair:brown:center"], "relations": ["3 NEXT_TO 2"]},
+    {"t_min": 1, "room": "kitchen", "summary": "The same kitchen from a slightly different angle.",
+     "objects": ["fridge:white:left", "table:brown:center", "chair:brown:right"], "relations": []},
+    {"t_min": 2, "room": "kitchen", "summary": "One corner of the kitchen: only the fridge and stove.",
+     "objects": ["fridge:white:left", "stove:black:right"], "relations": []},
+    {"t_min": 3, "room": "living room", "summary": "A living room: sofa, tv, a table and a chair.",
+     "objects": ["sofa:grey:left", "tv:black:right", "table:brown:center", "chair:brown:center"], "relations": []},
+    {"t_min": 4, "room": "living room", "summary": "The living room again.",
+     "objects": ["sofa:grey:left", "tv:black:right", "plant:green:center"], "relations": []},
+    {"t_min": 5, "room": "unknown", "summary": "A wall.", "objects": [], "relations": []},
+    {"t_min": 6, "room": "hallway", "summary": "A hallway with a door, shoes and a bag.",
+     "objects": ["door:brown:left", "shoe:black:center", "bag:yellow:right"], "relations": []},
+    {"t_min": 7, "room": "hallway", "summary": "The hallway.",
+     "objects": ["door:brown:left", "shoe:black:center", "bag:yellow:right", "shoe:red:right"], "relations": []},
+    {"t_min": 8, "room": "kitchen", "summary": "Back in the kitchen: fridge, table and chair, but no stove.",
+     "objects": ["fridge:white:left", "table:brown:center", "chair:brown:center", "mug:white:center"], "relations": ["3 NEXT_TO 2"]},
+    {"t_min": 9, "room": "kitchen", "summary": "The kitchen, still without the stove.",
+     "objects": ["fridge:white:left", "table:brown:center", "chair:brown:center", "mug:white:center"], "relations": []}
+  ]
+}
