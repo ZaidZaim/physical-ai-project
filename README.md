@@ -45,11 +45,11 @@ takes velocity commands over its stock rosbridge. Nothing has to be installed on
 NAMS writes into the **same** Aura database under its own labels (`Entity`, `Message`, `AgentStep`, ...). The app never writes those
 labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the two.
 
-### The graph
+### Graph ontology
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
-  <img src="docs/diagrams/graph-model-light.svg" alt="Graph model: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
 </picture>
 
 

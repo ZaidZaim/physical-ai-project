@@ -1,4 +1,4 @@
-"""Draw the README diagrams (architecture, graph model) as hand-laid-out SVGs, in a light and a dark version.
+"""Draw the README diagrams (architecture, graph ontology) as hand-laid-out SVGs, in a light and a dark version.
 
     uv run python docs/diagrams/make_diagrams.py
 
@@ -125,7 +125,7 @@ def architecture(theme: str) -> str:
     return s.render()
 
 
-# ------------------------------------------------------------------ graph model
+# ------------------------------------------------------------------ graph ontology
 def node(s: Svg, cx, cy, r, name, sub, color):
     t = s.t
     s.add(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}"/>')
@@ -173,7 +173,7 @@ def loop(s: Svg, cx, cy, r, side, name, lines=None):
 
 def graph_model(theme: str) -> str:
     t = THEMES[theme]
-    s = new(900, 520, t, "puppy-mind graph model")
+    s = new(900, 520, t, "puppy-mind graph ontology")
     R = {"Robot": (120, 112), "Session": (430, 112), "Place": (740, 150), "Sighting": (300, 320), "Item": (610, 320)}
     r = 46
     # edges first, nodes on top
