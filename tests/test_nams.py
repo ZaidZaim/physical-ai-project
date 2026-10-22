@@ -14,6 +14,7 @@ from puppy_mind.nams import Nams, narrative
 class FakeNams:
     def __init__(self, mode="ok"):
         self.mode, self.calls, self.entities, self.n = mode, [], {}, 0
+        self.desc = {}              # entity id -> description
         self.headers_seen = {}
         self.merge_always = set()   # entity names NAMS "merges" (measured live: look-alike names get merged)
         self.pairs = []             # pending review pairs returned by GET /v1/reviews
@@ -51,6 +52,7 @@ class FakeNams:
                     results.append({"index": i, "merged_into": self.entities[key], "resolution": "merged"})
                 else:
                     self.entities[key] = self._id("ent")
+                    self.desc[self.entities[key]] = e.get("description", "")
                     results.append({"index": i, "id": self.entities[key]})
             return httpx.Response(200, json={"created": len(results), "failed": 0, "merged": 0, "results": results})
         if req.method == "GET" and path == "/v1/reviews":
@@ -59,6 +61,14 @@ class FakeNams:
             return httpx.Response(200, json={"status": "ok"})
         if path == "/v1/relationships/bulk":
             return httpx.Response(200, json={"created": len(body["relationships"]), "failed": 0, "reasserted": 0, "results": []})
+        if req.method == "GET" and path == "/v1/entities/by-name":
+            name, typ = req.url.params.get("name"), req.url.params.get("type")
+            return httpx.Response(200, json={"entities": [{"id": i, "name": n, "type": t, "description": self.desc.get(i, "")}
+                                                          for (n, t), i in self.entities.items() if n == name and (not typ or t == typ)]})
+        if req.method == "DELETE" and path.startswith("/v1/entities/"):
+            eid = path.rsplit("/", 1)[-1]
+            self.entities = {k: v for k, v in self.entities.items() if v != eid}
+            return httpx.Response(200, json={"deleted": eid})
         if req.method == "PUT" and path.startswith("/v1/entities/"):
             return httpx.Response(200, json={"status": "ok"})
         if path == "/v1/reasoning/steps":
@@ -273,4 +283,45 @@ def test_flags_raised_after_the_response_are_rejected_by_the_recheck():
     time.sleep(0.4)
     assert n.flush(5)
     assert any("/reviews/late/decision" in p for m, p, b in fake.calls if m == "POST")
+    n.close()
+
+
+def test_after_a_restart_our_robot_and_place_entities_are_reused_not_lost():
+    """Re-creating an existing name comes back "merged", which is never mirrored onto. So the robot and place entities must be
+    found again by name, or no object ever gets LOCATED_AT its place after a restart (seen live: a place mirror with no links)."""
+    fake = FakeNams()
+    first, _ = make(fake)
+    first.submit_observation(obs([O("o1", "table", "brown")]))
+    assert first.flush(5)
+    first.close()
+    booth, robot = fake.entities[("Booth", "Location")], fake.entities[("PuppyPi", "Agent")]
+    fake.calls.clear()
+    second, _ = make(fake)  # a new process: empty caches
+    second.submit_observation(obs([O("o2", "cup", "white")], oid="obs-2"))
+    assert second.flush(5)
+    created = [e["name"] for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"]]
+    assert "Booth" not in created and "PuppyPi" not in created
+    rels = [r for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
+    assert any(r["relationshipType"] == "LOCATED_AT" and r["targetId"] == booth for r in rels)
+    assert any(r["relationshipType"] == "OBSERVED" and r["sourceId"] == robot for r in rels)
+    second.close()
+
+
+def test_merging_places_moves_object_links_and_deletes_only_our_old_place_mirror():
+    fake = FakeNams()
+    n, _ = make(fake)
+    n.submit_observation({**obs([O("g1", "stairs", "brown"), O("g2", "cabinet", "black")]), "location": "Garage", "place_id": "plc-240c1dca"})
+    n.submit_observation({**obs([O("h1", "door", "brown")], oid="obs-2"), "location": "Hallway", "place_id": "plc-52af09af"})
+    assert n.flush(5)
+    garage, hallway = fake.entities[("Garage 0c1dca", "Location")], fake.entities[("Hallway af09af", "Location")]
+    fake.entities[("Garage 0c1dca", "Object")] = "extracted-1"  # NAMS's own entity from text with the same name: not ours
+    fake.calls.clear()
+    n.submit_merge("Garage", "plc-240c1dca", "Hallway", "plc-52af09af", ["g1", "g2", "not-mirrored"], "PuppyPi")
+    assert n.flush(5)
+    rels = [r for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
+    assert sorted(r["sourceId"] for r in rels) == sorted([n._links["g1"]["id"], n._links["g2"]["id"]])
+    assert {(r["relationshipType"], r["targetId"]) for r in rels} == {("LOCATED_AT", hallway)}
+    deleted = [p.rsplit("/", 1)[-1] for m, p, b in fake.calls if m == "DELETE"]
+    assert deleted == [garage]  # the extracted look-alike and the Hallway mirror are left alone
+    assert ("Garage 0c1dca", "Object") in fake.entities and ("Hallway af09af", "Location") in fake.entities
     n.close()

@@ -854,6 +854,9 @@ class Memory:
         self.prune_cross_place_facts()
         return moved
 
+    def object_ids_at(self, place: str) -> list[str]:
+        return [r["id"] for r in self._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name: $p}) RETURN o.itemId AS id", p=place)]
+
     def merge_places(self, src: str, dst: str) -> bool:
         """Fold place src into dst (e.g. two provisional views of the same kitchen). Objects keep their ids; look-alikes may remain
         as duplicates and are tidied by normal matching over time."""

@@ -331,8 +331,14 @@ class Brain:
         return ok
 
     def merge_places(self, src: str, dst: str) -> bool:
+        names = {p.name for p in self._places()}
+        if src == dst or src not in names or dst not in names:
+            return False
+        src_id, dst_id = self._place_id(src), self._place_id(dst)  # before the merge deletes src
+        moved = self.mem.object_ids_at(src)
         ok = self.mem.merge_places(src, dst)
         if ok:
+            self.nams.submit_merge(src, src_id, dst, dst_id, moved, self.s.robot_name)
             if self.location == src:
                 self.location = dst
             if self.tracker.current == src:

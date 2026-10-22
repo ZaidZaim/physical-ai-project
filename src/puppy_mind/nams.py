@@ -33,6 +33,7 @@ from .config import Settings
 log = logging.getLogger("puppy_mind.nams")
 
 T_ROBOT, T_PLACE, T_OBJECT, T_PERSON = "Agent", "Location", "Object", "Person"  # types of the workspace's ACTIVE ontology (verified live)
+OWN_DESCRIPTIONS = ("Place observed by", "Hiwonder PuppyPi")  # how our own robot/place entities are told apart from extracted ones
 SPATIAL = ("ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND")
 
 
@@ -196,9 +197,19 @@ class Nams:
                 res[i]["merged_into"] = r.get("merged_into")
         return res
 
+    def _find_own(self, name: str, type_: str) -> list[str]:
+        """Ids of entities THIS app created with exactly this name (recognised by our own description text)."""
+        r = self._req("GET", "/v1/entities/by-name", params={"name": name, "type": type_}) or {}
+        return [e["id"] for e in r.get("entities", [])
+                if e.get("name") == name and e.get("id") and (e.get("description") or "").startswith(OWN_DESCRIPTIONS)]
+
     def _fixed_entity(self, kind: str, name: str, type_: str, description: str) -> str | None:
         key = (kind, name)
-        if key not in self._fixed:
+        if key not in self._fixed:  # reuse ours after a restart: re-creating it returns "merged", which is never mirrored onto
+            own = self._find_own(name, type_)
+            if own:
+                self._fixed[key] = own[0]
+                return own[0]
             item = {"name": name, "type": type_, "description": description}
             if type_ == T_ROBOT:
                 item["properties"] = {"agent_id": name}  # the Agent type in the active ontology requires agent_id
@@ -222,6 +233,20 @@ class Nams:
         if ea and eb:
             self._relationships([{"relationshipType": "ADJACENT_TO", "sourceId": ea, "targetId": eb,
                                   "properties": {"learned_from": "robot moved between them"}}])
+
+    def submit_merge(self, src: str, src_id: str | None, dst: str, dst_id: str | None, object_ids: list[str], robot: str) -> None:
+        """Places src and dst were merged in Aura: point src's objects at dst's mirror and delete src's mirror."""
+        self._submit(self._merge, src, src_id, dst, dst_id, list(object_ids), robot)
+
+    def _merge(self, src: str, src_id: str | None, dst: str, dst_id: str | None, object_ids: list[str], robot: str) -> None:
+        dst_e = self._fixed_entity("place", self._place_name(dst, dst_id), T_PLACE, f"Place observed by {robot}")
+        if dst_e:
+            self._relationships([{"relationshipType": "LOCATED_AT", "sourceId": self._links[o]["id"], "targetId": dst_e,
+                                  "properties": {"learned_from": f"place {src} merged into {dst}"}}
+                                 for o in object_ids if o in self._links])
+        src_full = self._place_name(src, src_id)
+        for eid in {self._fixed.pop(("place", src_full), None), *self._find_own(src_full, T_PLACE)} - {None, dst_e}:
+            self._req("DELETE", f"/v1/entities/{eid}")  # its LOCATED_AT/ADJACENT_TO edges go with it
 
     def submit_rename(self, old: str, new: str, place_id: str | None) -> None:
         self._submit(self._rename, old, new, place_id)
