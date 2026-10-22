@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Puppy Mind</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%232a7f9e' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%232a7f9e'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cg fill='none' stroke='%232a7f9e' stroke-width='2.2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath id='h' d='M17 6.5c-1.8-1.6-5-1.2-6 1-3 .1-4.8 2.8-4 5.4-2.4 1.4-2.6 5-.4 6.6-.6 2.8 1.6 5.6 4.6 5.4 1.2 2.4 4.4 3 5.8 1.1zM7 12.9c2.2-.6 3.6.6 4 2.4.4 1.6 2 2.2 3.6 1.6'/%3E%3Cuse href='%23h' transform='matrix(-1 0 0 1 34 0)'/%3E%3C/g%3E%3Ccircle cx='15' cy='10.9' r='2.2' fill='%23b9691a'/%3E%3Ccircle cx='20.2' cy='16.9' r='2.2' fill='%232f8f55'/%3E%3Ccircle cx='14.6' cy='21.7' r='2.2' fill='%237050cc'/%3E%3C/svg%3E">
 <script>
   // theme before first paint: saved choice, else the system setting
   (function () { let t = null; try { t = localStorage.getItem('pm_theme'); } catch (e) {}
@@ -27,7 +27,7 @@
   /* ---- top bar */
   header { display:flex; align-items:center; gap:16px; padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex:none }
   .brand { display:flex; align-items:center; gap:10px; min-width:0; flex:none }
-  .brand svg { width:26px; height:26px; flex:none }
+  .brand svg { width:30px; height:30px; flex:none }
   .brand b { display:block; font:600 14px/1 var(--mono); letter-spacing:.24em; text-transform:uppercase }
   .brand span { display:block; margin-top:4px; white-space:nowrap; font:8.5px/1 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
   nav { display:flex; gap:4px }
@@ -131,7 +131,15 @@
 <body>
 <header>
   <div class="brand">
-    <svg viewBox="0 0 34 34" fill="none" stroke="var(--accent)" stroke-width="1.6"><circle cx="17" cy="17" r="14"/><circle cx="17" cy="17" r="8" stroke-opacity=".55"/><circle cx="17" cy="17" r="2.6" fill="var(--accent)" stroke="none"/><path d="M17 3v5M17 26v5M3 17h5M26 17h5" stroke-opacity=".8"/></svg>
+    <!-- brain (top view); the right hemisphere mirrors the left. One node per memory layer sits on the folds -->
+    <svg viewBox="0 0 34 34" fill="none" stroke="var(--accent)" stroke-linejoin="round" stroke-linecap="round" aria-label="Puppy Mind">
+      <defs><g id="hemi">
+        <path d="M17 6.5c-1.8-1.6-5-1.2-6 1-3 .1-4.8 2.8-4 5.4-2.4 1.4-2.6 5-.4 6.6-.6 2.8 1.6 5.6 4.6 5.4 1.2 2.4 4.4 3 5.8 1.1z" stroke-width="1.6"/>
+        <path d="M11 7.5c0 2.4 1.6 3.6 4 3.4M7 12.9c2.2-.6 3.6.6 4 2.4.4 1.6 2 2.2 3.6 1.6M6.6 19.5c2 .4 3.6-.6 4.2-2.2M11.2 24.9c0-2 1.4-3.2 3.4-3.2 1 0 1.8-.6 2.2-1.4" stroke-width="1.1" stroke-opacity=".75"/>
+      </g></defs>
+      <use href="#hemi"/><use href="#hemi" transform="matrix(-1 0 0 1 34 0)"/>
+      <circle cx="15" cy="10.9" r="1.6" fill="var(--long)" stroke="none"/><circle cx="20.2" cy="16.9" r="1.6" fill="var(--short)" stroke="none"/><circle cx="14.6" cy="21.7" r="1.6" fill="var(--reasoning)" stroke="none"/>
+    </svg>
     <div><b>Puppy Mind</b><span>Spatial memory · Physical AI</span></div>
   </div>
   <nav id="nav">

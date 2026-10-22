@@ -2,7 +2,12 @@
   "message": "puppy-mind: physical-world vocabulary (Agent=robot, Location, Object, Person) with spatial relationships; extends the agent-memory ontology",
   "validation_mode": "permissive",
   "ontology": {
-    "domain": {},
+    "domain": {
+      "id": "puppy-pi",
+      "name": "PuppyPi Physical World",
+      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places, consenting people, and the spatial relationships between them",
+      "tagline": "Talk with your environment"
+    },
     "entity_types": [
       {
         "label": "Agent",
