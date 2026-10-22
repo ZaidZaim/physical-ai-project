@@ -39,6 +39,8 @@ def cleanup(m):
 
 
 m = Memory(get_settings())
+# the checks move the robot's CURRENTLY_IN edge onto a test place: remember the real one and put it back at the end
+robot_at = m._read("MATCH (:Robot {name:$r})-[c:CURRENTLY_IN]->(p:Place) RETURN p.name AS place, c.heading AS h", r=m.s.robot_name)
 try:
     cleanup(m)
     sid = m.start_session("zz-spatial-test-session")
@@ -48,15 +50,18 @@ try:
     m.ensure_place(LIVING, "living room", True)
     k1 = ing(KITCHEN, "kitchen", ("zzfridge", "white", "left"), ("zzchair", "brown", "center"), ("zzstove", "black", "right"))
     l1 = ing(LIVING, "living room", ("zzsofa", "grey", "left"), ("zzchair", "brown", "center"), ("zztv", "black", "right"))
-    ch = m._read("MATCH (o:Item {label:'zzchair'})-[:LOCATED_AT]->(l:Place) RETURN o.id AS id, l.name AS place ORDER BY l.name")
+    fresh = m._read("MATCH (s:Sighting {source:$src})-[:TAKEN_AT]->(l:Place)<-[:LOCATED_AT]-(o:Item) "
+                    "RETURN [k IN keys(s) + keys(l) + keys(o) WHERE k CONTAINS '_'] AS snake LIMIT 1", src=SRC)
+    check("fresh writes use camelCase keys (before any migration runs)", fresh and not fresh[0]["snake"], fresh)
+    ch = m._read("MATCH (o:Item {label:'zzchair'})-[:LOCATED_AT]->(l:Place) RETURN o.itemId AS id, l.name AS place ORDER BY l.name")
     check("the same kind of chair in two places is two different objects", len(ch) == 2 and ch[0]["id"] != ch[1]["id"], [c["place"][-8:] for c in ch])
 
     places = {p["name"]: p for p in m.list_places() if p["name"].startswith(P)}
     check("list_places gives each place its own objects and room type",
           {o["label"] for o in places[KITCHEN]["objects"]} == {"zzfridge", "zzchair", "zzstove"} and places[LIVING]["room_type"] == "living room")
 
-    stove = m._read("MATCH (o:Item {label:'zzstove'}) RETURN o.id AS id")[0]["id"]
-    fr = lambda: m._read("MATCH (o:Item {id:$i}) RETURN o.miss_count AS miss, o.status AS status", i=stove)[0]
+    stove = m._read("MATCH (o:Item {label:'zzstove'}) RETURN o.itemId AS id")[0]["id"]
+    fr = lambda: m._read("MATCH (o:Item {itemId:$i}) RETURN o.missCount AS miss, o.status AS status", i=stove)[0]
 
     r = ing(KITCHEN, "kitchen", ("zzchair", "brown", "center"))  # one corner of the kitchen: overlap 1/3 < 0.5
     check("a frame showing only a corner does NOT count as evidence of absence", r["misses_counted"] is False and fr()["miss"] == 0, f"overlap {r['overlap']}")
@@ -96,7 +101,7 @@ try:
     m.ingest(sc, session_id=sid, location=ANCHOR, source=SRC, room_type="office")
     for _ in range(3):
         r = ing(ANCHOR, "office", ("zzdesk", "brown", "center"))  # a quarter of the place in view
-    st = {x["label"]: x for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.status AS status, o.miss_count AS miss", p=ANCHOR)}
+    st = {x["label"]: x for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.status AS status, o.missCount AS miss", p=ANCHOR)}
     check("partial view: the mug that was ON the desk is missed (its anchor is in view)", st["zzmug"]["status"] == "possibly_gone", st["zzmug"])
     check("partial view: the lamp and monitor (no anchor in view) are just out of frame, not missing", st["zzlamp"]["miss"] == 0 and st["zzmonitor"]["miss"] == 0, (st["zzlamp"]["miss"], st["zzmonitor"]["miss"]))
 
@@ -104,12 +109,12 @@ try:
     ORI = P + "orient"
     m.ensure_place(ORI, "living room", True)
     ing(ORI, "living room", ("zztable", "brown", "center"), ("zzsofa", "grey", "left"), ("zzlamp", "black", "right"), heading=90.0)
-    b = {x["label"]: x["bearing"] for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.last_bearing AS bearing", p=ORI)}
+    b = {x["label"]: x["bearing"] for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.lastBearing AS bearing", p=ORI)}
     fov = get_settings().camera_fov_deg
     check("bearings are stored per object (left is counter-clockwise: heading + fov/3)", b["zztable"] == 90.0 and abs(b["zzsofa"] - (90 + fov / 3)) < 0.2 and abs(b["zzlamp"] - (90 - fov / 3)) < 0.2, b)
     for _ in range(4):
         ing(ORI, "living room", ("zzwindow", "white", "center"), ("zzcabinet", "white", "left"), heading=270.0)  # turned around
-    st = {x["label"]: x["miss"] for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.miss_count AS miss", p=ORI)}
+    st = {x["label"]: x["miss"] for x in m._read("MATCH (o:Item)-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.label AS label, o.missCount AS miss", p=ORI)}
     check("objects behind the robot (outside the view cone) are not missing", st["zztable"] == 0 and st["zzsofa"] == 0 and st["zzlamp"] == 0, st)
     for _ in range(3):
         ing(ORI, "living room", ("zzsofa", "grey", "center"), ("zzlamp", "black", "right"), heading=90.0)  # looking at the table's spot: it is gone
@@ -123,9 +128,9 @@ try:
     ids = []
     for zone in ("left", "right"):  # two sightings, each showing one brown box, plus a bag that is always present
         m.ingest(scene("storage", ("zzbox", "brown", zone), ("zzcrate", "black", "center")), session_id=sid, location=DUP, source=SRC, room_type="storage")
-    box_ids = [r["id"] for r in m._read("MATCH (o:Item {label:'zzbox'})-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.id AS id", p=DUP)]
+    box_ids = [r["id"] for r in m._read("MATCH (o:Item {label:'zzbox'})-[:LOCATED_AT]->(:Place {name:$p}) RETURN o.itemId AS id", p=DUP)]
     if len(box_ids) == 1:  # matching already unified them: force a second copy so the merge itself is tested
-        m._write("MATCH (l:Place {name:$p}) CREATE (o:Item {id:'zz-dup-2', label:'zzbox', color:'brown', seen_count:1, miss_count:0, status:'present', first_seen:datetime()})-[:LOCATED_AT]->(l)", p=DUP)
+        m._write("MATCH (l:Place {name:$p}) CREATE (o:Item {itemId:'zz-dup-2', label:'zzbox', color:'brown', seenCount:1, missCount:0, status:'present', firstSeen:datetime()})-[:LOCATED_AT]->(l)", p=DUP)
     pairs = m.find_duplicates(DUP)
     check("two never-co-occurring look-alikes are reported as duplicates", len(pairs) == 1 and pairs[0]["label"] == "zzbox", pairs)
     merged = m.consolidate_duplicates(DUP)
@@ -137,16 +142,34 @@ try:
     # --- schema: NAMS's :Location entities must never show up as our places; legacy :Location places migrate to :Place
     m._write("CREATE (:Entity:Location {id:'zz-ent-1', name:'zz-spatial-test-floor'})")
     m._write("CREATE (:Location {id:'plc-zzlegacy', name:'zz-spatial-test-legacy', room_type:'kitchen'})")
-    m.init_schema()  # runs the label migration
+    # --- key migration: what older versions stored (snake_case keys, bare id, :AT) is renamed; a NAMS node with one of our labels is not
+    m._write("CREATE (:Item {id:'zz-legacy-item', label:'zzlegacy', seen_count:2, first_seen:datetime()})")
+    m._write("MATCH (k:Place {name:$k}) CREATE (:Sighting {id:'zz-legacy-obs', ts:datetime(), source:$src, n_objects:0})-[:AT]->(k)", k=KITCHEN, src=SRC)
+    m._write("CREATE (:Session:Entity {id:'zz-nams-session', name:'zz-spatial-test-nams', started_at:'kept'})")
+    m.init_schema()  # runs the label and key migrations
     names = {p["name"] for p in m.list_places()}
     check("a NAMS :Entity:Location entity is not one of our places", "zz-spatial-test-floor" not in names, sorted(n for n in names if n.startswith(P))[:3])
     check("a legacy :Location place (plc- id) was migrated to :Place", "zz-spatial-test-legacy" in names)
+    lp = m._read("MATCH (l:Place {name:'zz-spatial-test-legacy'}) RETURN l.placeId AS id, l.roomType AS room, l.id AS old_id, l.room_type AS old_room")[0]
+    check("legacy place keys renamed: id -> placeId, room_type -> roomType", lp == {"id": "plc-zzlegacy", "room": "kitchen", "old_id": None, "old_room": None}, lp)
+    li = m._read("MATCH (o:Item {label:'zzlegacy'}) RETURN o.itemId AS id, o.seenCount AS seen, o.firstSeen IS NOT NULL AS first, o.id AS old_id, o.seen_count AS old_seen")[0]
+    check("legacy item keys renamed: id -> itemId, seen_count -> seenCount, first_seen -> firstSeen",
+          li == {"id": "zz-legacy-item", "seen": 2, "first": True, "old_id": None, "old_seen": None}, li)
+    lo = m._read("MATCH (s:Sighting {id:'zz-legacy-obs'}) RETURN s.objectCount AS n, count{ (s)-[:TAKEN_AT]->() } AS taken, count{ (s)-[:AT]->() } AS at")[0]
+    check("legacy sighting: n_objects -> objectCount, AT -> TAKEN_AT", lo == {"n": 0, "taken": 1, "at": 0}, lo)
+    ns = m._read("MATCH (s:Session:Entity {id:'zz-nams-session'}) RETURN s.started_at AS old, s.startedAt AS new")[0]
+    check("a NAMS :Session:Entity node is left untouched by the key migration", ns == {"old": "kept", "new": None}, ns)
+    check("no snake_case keys are left on this app's nodes", not m._read(
+        "MATCH (n) WHERE (n:Item OR n:Place OR n:Sighting OR n:Session OR n:Dialogue) AND NOT n:Entity "
+        "AND any(k IN keys(n) WHERE k CONTAINS '_') RETURN labels(n) AS l, [k IN keys(n) WHERE k CONTAINS '_'] AS k LIMIT 5"))
     m.set_robot_place(KITCHEN, 90.0)
     m.set_robot_place(LIVING, 10.0)
     cur = m._read("MATCH (:Robot)-[c:CURRENTLY_IN]->(p:Place) WHERE p.name STARTS WITH $p RETURN p.name AS place, c.heading AS h", p=P)
     check("the robot is currently in exactly one place, with its heading", len(cur) == 1 and cur[0]["place"] == LIVING and cur[0]["h"] == 10.0, cur)
 finally:
     cleanup(m)
+    if robot_at and not robot_at[0]["place"].startswith(P):
+        m.set_robot_place(robot_at[0]["place"], robot_at[0]["h"])
     left = m._read("MATCH (n) WHERE (n:Item AND n.label STARTS WITH 'zz') OR (n:Place AND n.name STARTS WITH $p) OR (n:Sighting AND n.source = $s) RETURN count(n) AS c", p=P, s=SRC)[0]["c"]
     print(f"cleanup: {left} test nodes left")
     m.close()

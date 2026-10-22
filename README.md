@@ -72,7 +72,7 @@ losing focus or a network drop stops and disarms; speed caps live on the robot; 
 driving away never makes objects look "possibly gone".
 
 ## Memory rules that matter
-* **One missed detection never deletes anything.** Objects carry `miss_count`; only after `MISS_THRESHOLD`
+* **One missed detection never deletes anything.** Objects carry `missCount`; only after `MISS_THRESHOLD`
   consecutive misses *at the same location* do they become `possibly_gone`, and answers say "not seen", never "removed".
 * **Identity is conservative.** A detection matches a known object only on same label + compatible colour
   (+ zone/relation anchors). Doubt → new object. Wrong merges corrupt history; duplicates can be merged later.

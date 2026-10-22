@@ -104,7 +104,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "read_cypher",
-        "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:AT]->(Place), (Item)-[:LOCATED_AT]->(Place {name,room_type,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until}]->(Item). Item{id,label,color,status,first_seen,last_seen}. Sighting{id,ts,summary}.",
+        "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:TAKEN_AT]->(Place), (Item)-[:LOCATED_AT {firstSeen,lastSeen,count}]->(Place {placeId,name,roomType,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed}]->(Item). Item{itemId,label,color,status,firstSeen,lastSeen,seenCount,missCount}. Sighting{id,ts,summary}. Property keys are camelCase.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
 
