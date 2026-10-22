@@ -36,6 +36,9 @@ def cleanup(m):
     m._write("MATCH (o:Item) WHERE o.label STARTS WITH 'zz' DETACH DELETE o")
     m._write("MATCH (l:Place) WHERE l.name STARTS WITH $p DETACH DELETE l", p=P)
     m._write("MATCH (n) WHERE (n:Location OR n:Entity) AND n.name STARTS WITH $p DETACH DELETE n", p=P)
+    m._write("MATCH (c:Dialogue) WHERE c.id STARTS WITH 'zz-' OPTIONAL MATCH (c)-[:HAS_UTTERANCE|HAS_REASONING]->(x) "
+             "OPTIONAL MATCH (x)-[:MADE_LOOKUP]->(t) DETACH DELETE c, x, t")
+    m._write("MATCH (s:Session) WHERE s.id STARTS WITH 'zz-' DETACH DELETE s")
 
 
 m = Memory(get_settings())
@@ -44,6 +47,8 @@ robot_at = m._read("MATCH (:Robot {name:$r})-[c:CURRENTLY_IN]->(p:Place) RETURN 
 try:
     cleanup(m)
     sid = m.start_session("zz-spatial-test-session")
+    check("starting a session writes nothing until something happens in it",
+          not m._read("MATCH (s:Session {id:$s}) RETURN s", s=sid))
     ing = lambda place, room, *objs, **kw: m.ingest(scene(room, *objs), session_id=sid, location=place, source=SRC, room_type=room, **kw)
 
     m.ensure_place(KITCHEN, "kitchen", True)
@@ -146,6 +151,8 @@ try:
     m._write("CREATE (:Item {id:'zz-legacy-item', label:'zzlegacy', seen_count:2, first_seen:datetime()})")
     m._write("MATCH (k:Place {name:$k}) CREATE (:Sighting {id:'zz-legacy-obs', ts:datetime(), source:$src, n_objects:0})-[:AT]->(k)", k=KITCHEN, src=SRC)
     m._write("CREATE (:Session:Entity {id:'zz-nams-session', name:'zz-spatial-test-nams', started_at:'kept'})")
+    m._write("CREATE (:Session {id:'zz-empty-session', startedAt:datetime()})")  # what every app start used to leave behind
+    m._write("MATCH (r:Robot {name:$r}), (o:Item {label:'zzlegacy'}) CREATE (r)-[:OBSERVED {first:datetime()}]->(o)", r=m.s.robot_name)
     m.init_schema()  # runs the label and key migrations
     names = {p["name"] for p in m.list_places()}
     check("a NAMS :Entity:Location entity is not one of our places", "zz-spatial-test-floor" not in names, sorted(n for n in names if n.startswith(P))[:3])
@@ -159,6 +166,14 @@ try:
     check("legacy sighting: n_objects -> objectCount, AT -> TAKEN_AT", lo == {"n": 0, "taken": 1, "at": 0}, lo)
     ns = m._read("MATCH (s:Session:Entity {id:'zz-nams-session'}) RETURN s.started_at AS old, s.startedAt AS new")[0]
     check("a NAMS :Session:Entity node is left untouched by the key migration", ns == {"old": "kept", "new": None}, ns)
+    check("empty sessions are removed; the session with sightings stays (and the NAMS one is never touched)",
+          [r["id"] for r in m._read("MATCH (s:Session) WHERE s.id STARTS WITH 'zz-' RETURN s.id AS id ORDER BY id")] == ["zz-nams-session", sid])
+    m.record_exchange("zz-chat-session", "what is here?", "a zzlegacy", [{"tool": "current_view", "args": {}, "result": {}}], [])
+    chat = m._read("MATCH (:Robot {name:$r})-[:RAN]->(s:Session {id:'zz-chat-session'})<-[:IN_SESSION]-(c:Dialogue) "
+                   "RETURN count{ (c)-[:HAS_UTTERANCE]->() } AS u", r=m.s.robot_name)
+    check("a chat before any sighting creates its own session (with the robot's RAN edge)", chat == [{"u": 2}], chat)
+    check("the robot has no OBSERVED edges (DETECTED carries that, with evidence)",
+          not m._read("MATCH (:Robot)-[o:OBSERVED]->() RETURN o LIMIT 1"))
     check("no snake_case keys are left on this app's nodes", not m._read(
         "MATCH (n) WHERE (n:Item OR n:Place OR n:Sighting OR n:Session OR n:Dialogue) AND NOT n:Entity "
         "AND any(k IN keys(n) WHERE k CONTAINS '_') RETURN labels(n) AS l, [k IN keys(n) WHERE k CONTAINS '_'] AS k LIMIT 5"))

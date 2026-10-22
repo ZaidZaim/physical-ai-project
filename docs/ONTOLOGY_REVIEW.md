@@ -43,6 +43,13 @@ and `ontology.py`.
   `:Session:Entity` node into the shared database. `reset`, `reset-spatial` and `purge-demo` would have deleted it; they now skip `:Entity`.
 - NAMS-side entity properties (`object_id`, `first_seen` on NAMS entities, sent by `nams.py`) are NAMS's data and were left as they are.
 
+### The picture in Aura was a tangle - WARNING (fixed)
+- **Current**: `Robot` was the biggest hub (122 links): 79 were `(Robot)-[:OBSERVED]->(Item)`, written for every object and never read.
+  32 of 42 `Session` nodes were empty (one per app start). And `MATCH (n)-[r]->(m)` draws NAMS's data too (~70% of the nodes).
+- **Fix**: `OBSERVED` is gone (`(Sighting)-[:DETECTED]->(Item)` carries the same fact, with evidence); sessions are written with their
+  first sighting or dialogue; startup removes both leftovers. Robot links 122 -> 11, sessions 42 -> 10. One question per query:
+  [AURA_VIEWS.md](AURA_VIEWS.md) (checked against the live database by `eval/check_views.py`).
+
 ## Deferred (not changed, deliberate)
 - **`Item.status` as a property** (`present`/`possibly_gone`) - fine: it changes often; a label would churn.
 - **Sessions and Places** are bounded hubs (frames per session / place) but will grow in long deployments: if `Place` passes ~100K

@@ -1,7 +1,6 @@
 """Neo4j (Aura) contextual memory: ingestion with entity matching + temporal queries.
 
 Model (property keys camelCase; Python/JSON field names stay snake_case via RETURN aliases)
-  (Robot)-[:OBSERVED]->(Item)
   (Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:TAKEN_AT]->(Place)   (the robot of a sighting is reached via its session:
                                                                              no per-sighting edge into Robot, which would make it a supernode)
   (Sighting)-[:DETECTED {confidence, zone, bearing}]->(Item)
@@ -101,6 +100,10 @@ class Memory:
         # (Sighting)-[:CAPTURED_BY]->(Robot) made Robot a supernode (one edge per frame) and is derivable via Session: keep RAN, drop it
         self._write("MATCH (r:Robot)-[:CAPTURED_BY]-(:Sighting)-[:IN_SESSION]->(s:Session) MERGE (r)-[:RAN]->(s)")
         self._write("MATCH (:Sighting)-[c:CAPTURED_BY]->(:Robot) DELETE c")
+        # (Robot)-[:OBSERVED]->(Item) was written for every object and never read: (Sighting)-[:DETECTED]->(Item) says the same with
+        # evidence. It made the robot the biggest hub in the picture. Sessions are written lazily now; drop the empty ones older runs left.
+        self._write("MATCH (r:Robot)-[o:OBSERVED]->(:Item) WHERE NOT r:Entity DELETE o")
+        self._write("MATCH (s:Session) WHERE NOT s:Entity AND NOT EXISTS { (s)<-[:IN_SESSION]-() } DETACH DELETE s")
         for q in ("DROP CONSTRAINT obs_id IF EXISTS", "DROP INDEX obs_ts IF EXISTS"):
             try:
                 self._write(q)
@@ -172,14 +175,9 @@ class Memory:
             self._write(f"MATCH (n:{lbl}) WHERE NOT n:Entity DETACH DELETE n")
 
     def start_session(self, session_id: str | None = None) -> str:
-        sid = session_id or f"session-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
-        self._write(
-            "MERGE (r:Robot {name:$r}) "
-            "MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt=datetime($ts) "
-            "MERGE (r)-[:RAN]->(s)",
-            sid=sid, ts=now_iso(), r=self.s.robot_name,
-        )
-        return sid
+        """A session id. The (Robot)-[:RAN]->(Session) node is only written with the first sighting or dialogue of the session:
+        writing it on every start left one empty Session per app restart."""
+        return session_id or f"session-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
 
     # ---- ingestion
     def ingest(
@@ -300,7 +298,7 @@ class Memory:
             MERGE (r)-[:RAN]->(s)
             MERGE (ob)-[:IN_SESSION]->(s)
             MERGE (ob)-[:TAKEN_AT]->(l)
-            WITH ob, l, r
+            WITH ob, l
             UNWIND $dets AS d
             MERGE (o:Item {itemId:d.id})
               ON CREATE SET o.label=d.label, o.firstSeen=datetime($ts), o.seenCount=0, o.missCount=0
@@ -311,8 +309,6 @@ class Memory:
                 o.seenCount=o.seenCount+1, o.missCount=0, o.status='present'
             MERGE (ob)-[dt:DETECTED]->(o)
             SET dt.confidence = d.conf, dt.zone = d.zone, dt.bearing = d.bearing  // SET accepts a null bearing; MERGE would refuse it
-            MERGE (r)-[ro:OBSERVED]->(o) ON CREATE SET ro.first=datetime($ts)
-            SET ro.last=datetime($ts)
             MERGE (o)-[la:LOCATED_AT]->(l)
               ON CREATE SET la.firstSeen=datetime($ts), la.count=0
             SET la.lastSeen=datetime($ts), la.count=la.count+1
@@ -1016,10 +1012,12 @@ class Memory:
                 CREATE (st:ReasoningStep {id:$stid, action:$action, reasoning:$reasoning, result:$result, ts:datetime($ts)})
                 CREATE (c)-[:HAS_REASONING]->(st), (st)-[:PRODUCED]->(a)
                 WITH c
-                OPTIONAL MATCH (s:Session {id:$sid})
-                FOREACH (_ IN CASE WHEN s IS NULL THEN [] ELSE [1] END | MERGE (c)-[:IN_SESSION]->(s))
+                MERGE (r:Robot {name:$robot})
+                MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt = datetime($ts)
+                MERGE (r)-[:RAN]->(s)
+                MERGE (c)-[:IN_SESSION]->(s)
                 """,
-                sid=session_id, aid=aid, stid=stid, ts=ts, action=f"answer: {question[:200]}",
+                sid=session_id, aid=aid, stid=stid, ts=ts, robot=self.s.robot_name, action=f"answer: {question[:200]}",
                 reasoning="Queried memory with tools: " + (", ".join(t["name"] for t in tcs) or "none"), result=answer[:600],
             )
             tx.run(
