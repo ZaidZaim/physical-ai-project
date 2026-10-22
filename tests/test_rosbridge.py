@@ -23,6 +23,8 @@ class FakeBridge:
             if m["op"] == "subscribe" and m["topic"] == "/ros_robot_controller/imu_raw":  # the robot starts streaming gyro samples
                 for _ in range(6):
                     ws.send(json.dumps({"op": "publish", "topic": m["topic"], "msg": {"angular_velocity": {"x": 0.0, "y": 0.0, "z": 0.5}, "linear_acceleration": {"z": 9.8}}}))
+            if m["op"] == "subscribe" and m["topic"] == "/ros_robot_controller/battery":
+                ws.send(json.dumps({"op": "publish", "topic": m["topic"], "msg": {"data": 7800}}))
             if m["op"] == "call_service" and m["service"] == "/rosapi/topic_type":
                 ws.send(json.dumps({"op": "service_response", "id": m["id"], "result": True,
                                     "values": {"type": self.vel_type}}))
@@ -161,6 +163,24 @@ def test_without_an_imu_callback_the_driver_never_subscribes():
     d = run(drive, fb)
     try:
         time.sleep(0.2)
-        assert not [m for m in fb.msgs if m["op"] == "subscribe"]
+        assert not [m for m in fb.msgs if m["op"] == "subscribe" and "imu" in m["topic"]]
     finally:
         d.close(); fb.close()
+
+
+def test_battery_voltage_is_reported_with_a_rough_percentage():
+    from puppy_mind.rosbridge import battery_status
+
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        t0 = time.time()
+        while d.battery_mv is None and time.time() - t0 < 5:
+            time.sleep(0.05)
+        st = d.status()
+        assert st["battery_v"] == 7.8 and st["battery_pct"] == 67 and st["battery_level"] == "ok"
+    finally:
+        d.close(); fb.close()
+    assert battery_status(6700, time.monotonic())["battery_level"] == "low"
+    assert battery_status(None, 0.0)["battery_v"] is None
+    assert battery_status(7800, time.monotonic() - 60)["battery_v"] is None  # stale reading is not shown

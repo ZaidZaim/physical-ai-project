@@ -28,13 +28,26 @@ TYPE_CANDIDATES = ("puppy_control/Velocity", "puppy_control_msgs/msg/Velocity") 
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
 
+def battery_status(mv: int | None, t: float) -> dict:
+    """Voltage and a rough charge estimate for the 2S LiPo pack (8.4 V full, ~6.6 V is where the robot should be charged).
+    The percentage is a straight-line guess from voltage: it sags under load, so read it as a trend, not a fuel gauge."""
+    if mv is None or time.monotonic() - t > 15:
+        return {"battery_v": None, "battery_pct": None, "battery_level": None}
+    v = mv / 1000.0
+    pct = max(0, min(100, round((v - 6.6) / (8.4 - 6.6) * 100)))
+    return {"battery_v": round(v, 2), "battery_pct": pct, "battery_level": "low" if pct < 20 else "ok"}
+
+
 class RosbridgeDriver:
+    BATTERY_TOPIC = "/ros_robot_controller/battery"  # std_msgs/UInt16, millivolts of the 2S LiPo (Hiwonder ros_robot_controller)
     IMU_TOPIC = "/ros_robot_controller/imu_raw"  # sensor_msgs/Imu, from Hiwonder's puppy_control source
 
     def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
         self.url, self.drive = url, drive
         self.on_imu = on_imu  # callback(yaw_rate_rad_s) for each IMU sample
         self.imu_samples = 0
+        self.battery_mv: int | None = None
+        self.battery_t = 0.0
         self.max_x, self.max_y, self.invert_yaw = max_x, max_y, invert_yaw
         self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
         self.connected = False
@@ -57,7 +70,7 @@ class RosbridgeDriver:
         self._t.join(timeout=2)
 
     def status(self) -> dict:
-        return {"url": self.url, "connected": self.connected, "error": self.error, "velocity_type": self.vel_type, "imu_samples": self.imu_samples}
+        return {"url": self.url, "connected": self.connected, "error": self.error, "velocity_type": self.vel_type, "imu_samples": self.imu_samples, **battery_status(self.battery_mv, self.battery_t)}
 
     # ---- protocol helpers
     def _send(self, obj: dict) -> None:
@@ -123,6 +136,7 @@ class RosbridgeDriver:
         self._call("/puppy_control/set_mark_time", {"data": False})  # leave mark-time so it can walk
         if self.on_imu:  # orientation: the gyro's yaw rate, throttled to ~20 Hz
             self._send({"op": "subscribe", "topic": self.IMU_TOPIC, "type": "sensor_msgs/Imu", "throttle_rate": 50, "queue_length": 1})
+        self._send({"op": "subscribe", "topic": self.BATTERY_TOPIC, "type": "std_msgs/UInt16", "throttle_rate": 2000, "queue_length": 1})
 
     def _loop(self) -> None:
         last, last_pub, last_home = None, 0.0, self.drive.current()["home_seq"]
@@ -158,6 +172,10 @@ class RosbridgeDriver:
                     m = json.loads(self._ws.recv(timeout=0))
                     if m.get("op") == "status" and m.get("level") == "error":
                         self.error = str(m.get("msg"))[:200]
+                    elif m.get("op") == "publish" and m.get("topic") == self.BATTERY_TOPIC:
+                        mv = (m.get("msg") or {}).get("data")
+                        if isinstance(mv, (int, float)) and 3000 < mv < 20000:
+                            self.battery_mv, self.battery_t = int(mv), time.monotonic()
                     elif m.get("op") == "publish" and m.get("topic") == self.IMU_TOPIC and self.on_imu:
                         wz = ((m.get("msg") or {}).get("angular_velocity") or {}).get("z")
                         if isinstance(wz, (int, float)):
