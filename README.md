@@ -27,39 +27,10 @@ things it remembers.
 
 ## How it works
 
-```mermaid
-flowchart TB
-  eyes(["<b>PuppyPi sensors</b><br/><small>camera · gyro</small>"])
-
-  subgraph brain["Laptop: the brain (this repo)"]
-    perceive["<b>1 · Perceive</b><br/><small>OpenAI vision → objects + relations</small>"]
-    remember["<b>2 · Remember</b><br/><small>match known objects · recognise the room</small>"]
-    answer["<b>3 · Answer</b><br/><small>agent with graph tools · web UI</small>"]
-    act["<b>4 · Act</b><br/><small>turn to an object · keyboard drive</small>"]
-  end
-
-  aura[("<b>Neo4j Aura</b><br/><small>world model</small>")]
-  nams[("<b>NAMS</b><br/><small>agent memory</small>")]
-  legs(["<b>PuppyPi legs</b><br/><small>rosbridge velocity commands</small>"])
-
-  eyes -- "frames · heading" --> perceive
-  perceive --> remember
-  remember -- writes --> aura
-  aura -- reads --> answer
-  answer -- "chat · reasoning" --> nams
-  nams -. "stored in the same database" .- aura
-  answer --> act
-  act -- "turn in place · drive" --> legs
-
-  classDef robotC fill:#2a7f9e,stroke:#1d5a70,color:#fff
-  classDef step fill:#eef2f6,stroke:#5d6d7e,color:#1c2733
-  classDef auraC fill:#b9691a,stroke:#8a4e13,color:#fff
-  classDef namsC fill:#7050cc,stroke:#4f3896,color:#fff
-  class eyes,legs robotC
-  class perceive,remember,answer,act step
-  class aura auraC
-  class nams namsC
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img src="docs/diagrams/architecture-light.svg" alt="Architecture: the PuppyPi's sensors send frames to the brain, which perceives and remembers into Neo4j Aura; the agent answers from Aura, records chat in NAMS, and acts by turning the robot" width="900">
+</picture>
 
 No Docker: Aura hosts the graph, NAMS (the Neo4j Agent Memory Service) hosts agent memory, and the robot only streams frames and
 takes velocity commands over its stock rosbridge. Nothing has to be installed on the robot.
@@ -76,33 +47,11 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 
 ### The graph
 
-```mermaid
-flowchart LR
-  Robot(["Robot"])
-  Session["Session"]
-  Sighting["Sighting<br/><small>one analysed frame</small>"]
-  Place(["Place<br/><small>a room</small>"])
-  Item(["Item<br/><small>a physical thing</small>"])
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph model: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
+</picture>
 
-  Robot -- RAN --> Session
-  Sighting -- IN_SESSION --> Session
-  Sighting -- TAKEN_AT --> Place
-  Robot -- CURRENTLY_IN --> Place
-  Sighting -- DETECTED --> Item
-  Sighting -. MISSED .-> Item
-  Item -- LOCATED_AT --> Place
-  Item -- "ON · INSIDE · NEXT_TO<br/>NEAR · IN_FRONT_OF · BEHIND" --> Item
-  Place -- ADJACENT_TO --- Place
-
-  classDef long fill:#b9691a,stroke:#8a4e13,color:#fff
-  classDef short fill:#2f8f55,stroke:#1f6139,color:#fff
-  classDef agent fill:#2a7f9e,stroke:#1d5a70,color:#fff
-  class Item,Place long
-  class Sighting,Session short
-  class Robot agent
-```
-
-<sub>Orange: long-term memory (the world). Green: short-term memory (what the camera saw, and when). Dashed: evidence of absence.</sub>
 
 | Node | Key properties |
 |---|---|
@@ -278,6 +227,7 @@ ontology/         puppy_pi.json: the domain ontology (also installed into NAMS)
 eval/             scenarios, the 20 questions, live checks
 tests/            unit tests
 docs/             design notes (below)
+docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw them (light + dark)
 ```
 
 ## Docs
