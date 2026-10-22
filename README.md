@@ -27,17 +27,10 @@ things it remembers.
 
 ## How it works
 
-```
- PuppyPi                         Laptop: the brain (this repo)                          Cloud
- ┌────────────────┐              ┌──────────────────────────────────────────────┐       ┌────────────────────────┐
- │camera (MJPEG)  │  frames ──►  │ perception   OpenAI vision -> Scene          │       │ Neo4j Aura             │
- │gyro, battery   │  gyro   ──►  │ matching     which known object is this?     │  ──►  │ world model graph      │
- │rosbridge       │  turn   ◄──  │ spatial      which room, which way it faces  │       │ (Item, Place, ...)     │
- └────────────────┘              │ agent        OpenAI tools over graph queries │       ├────────────────────────┤
-                                 │ navigate     turn to / look for an object    │  ──►  │ NAMS agent memory      │
-                                 │ web UI + API FastAPI, live graph, drive      │       │ chat, reasoning, recall│
-                                 └──────────────────────────────────────────────┘       └────────────────────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img src="docs/diagrams/architecture-light.svg" alt="Architecture: the PuppyPi's sensors send frames to the brain, which perceives and remembers into Neo4j Aura; the agent answers from Aura, records chat in NAMS, and acts by turning the robot" width="900">
+</picture>
 
 No Docker: Aura hosts the graph, NAMS (the Neo4j Agent Memory Service) hosts agent memory, and the robot only streams frames and
 takes velocity commands over its stock rosbridge. Nothing has to be installed on the robot.
@@ -52,20 +45,30 @@ takes velocity commands over its stock rosbridge. Nothing has to be installed on
 NAMS writes into the **same** Aura database under its own labels (`Entity`, `Message`, `AgentStep`, ...). The app never writes those
 labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the two.
 
-### The graph
+### Graph ontology
 
-```
-(Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:TAKEN_AT]->(Place)
-(Robot)-[:CURRENTLY_IN {heading}]->(Place)
-(Sighting)-[:DETECTED {confidence, zone, bearing}]->(Item)       evidence it was there
-(Sighting)-[:MISSED]->(Item)                                     expected, not seen (not proof it is gone)
-(Item)-[:LOCATED_AT {firstSeen, lastSeen, count}]->(Place)
-(Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active, since, until, lastConfirmed}]->(Item)
-(Place)-[:ADJACENT_TO {count}]-(Place)                           learned from moving between rooms
-(Item)-[:POSSIBLY_MOVED_FROM {confidence}]->(Item)               a hypothesis, never asserted as fact
-Item  {itemId, label, color, status, firstSeen, lastSeen, seenCount, missCount, lastBearing}
-Place {placeId, name, roomType, visits}
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
+</picture>
+
+
+| Node | Key properties |
+|---|---|
+| `Item` | `itemId`, `label`, `color`, `status` (`present` / `possibly_gone`), `firstSeen`, `lastSeen`, `seenCount`, `missCount`, `lastBearing` |
+| `Place` | `placeId`, `name`, `roomType`, `visits` |
+| `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
+| `Session` · `Robot` | `id`, `startedAt` · `name` |
+
+| Relationship | Properties | Meaning |
+|---|---|---|
+| `DETECTED` | `confidence`, `zone`, `bearing` | this frame showed the object, and in which direction |
+| `MISSED` | | expected here and not seen: not proof it is gone |
+| `LOCATED_AT` | `firstSeen`, `lastSeen`, `count` | where the object lives |
+| `ON`, `INSIDE`, `NEXT_TO`, `NEAR`, `IN_FRONT_OF`, `BEHIND` | `active`, `since`, `until`, `lastConfirmed` | how things sit, kept with their history |
+| `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
+| `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
+| `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
 constraints, no write-only edges and no supernodes ([review](docs/ONTOLOGY_REVIEW.md)). Startup migrates older data automatically.
@@ -224,6 +227,7 @@ ontology/         puppy_pi.json: the domain ontology (also installed into NAMS)
 eval/             scenarios, the 20 questions, live checks
 tests/            unit tests
 docs/             design notes (below)
+docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw them (light + dark)
 ```
 
 ## Docs
