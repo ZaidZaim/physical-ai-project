@@ -27,16 +27,38 @@ things it remembers.
 
 ## How it works
 
-```
- PuppyPi                         Laptop: the brain (this repo)                          Cloud
- ┌────────────────┐              ┌──────────────────────────────────────────────┐       ┌────────────────────────┐
- │camera (MJPEG)  │  frames ──►  │ perception   OpenAI vision -> Scene          │       │ Neo4j Aura             │
- │gyro, battery   │  gyro   ──►  │ matching     which known object is this?     │  ──►  │ world model graph      │
- │rosbridge       │  turn   ◄──  │ spatial      which room, which way it faces  │       │ (Item, Place, ...)     │
- └────────────────┘              │ agent        OpenAI tools over graph queries │       ├────────────────────────┤
-                                 │ navigate     turn to / look for an object    │  ──►  │ NAMS agent memory      │
-                                 │ web UI + API FastAPI, live graph, drive      │       │ chat, reasoning, recall│
-                                 └──────────────────────────────────────────────┘       └────────────────────────┘
+```mermaid
+flowchart TB
+  eyes(["<b>PuppyPi sensors</b><br/><small>camera · gyro</small>"])
+
+  subgraph brain["Laptop: the brain (this repo)"]
+    perceive["<b>1 · Perceive</b><br/><small>OpenAI vision → objects + relations</small>"]
+    remember["<b>2 · Remember</b><br/><small>match known objects · recognise the room</small>"]
+    answer["<b>3 · Answer</b><br/><small>agent with graph tools · web UI</small>"]
+    act["<b>4 · Act</b><br/><small>turn to an object · keyboard drive</small>"]
+  end
+
+  aura[("<b>Neo4j Aura</b><br/><small>world model</small>")]
+  nams[("<b>NAMS</b><br/><small>agent memory</small>")]
+  legs(["<b>PuppyPi legs</b><br/><small>rosbridge velocity commands</small>"])
+
+  eyes -- "frames · heading" --> perceive
+  perceive --> remember
+  remember -- writes --> aura
+  aura -- reads --> answer
+  answer -- "chat · reasoning" --> nams
+  nams -. "stored in the same database" .- aura
+  answer --> act
+  act -- "turn in place · drive" --> legs
+
+  classDef robotC fill:#2a7f9e,stroke:#1d5a70,color:#fff
+  classDef step fill:#eef2f6,stroke:#5d6d7e,color:#1c2733
+  classDef auraC fill:#b9691a,stroke:#8a4e13,color:#fff
+  classDef namsC fill:#7050cc,stroke:#4f3896,color:#fff
+  class eyes,legs robotC
+  class perceive,remember,answer,act step
+  class aura auraC
+  class nams namsC
 ```
 
 No Docker: Aura hosts the graph, NAMS (the Neo4j Agent Memory Service) hosts agent memory, and the robot only streams frames and
@@ -54,18 +76,50 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 
 ### The graph
 
+```mermaid
+flowchart LR
+  Robot(["Robot"])
+  Session["Session"]
+  Sighting["Sighting<br/><small>one analysed frame</small>"]
+  Place(["Place<br/><small>a room</small>"])
+  Item(["Item<br/><small>a physical thing</small>"])
+
+  Robot -- RAN --> Session
+  Sighting -- IN_SESSION --> Session
+  Sighting -- TAKEN_AT --> Place
+  Robot -- CURRENTLY_IN --> Place
+  Sighting -- DETECTED --> Item
+  Sighting -. MISSED .-> Item
+  Item -- LOCATED_AT --> Place
+  Item -- "ON · INSIDE · NEXT_TO<br/>NEAR · IN_FRONT_OF · BEHIND" --> Item
+  Place -- ADJACENT_TO --- Place
+
+  classDef long fill:#b9691a,stroke:#8a4e13,color:#fff
+  classDef short fill:#2f8f55,stroke:#1f6139,color:#fff
+  classDef agent fill:#2a7f9e,stroke:#1d5a70,color:#fff
+  class Item,Place long
+  class Sighting,Session short
+  class Robot agent
 ```
-(Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:TAKEN_AT]->(Place)
-(Robot)-[:CURRENTLY_IN {heading}]->(Place)
-(Sighting)-[:DETECTED {confidence, zone, bearing}]->(Item)       evidence it was there
-(Sighting)-[:MISSED]->(Item)                                     expected, not seen (not proof it is gone)
-(Item)-[:LOCATED_AT {firstSeen, lastSeen, count}]->(Place)
-(Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active, since, until, lastConfirmed}]->(Item)
-(Place)-[:ADJACENT_TO {count}]-(Place)                           learned from moving between rooms
-(Item)-[:POSSIBLY_MOVED_FROM {confidence}]->(Item)               a hypothesis, never asserted as fact
-Item  {itemId, label, color, status, firstSeen, lastSeen, seenCount, missCount, lastBearing}
-Place {placeId, name, roomType, visits}
-```
+
+<sub>Orange: long-term memory (the world). Green: short-term memory (what the camera saw, and when). Dashed: evidence of absence.</sub>
+
+| Node | Key properties |
+|---|---|
+| `Item` | `itemId`, `label`, `color`, `status` (`present` / `possibly_gone`), `firstSeen`, `lastSeen`, `seenCount`, `missCount`, `lastBearing` |
+| `Place` | `placeId`, `name`, `roomType`, `visits` |
+| `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
+| `Session` · `Robot` | `id`, `startedAt` · `name` |
+
+| Relationship | Properties | Meaning |
+|---|---|---|
+| `DETECTED` | `confidence`, `zone`, `bearing` | this frame showed the object, and in which direction |
+| `MISSED` | | expected here and not seen: not proof it is gone |
+| `LOCATED_AT` | `firstSeen`, `lastSeen`, `count` | where the object lives |
+| `ON`, `INSIDE`, `NEXT_TO`, `NEAR`, `IN_FRONT_OF`, `BEHIND` | `active`, `since`, `until`, `lastConfirmed` | how things sit, kept with their history |
+| `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
+| `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
+| `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
 constraints, no write-only edges and no supernodes ([review](docs/ONTOLOGY_REVIEW.md)). Startup migrates older data automatically.
