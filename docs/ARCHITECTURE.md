@@ -2,14 +2,16 @@
 
 ## Graph schema
 ```
-(Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Observation)-[:CAPTURED_BY]->(Robot)
-(Observation)-[:AT]->(Location)
-(Observation)-[:DETECTED {confidence, zone}]->(Object)     positive evidence
-(Observation)-[:MISSED]->(Object)                          expected-but-absent evidence
-(Object)-[:LOCATED_AT {first_seen,last_seen,count}]->(Location)
-(Object)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,last_confirmed,last_obs}]->(Object)
-Object {id,label,color,description,status,first_seen,last_seen,seen_count,miss_count,last_zone}
+(Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:AT]->(Place)
+(Robot)-[:CURRENTLY_IN {heading}]->(Place)
+(Sighting)-[:DETECTED {confidence, zone, bearing}]->(Item)     positive evidence
+(Sighting)-[:MISSED]->(Item)                                   expected-but-absent evidence
+(Item)-[:LOCATED_AT {first_seen,last_seen,count}]->(Place)
+(Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,last_confirmed,last_obs}]->(Item)
+Item {id,label,color,description,status,first_seen,last_seen,seen_count,miss_count,last_zone}
 ```
+Labels in Aura are `Item` (ontology: Object), `Place` (Location), `Robot` (Agent), `Sighting` (a camera frame); see
+[ONTOLOGY_REVIEW.md](ONTOLOGY_REVIEW.md) for the modeling review against Neo4j best practices.
 Model, scenes, and PDF mapping: PDF's `OBSERVED`, `LOCATED_AT`, `NEXT_TO`, `CONTAINS`(= inverse of `INSIDE`),
 `PREVIOUSLY_SEEN_AT` (= older `LOCATED_AT` edges / `DETECTED` history) are all represented.
 

@@ -2,7 +2,8 @@
 
 Model
   (Robot)-[:OBSERVED]->(Object)
-  (Sighting)-[:CAPTURED_BY]->(Robot), -[:IN_SESSION]->(Session), -[:AT]->(Place)
+  (Robot)-[:RAN]->(Session)<-[:IN_SESSION]-(Sighting)-[:AT]->(Place)   (the robot of a sighting is reached via its session: no
+                                                                          per-sighting edge into Robot, which would make it a supernode)
   (Sighting)-[:DETECTED {confidence, zone}]->(Object)
   (Sighting)-[:MISSED]->(Object)           evidence of absence (not proof of removal)
   (Object)-[:LOCATED_AT {first_seen,last_seen,count}]->(Place)
@@ -82,6 +83,9 @@ class Memory:
         self._write("MATCH (o:Object) WHERE NOT o:Entity AND o.id STARTS WITH 'obj-' SET o:Item REMOVE o:Object")
         self._write("MATCH (l:Location) WHERE NOT l:Entity AND (l.id IS NULL OR l.id STARTS WITH 'plc-') SET l:Place REMOVE l:Location")
         self._write("MATCH (l:Place) WHERE l.id IS NULL SET l.id = 'plc-' + substring(randomUUID(), 0, 8)")  # every place gets a stable id
+        # (Sighting)-[:CAPTURED_BY]->(Robot) made Robot a supernode (one edge per frame) and is derivable via Session: keep RAN, drop it
+        self._write("MATCH (r:Robot)-[:CAPTURED_BY]-(:Sighting)-[:IN_SESSION]->(s:Session) MERGE (r)-[:RAN]->(s)")
+        self._write("MATCH (:Sighting)-[c:CAPTURED_BY]->(:Robot) DELETE c")
         for q in ("DROP CONSTRAINT obs_id IF EXISTS", "DROP INDEX obs_ts IF EXISTS"):
             try:
                 self._write(q)
@@ -103,12 +107,25 @@ class Memory:
             "CREATE CONSTRAINT lookup_id IF NOT EXISTS FOR (n:Lookup) REQUIRE n.id IS UNIQUE",
             "CREATE INDEX item_label IF NOT EXISTS FOR (n:Item) ON (n.label)",
             "CREATE INDEX sighting_ts IF NOT EXISTS FOR (n:Sighting) ON (n.ts)",
+            "CREATE INDEX item_status IF NOT EXISTS FOR (n:Item) ON (n.status)",
         ]:
             try:
                 self._write(q)
             except ClientError as e:  # an equivalent index/constraint already exists: fine, never fatal
                 if "already exist" not in (e.message or "").lower():
                     raise
+        # Existence and property-type constraints are Enterprise/Aura features: apply where supported, skip silently elsewhere.
+        for q in [
+            "CREATE CONSTRAINT item_label_exists IF NOT EXISTS FOR (n:Item) REQUIRE n.label IS NOT NULL",
+            "CREATE CONSTRAINT sighting_ts_exists IF NOT EXISTS FOR (n:Sighting) REQUIRE n.ts IS NOT NULL",
+            "CREATE CONSTRAINT sighting_ts_type IF NOT EXISTS FOR (n:Sighting) REQUIRE n.ts IS :: ZONED DATETIME",
+            "CREATE CONSTRAINT item_status_type IF NOT EXISTS FOR (n:Item) REQUIRE n.status IS :: STRING",
+            "CREATE CONSTRAINT item_seen_count_type IF NOT EXISTS FOR (n:Item) REQUIRE n.seen_count IS :: INTEGER",
+        ]:
+            try:
+                self._write(q)
+            except ClientError:
+                pass
         self._write("MERGE (:Robot {name:$n})", n=self.s.robot_name)
 
     def reset(self) -> None:
@@ -242,7 +259,7 @@ class Memory:
             CREATE (ob:Sighting {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
                                     image_ref:$img, n_objects:$n, room_type:$room, overlap:$overlap,
                                     place_confidence:$pc, heading:$heading})
-            MERGE (ob)-[:CAPTURED_BY]->(r)
+            MERGE (r)-[:RAN]->(s)
             MERGE (ob)-[:IN_SESSION]->(s)
             MERGE (ob)-[:AT]->(l)
             WITH ob, l, r
