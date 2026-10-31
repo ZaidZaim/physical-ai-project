@@ -695,7 +695,8 @@ let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer 
 $('#ptalknew').onclick = () => { encId = null; $('#ptalklog').innerHTML = ''; };
 /* Hold to talk: the computer's microphone stands in for the robot's ears (same transcription and Wizard as /api/voice/turn) */
 let micRec = null, micChunks = [], micStream = null, micPeak = 0, micMeter = null;
-const MIC_SILENT = 0.02;  // peak loudness (0..1) below this is silence: never sent (the speech model invents "Thanks for watching!" for silence)
+const MIC_SILENT = 0.003;  // peak (0..1) below this is digital silence (a muted mic): not sent. Quieter-than-normal audio is still sent:
+const MIC_QUIET = 0.02;    // the server drops what the speech model invents for silence ("Thanks for watching!"), so a soft voice may still work
 async function micStart(e) {
   e.preventDefault();
   if (micRec) return;
@@ -730,14 +731,12 @@ async function micSend() {
   const mic = (micStream.getAudioTracks()[0] || {}).label || 'the default microphone';
   micStream.getTracks().forEach(t => t.stop());  // release the microphone (the browser's recording indicator goes off too)
   if (micPeak < MIC_SILENT) {
-    const hint = micPeak < 0.003
-      ? 'It sends pure digital silence, so it is muted: check the mic-mute key on the laptop, Windows Settings → System → Sound → Input (volume, “Test your microphone”), or a call app that holds it muted.'
-      : 'It is very quiet: speak closer, raise its input volume in Windows sound settings, or pick another microphone with the mic icon in the address bar.';
-    $('#ptalklog').insertAdjacentHTML('beforeend', `<div style="color:var(--miss)">Heard only silence from “${esc(mic)}”. ${hint}</div>`);
+    $('#ptalklog').insertAdjacentHTML('beforeend', `<div style="color:var(--miss)">Heard only silence from “${esc(mic)}”: it sends pure digital silence, so something mutes it. Check the mic-mute key on the laptop, Windows Settings → System → Sound → Input (“Test your microphone”), or a call app (Teams, Slack) that holds it muted.</div>`);
     log('miss', `microphone silent: ${esc(mic)} (peak ${micPeak.toFixed(3)})`); return;
   }
   const blob = new Blob(micChunks, { type }), lg = $('#ptalklog');
   if (blob.size < 2000) { log('miss', 'too short: hold the button while you speak'); return; }
+  if (micPeak < MIC_QUIET) log('miss', `microphone very quiet (peak ${micPeak.toFixed(3)}): sending anyway; speak closer to “${esc(mic)}”`);
   const fd = new FormData(); fd.append('file', blob, 'speech.' + ext); if (encId) fd.append('encounter_id', encId);
   lg.insertAdjacentHTML('beforeend', '<div class="you" id="ptalkwait">You: …</div>'); lg.scrollTop = lg.scrollHeight;
   try {
