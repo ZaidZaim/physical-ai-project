@@ -173,3 +173,12 @@ def test_phrases_the_speech_model_invents_for_silence_never_reach_the_wizard(cli
     server.brain.people.client = FakeChat([])  # the Wizard must not be called at all
     r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"Thanks for watching!", "audio/webm")})
     assert r.status_code == 204 and "watching" in r.headers["x-heard"].lower()
+
+
+def test_recordings_made_while_the_robot_moves_are_dropped_without_transcribing(client):
+    # seen on the robot: the boxing trick's servo noise came through as "Thanks for watching!" just before each greeting
+    server.brain.drive.set_booth(True, 10)
+    assert server.brain.drive.request_action("boxing")["ok"]
+    before = len(server.brain.voice.filenames)
+    r = client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + b"hello robot", "audio/wav")})
+    assert r.status_code == 204 and "moving" in r.headers["x-heard"] and len(server.brain.voice.filenames) == before

@@ -425,7 +425,10 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     204 when nothing intelligible was said."""
     _robot_auth(x_brain_token)
     _need_voice()
-    text = brain.voice.transcribe(file.file.read(), file.filename or "speech.wav")  # the extension tells the model the format
+    audio = file.file.read()
+    if brain.drive.moving:  # a trick or a turn: the microphone hears servos, not a visitor (seen as "Thanks for watching!" phantoms)
+        return Response(status_code=204, headers={"X-Heard": quote("(the robot was moving)")})
+    text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))

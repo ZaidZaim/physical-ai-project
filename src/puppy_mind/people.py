@@ -48,7 +48,12 @@ _ASK = re.compile(r"\b(may|can|could|shall)\s+i\s+(remember|save|keep|store|note
 _INTRO = re.compile(r"\b(my name is|my name's|call me|i work|i'm working|i am working|i'm from|i am from|i'm with|i am with|"
                     r"i'm (a|an|the) |i am (a|an|the) |i'm in |i am in )", re.I)
 _IM_NAME = re.compile(r"\b(?i:i'm|i am|this is) ([A-Z][a-z]+)")  # "I'm Ana" yes, "I'm fine" no: only the name must be capitalised
-CONSENT_QUESTION = "May I remember your name, company and interests so the Neo4j team can follow up with you? Just say yes or no."
+CONSENT_QUESTION = ("May I remember your name, company and interests so the Neo4j team can follow up with you? Just say yes or no, "
+                    "and if I misheard your name, please spell it.")
+UNKNOWN_FIELDS = (  # what a good lead record needs, in the order the robot asks about it (one per answer)
+    ("company", "where they work"), ("role", "their role"), ("use_case", "what they are building or working on"),
+    ("familiarity", "how well they know Neo4j"), ("enjoyed", "what they enjoyed most at the event"),
+    ("wants_follow_up", "whether they would like the Neo4j team to follow up"))
 
 
 def introduces_self(text: str) -> bool:
@@ -186,6 +191,7 @@ class Encounter:
     messages: list[dict] = field(default_factory=list)
     summary: str = ""
     consent_asked: bool = False  # the robot has asked the permission question (so it does not ask on every turn)
+    asked_about: list[str] = field(default_factory=list)  # unknown fields the robot already asked about: never the same question twice
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -195,6 +201,45 @@ class PersonView(BaseModel):
     close: bool = Field(description="within about two metres of the robot; from floor level their legs and feet look large")
     badge_name: str = Field(description="name printed on a clearly legible conference badge they wear, or empty")
     badge_company: str = Field(description="company printed on that badge, or empty")
+
+
+class Facts(BaseModel):
+    """What one visitor said about themselves in a stretch of conversation (empty when not said). Used after consent."""
+    corrected_name: str = Field(description="their name if they corrected or spelled it (spelled letters joined, Z-A-I-D = Zaid), else empty")
+    role: str = Field(description="job title they said, else empty")
+    function: str = Field(description="area they work in (data engineering, security, product...), else empty")
+    company: str = Field(description="company they said they work for, else empty")
+    use_case: str = Field(description="what they are building, evaluating or working on, else empty")
+    familiarity: Literal["", "none", "curious", "user", "expert"] = Field(description="how well they know Neo4j, only if they said it")
+    interests: list[str] = Field(description="topics they want to learn about or asked about (GraphRAG, agent memory...), short phrases")
+    enjoyed: list[str] = Field(description="what they enjoyed at the event, short phrases")
+    wants_follow_up: Literal["", "yes", "no"] = Field(description="yes/no only if they said whether they want a follow-up")
+    wants_demo: Literal["", "yes", "no"] = Field(description="yes/no only if they said whether they want a demo")
+
+
+EXTRACT_PROMPT = """Extract what a conference visitor said about THEMSELVES from the transcript below (speech-to-text, may be imperfect).
+Only facts they actually stated or clearly implied: never guess, never take facts from the robot's lines. Topics they asked the robot
+about count as interests. A yes/no only counts as wants_follow_up / wants_demo when the robot had just asked about that.
+If they spelled or corrected their name, put the corrected name in corrected_name. Leave everything else empty."""
+
+
+def facts_to_update(f: dict) -> dict:
+    """Facts (extraction output) -> the keys merge_person understands; empty values dropped."""
+    out = {k: (f.get(k) or "").strip() for k in ("role", "function", "company", "use_case") if (f.get(k) or "").strip()}
+    if f.get("familiarity"):
+        out["familiarity"] = f["familiarity"]
+    for k in ("interests", "enjoyed"):
+        if f.get(k):
+            out[k] = [t for t in f[k] if str(t).strip()]
+    for k in ("wants_follow_up", "wants_demo"):
+        if f.get(k) in ("yes", "no"):
+            out[k] = f[k] == "yes"
+    return out
+
+
+def unknown_fields(p: dict) -> list[str]:
+    """What the robot still does not know about a remembered visitor, in asking order."""
+    return [label for key, label in UNKNOWN_FIELDS if not p.get(key) and p.get(key) is not False]
 
 
 class Crowd(BaseModel):
@@ -263,7 +308,7 @@ TOOLS = [
 
 class PeopleService:
     def __init__(self, s: Settings, mem, *, client=None, agent=None, bus=None, look_fn: Callable[[bytes], list[dict]] | None = None,
-                 gesture_fn: Callable[[str], dict] | None = None):
+                 gesture_fn: Callable[[str], dict] | None = None, extract_fn: Callable[[str], dict] | None = None):
         self.s, self.mem, self.agent, self.bus, self.client = s, mem, agent, bus, client
         self.outbox = Outbox()
         self.encounters: dict[str, Encounter] = {}
@@ -275,6 +320,9 @@ class PeopleService:
         self._skip_note = -1e9  # when the UI was last told why a person in view was not greeted
         self.look_fn = look_fn if look_fn is not None else (self._look if client is not None else None)
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
+        # after each answer with consent, facts are pulled from what the visitor said (the model alone saved only at the moment of consent)
+        self.extract_fn = extract_fn if extract_fn is not None else (self._extract if client is not None else None)
+        self.learn_in_background = True  # tests set False to learn synchronously
 
     # ---- plumbing
     def _publish(self, kind: str, data: dict) -> None:
@@ -306,8 +354,17 @@ class PeopleService:
             lines.append("- Consent to remember them: you asked and they have not answered yet. If this message is their yes or no, call "
                          "record_consent. Otherwise answer them and do not ask again in this reply.")
         else:
-            lines.append({True: "- Consent to remember them: granted. Save what they told you with save_person_facts.",
+            lines.append({True: "- Consent to remember them: granted. What they say is saved automatically after each answer.",
                           False: "- Consent to remember them: they said NO. Save nothing."}[enc.consent])
+        if enc.consent is True and enc.person_id:
+            p = self.mem.get_person(enc.person_id)
+            missing = unknown_fields(p) if p else []
+            fresh = [m for m in missing if m not in enc.asked_about]  # an unanswered question is not asked again: move on
+            if fresh:
+                enc.asked_about.append(fresh[0])
+                lines.append(f"- Still unknown about them: {', '.join(missing)}. After answering, END with ONE short, natural question about "
+                             f"{fresh[0]} (skip it only if they just asked you something that needs a longer answer). Do not ask again "
+                             f"about anything you already asked in this conversation.")
         if enc.name:
             lines.append(f"- Their name: {enc.name}.")
         if enc.greeted:
@@ -376,6 +433,7 @@ class PeopleService:
                 self.encounters[enc.id] = enc
             enc.consent, enc.person_id, enc.name, enc.summary, enc.badge, enc.greeted = None, None, "", "", None, ""
             enc.consent_asked = False
+            enc.asked_about = []
             enc.messages.clear()
             return {"new_conversation": True, "note": "Treat them as someone new: ask their name, and ask for consent before saving anything."}
         if name == "ask_world":
@@ -391,6 +449,7 @@ class PeopleService:
             raise RuntimeError("OPENAI_API_KEY is not set")
         enc = self._encounter(encounter_id, place)
         with enc.lock:
+            consent_before = enc.consent
             sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language)
             history = enc.messages[-12:]
             msgs: list[dict] = [{"role": "system", "content": sysmsg}, *history, {"role": "user", "content": text}]
@@ -424,11 +483,49 @@ class PeopleService:
             if asks_consent(reply):
                 enc.consent_asked = True
             enc.last = time.monotonic()
+        if enc.consent is True and enc.person_id and self.extract_fn:
+            # just said yes: learn from everything they said so far; afterwards, from this message (with the robot's question before it)
+            said = [m["content"] for m in enc.messages if m["role"] == "user"]
+            asked = next((m["content"] for m in reversed(enc.messages[:-2]) if m["role"] == "assistant"), "")
+            transcript = ("\n".join("Visitor: " + t for t in said) if consent_before is not True
+                          else (f"Robot: {asked}\n" if asked else "") + f"Visitor: {text}")
+            if self.learn_in_background:
+                threading.Thread(target=self._learn, args=(enc, transcript), daemon=True).start()
+            else:
+                self._learn(enc, transcript)
         person = self.mem.get_person(enc.person_id) if enc.person_id else None
         out = {"encounter_id": enc.id, "reply": reply, "consent": enc.consent, "person": person, "evidence": trace}
         self._publish("converse", {"encounter_id": enc.id, "heard": text if enc.consent is not False else "", "reply": reply,
                                    "tools": [t["tool"] for t in trace], "consent": enc.consent})
         return out
+
+    def _learn(self, enc: Encounter, transcript: str) -> None:
+        """Add what the visitor said about themselves to their record (consent given). Never raises: a missed fact is not an error."""
+        try:
+            f = self.extract_fn(transcript) or {}
+            update = facts_to_update(f)
+            new_name = (f.get("corrected_name") or "").strip()
+            if not update and not new_name:
+                return
+            with enc.lock:
+                existing = self.mem.get_person(enc.person_id) if enc.person_id else None
+                if existing is None:
+                    return
+                person = merge_person(existing, update, new_name or existing["name"])
+                enc.name = person["name"]
+                saved = self.mem.save_person(person, encounter_id=enc.id, place=enc.place, summary=enc.summary,
+                                             ts=datetime.now(timezone.utc).isoformat())
+            self._publish("people", {"event": "learned", "person_id": saved["person_id"], "name": saved["name"],
+                                     "stage": saved["lead_stage"], "fields": sorted(update) + (["name"] if new_name else [])})
+        except Exception as e:
+            self._publish("error", {"error": f"could not learn from the conversation: {e}"[:200]})
+
+    def _extract(self, transcript: str) -> dict:
+        r = self.client.chat.completions.parse(
+            model=self.s.chat_model, temperature=0, response_format=Facts,
+            messages=[{"role": "system", "content": EXTRACT_PROMPT}, {"role": "user", "content": transcript}])
+        f = r.choices[0].message.parsed
+        return f.model_dump() if f else {}
 
     # ---- greeting when the camera sees someone
     def on_view(self, scene, jpeg: bytes | None) -> bool:

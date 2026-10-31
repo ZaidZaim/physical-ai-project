@@ -44,7 +44,10 @@ class FakeChat:
 
 def svc(script, **kw):
     mem = FakeMemory(S)
-    return PeopleService(S, mem, client=FakeChat(script), **kw), mem
+    kw.setdefault("extract_fn", lambda transcript: {})  # no automatic fact extraction unless a test scripts it
+    s = PeopleService(S, mem, client=FakeChat(script), **kw)
+    s.learn_in_background = False
+    return s, mem
 
 
 def test_consent_detection():
@@ -285,7 +288,8 @@ def test_the_wizard_is_told_to_keep_spoken_answers_short_and_to_save_earlier_fac
 
     p = system_prompt("PuppyPi", "the conference", "")
     assert "at most 2 short sentences" in p and "END that reply with the permission question" in p
-    assert "save everything they already told you earlier" in p and "count as interests" in p
+    assert "count as interests" in p and "AT MOST ONCE per conversation" in p
+    assert "please spell it" in p and "not mishearings" in p
 
 
 def test_the_booth_language_is_fixed_for_hearing_and_answering():
@@ -316,3 +320,69 @@ def test_the_permission_question_is_added_when_the_model_forgets_it():
     assert r["reply"].endswith(CONSENT_QUESTION)
     r = s.turn("What is GraphRAG?", r["encounter_id"])
     assert CONSENT_QUESTION not in r["reply"]  # asked once, not on every turn
+
+
+def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
+    # seen on the robot: "we're building a physical AI system" came after consent and never reached the record
+    seen = []
+
+    def extract(transcript):
+        seen.append(transcript)
+        if "Rockstar" in transcript:
+            return {"company": "Rockstar Games", "interests": ["agent memory"]}
+        if "physical AI" in transcript:
+            return {"use_case": "a physical AI system", "interests": ["memory types"], "wants_follow_up": "", "corrected_name": ""}
+        return {}
+
+    s, mem = svc([["Hello Rosenberg! May I remember you as Rosenberg from Rockstar Games? Just say yes or no."],
+                  [call("record_consent", granted=True), call("save_person_facts", name="Rosenberg"), "Great! What are you building?"],
+                  ["Neo4j fits well as the memory of such a system."]], extract_fn=extract)
+    r = s.turn("Hi, my name is Rosenberg. I work at Rockstar Games and I'd like to learn about agent memory.")
+    r = s.turn("Of course you can remember my name.", r["encounter_id"])
+    assert "Rockstar Games" in seen[-1] and "Visitor:" in seen[-1]  # at the yes: everything said so far
+    p = mem.list_people()[0]
+    assert p["company"] == "Rockstar Games" and "agent memory" in p["interests"]
+    r = s.turn("We're building a physical AI system and wonder how Neo4j can fit.", r["encounter_id"])
+    p = mem.get_person(p["person_id"])
+    assert p["use_case"] == "a physical AI system" and "memory types" in p["interests"] and p["lead_stage"] in ("warm", "hot")
+    assert seen[-1].startswith("Robot: Great! What are you building?")  # the robot's question gives the answer its meaning
+
+
+def test_nothing_is_extracted_or_saved_without_consent():
+    calls = []
+    s, mem = svc([["Hi! May I remember you? Just say yes or no."], ["No problem."]],
+                 extract_fn=lambda t: calls.append(t) or {"company": "X"})
+    r = s.turn("I'm Ana from Acme")
+    s.turn("No thanks", r["encounter_id"])
+    assert calls == [] and mem.list_people() == []
+
+
+def test_a_spelled_name_corrects_the_record():
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Zeid Yaim", company="Neo4j"), "Thanks!"],
+                  ["Got it, Zaid Zaim!"]],
+                 extract_fn=lambda t: {"corrected_name": "Zaid Zaim"} if "Z-A-I-D" in t else {})
+    r = s.turn("Yes")
+    r = s.turn("It's Zaid, Z-A-I-D, Zaim with a Z.", r["encounter_id"])
+    assert [p["name"] for p in mem.list_people()] == ["Zaid Zaim"] and mem.list_people()[0]["company"] == "Neo4j"
+
+
+def test_the_robot_is_told_what_is_still_unknown_and_asks_one_thing():
+    from puppy_mind.people import CONSENT_QUESTION, unknown_fields
+
+    assert "spell it" in CONSENT_QUESTION
+    assert unknown_fields({"company": "Neo4j", "role": "DevRel"})[0] == "what they are building or working on"
+    assert unknown_fields({"company": "x", "role": "y", "use_case": "z", "familiarity": "user", "enjoyed": ["a"], "wants_follow_up": False}) == []
+    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Zaid", company="Neo4j"), "Thanks!"], ["Sure."]])
+    r = s.turn("Yes")
+    s.turn("Tell me about graphs", r["encounter_id"])
+    assert "Still unknown about them: their role" in s.client.prompts[-1] and "ONE short, natural question" in s.client.prompts[-1]
+
+
+def test_an_unanswered_question_is_not_asked_again():
+    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Rosenberg", company="Rockstar Games"), "Great!"],
+                ["Sure."], ["You're welcome!"]])
+    r = s.turn("Yes")
+    r = s.turn("Tell me about memory types", r["encounter_id"])
+    first = s.client.prompts[-1].split("natural question about ")[1][:20]
+    s.turn("Thank you", r["encounter_id"])
+    assert s.client.prompts[-1].split("natural question about ")[1][:20] != first  # moved on to the next unknown
