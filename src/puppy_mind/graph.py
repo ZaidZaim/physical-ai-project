@@ -193,6 +193,7 @@ class Memory:
         room_type: str | None = None,
         place_confidence: float | None = None,
         heading: float | None = None,
+        room_confidence: float | None = None,
     ) -> dict[str, Any]:
         ts = ts or now_iso()
         location = location or self.s.default_location
@@ -293,7 +294,7 @@ class Memory:
             MERGE (r:Robot {name:$robot})
             MERGE (s:Session {id:$sid}) ON CREATE SET s.startedAt = datetime($ts)
             CREATE (ob:Sighting {id:$obs, ts:datetime($ts), summary:$summary, source:$source,
-                                    imageRef:$img, objectCount:$n, roomType:$room, overlap:$overlap,
+                                    imageRef:$img, objectCount:$n, roomType:$room, roomConfidence:$rc, overlap:$overlap,
                                     placeConfidence:$pc, heading:$heading})
             MERGE (r)-[:RAN]->(s)
             MERGE (ob)-[:IN_SESSION]->(s)
@@ -315,7 +316,7 @@ class Memory:
             """,
             loc=location, robot=self.s.robot_name, sid=session_id, ts=ts, obs=obs_id,
             summary=scene.summary, source=source, img=image_ref, n=len(det_rows), dets=det_rows,
-            room=room_type, overlap=round(overlap, 3), pc=place_confidence, heading=heading,
+            room=room_type, rc=room_confidence, overlap=round(overlap, 3), pc=place_confidence, heading=heading,
         )
 
         # 4) spatial relations (one query per predicate: Cypher can't parametrise rel types;

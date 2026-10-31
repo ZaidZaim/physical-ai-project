@@ -23,9 +23,10 @@ from .graph import Memory, now_iso
 from .models import Scene
 from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
-from .spatial import TRANSIENT, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
+from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
 from .sources import FolderSource, FrameSource, ahash, hamming
+from .tour import TourRecorder
 
 _OBJ_ID = re.compile(r"obj-[0-9a-f]{8}")
 
@@ -84,6 +85,8 @@ class Brain:
         self._room_checks: dict[str, int] = {}
         self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
         self.heading_epoch = now_iso()  # when the current heading frame began: bearings recorded before it are in another frame
+        self.recorder = TourRecorder(os.environ["RECORD_TOUR"]) if os.getenv("RECORD_TOUR") else None
+        self.remember_exchanges = True  # False for evaluations: their Q&A must not end up in the robot's memory
         self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
         self.last_objects: list[dict] = []  # what the latest checked view showed (label, color, zone; id once stored)
         self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
@@ -158,7 +161,11 @@ class Brain:
             return {"skipped": "frame nearly identical to previous"}
         self._last_hash[source] = h
         scene = self.perception.describe(jpeg)
-        return self.observe_scene(scene, source=source, location=location, jpeg=jpeg)
+        res = self.observe_scene(scene, source=source, location=location, jpeg=jpeg)
+        if self.recorder:  # a real tour for later evaluation (tour.py): the picture, what perception saw, the room chosen
+            self.recorder.add(scene, jpeg, ts=res.get("ts") or now_iso(), session=self.session, place=res.get("location"),
+                              note=res.get("skipped", ""))
+        return res
 
     def observe_scene(self, scene: Scene, *, source: str = "camera", location: str | None = None,
                       jpeg: bytes | None = None, ts: str | None = None) -> dict[str, Any]:
@@ -199,7 +206,8 @@ class Brain:
             image_ref = str(d / f"{int(time.time() * 1000)}.jpg")
             Path(image_ref).write_bytes(jpeg)
         res = self.mem.ingest(scene, session_id=self.session, location=loc, source=source, ts=ts, image_ref=image_ref,
-                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading)
+                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading,
+                              room_confidence=scene.room_confidence)
         learned = self.mem.learn_room_type(loc) if hasattr(self.mem, "learn_room_type") else None
         if learned:
             self.bus.publish("place", {"name": loc, "learned_room_type": learned})
@@ -237,7 +245,8 @@ class Brain:
 
     def _resolve_place(self, scene: Scene, jpeg: bytes | None = None) -> tuple[str, bool, float | None]:
         """Decide which place this frame belongs to. Returns (place, uncertain, confidence)."""
-        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects if o.confidence >= self.s.min_confidence and o.label.lower() not in TRANSIENT]
+        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects
+                if o.confidence >= self.s.min_confidence and o.label.lower() not in TRANSIENT | VAGUE]
         prev = self.tracker.current  # None until a place has actually been recognised: the default name is not somewhere we came from
         r = self.tracker.update(view, scene.room_type, scene.room_confidence, self._places())
         r = self._verify_room(r, scene, jpeg, view)
@@ -434,7 +443,8 @@ class Brain:
         assert self.agent, "agent disabled"
         r = self.agent.ask(question, self.session)
         ids = sorted(set(_OBJ_ID.findall(str(r["evidence"]))))
-        threading.Thread(target=self._remember_exchange, args=(question, r, ids), daemon=True).start()  # off the answer path
+        if self.remember_exchanges:
+            threading.Thread(target=self._remember_exchange, args=(question, r, ids), daemon=True).start()  # off the answer path
         self.bus.publish("query", {"question": question, "tools": [t["tool"] for t in r["evidence"]], "ids": ids})
         return r
 

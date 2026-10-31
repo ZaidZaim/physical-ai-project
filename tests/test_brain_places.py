@@ -256,7 +256,7 @@ def test_a_doubtful_room_is_checked_against_pictures_and_a_second_bedroom_gets_i
     assert {"Bedroom", "Bedroom 2"} <= names
 
 
-def test_by_default_a_new_room_takes_three_frames_but_a_known_one_two(monkeypatch):
+def test_with_three_new_room_frames_a_new_room_waits_but_a_known_one_still_takes_two(monkeypatch):
     monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
     b = Brain(dataclasses.replace(get_settings(), nams_api_key="", place_confirm_frames=2, new_place_confirm_frames=3,
                                   default_location="Start"), need_openai=False)
@@ -272,3 +272,14 @@ def test_by_default_a_new_room_takes_three_frames_but_a_known_one_two(monkeypatc
         assert b.location == "Kitchen"                 # going back to a known room: two frames
     finally:
         b.close()
+
+
+def test_a_close_up_of_the_cat_is_not_a_room(brain):
+    """Seen on the real tour: two frames of 'animal, bag' (the cat, called 'animal') became a room, later named 'Hallway 2'."""
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    cat = view("unknown", ("animal", "grey"), ("bag", "black"))
+    vague = view("unknown", ("object", "unknown"), ("unknown", "unknown"))
+    for v in (cat, cat, vague, vague):
+        brain.observe_scene(v)
+    assert brain.location == "Kitchen" and sorted(places(brain)) == ["Kitchen"]

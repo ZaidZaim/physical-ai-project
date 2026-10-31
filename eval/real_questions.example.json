@@ -1,0 +1,6 @@
+[
+  {"q": "Which rooms do you know?", "all_of": [["hallway"], ["kitchen"]], "_note": "copy to tours/real-questions.json and write what is TRUE in your home"},
+  {"q": "Where did you last see the cat?", "all_of": [["hallway"]]},
+  {"q": "How do I get from the bathroom to the living room?", "all_of": [["hallway"]]},
+  {"q": "Have you ever seen a car?", "all_of": [["no", "not", "never"]]}
+]

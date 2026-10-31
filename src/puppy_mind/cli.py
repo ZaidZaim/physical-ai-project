@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -279,12 +280,56 @@ def main(argv: list[str] | None = None) -> int:
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
     nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")
+    et = sub.add_parser("export-tour", help="save the frames stored in Aura as a replayable tour (read-only)")
+    et.add_argument("--session", help="only this session (default: all)")
+    et.add_argument("--out", help="file to write (default: tours/tour-<time>.jsonl)")
+    ry = sub.add_parser("replay-tour", help="replay a tour through room recognition + matching on in-RAM memory (no Aura, no OpenAI)")
+    ry.add_argument("tour", help="a .jsonl tour file, or a directory recorded with --record")
+    ry.add_argument("-v", "--verbose", action="store_true", help="one line per frame")
+    ry.add_argument("--new-frames", type=int, help="override NEW_PLACE_CONFIRM_FRAMES for this replay")
+    for p_ in (w, sv, rt):
+        p_.add_argument("--record", metavar="DIR", nargs="?", const="", help="record a tour (pictures + detections) for evaluation; default dir tours/tour-<time>")
     rc = sub.add_parser("robot-check", help="probe the PuppyPi at an IP and find the working camera URL")
     rc.add_argument("ip", help="robot IP, or 'auto' to scan the local network")
     args = ap.parse_args(argv)
+    if getattr(args, "record", None) is not None:
+        from .tour import default_tour_path
+
+        os.environ["RECORD_TOUR"] = args.record or str(default_tour_path())
+        print(f"Recording a tour to {os.environ['RECORD_TOUR']} (pictures + detections; keep it out of git)")
 
     if args.cmd == "robot-test":
         return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine, real_memory=args.real_memory)
+
+    if args.cmd in ("export-tour", "replay-tour"):
+        from . import tour
+
+        s = get_settings()
+        if args.cmd == "export-tour":
+            from .graph import Memory
+
+            mem = Memory(s)
+            try:
+                frames = tour.export(mem, args.session)
+            finally:
+                mem.close()
+            out = tour.save(frames, args.out or f"{tour.default_tour_path()}.jsonl")
+            print(f"{len(frames)} frames from {len({f['session'] for f in frames})} sessions -> {out}")
+            return 0
+        if args.new_frames:
+            import dataclasses
+
+            s = dataclasses.replace(s, new_place_confirm_frames=args.new_frames)
+        res = tour.replay(tour.load(args.tour), s, verbose=args.verbose)
+        print()
+        print(f"{res['frames']} frames: {res['filed']} filed under a room (incl. held-back frames filed once a move was confirmed), "
+              f"{res['frames'] - res['filed']} dropped")
+        print(f"rooms now:      {res['rooms']}")
+        print(f"rooms recorded: {res['rooms_recorded']}")
+        print(f"same room as recorded: {res['agreement']:.0%}" if res["agreement"] is not None else "no frames filed")
+        for (a, b), c in res["transitions"].most_common():
+            print(f"  {a} -> {b}: {c}x")
+        return 0
 
     if args.cmd == "imu-check":
         import time
@@ -360,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
     brain = Brain(s, need_openai=need_ai)
     if args.cmd in ("seed", "eval") and not getattr(args, "nams", False):
         brain.nams.enabled = False  # scripted/test activity must not pollute the real NAMS workspace
+    if args.cmd == "eval":
+        brain.remember_exchanges = False  # the questions are a test, not a conversation: keep them out of the robot's memory
     try:
         if args.cmd == "init":
             brain.mem.init_schema()

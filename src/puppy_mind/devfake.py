@@ -28,7 +28,7 @@ class FakeMemory:
     def init_schema(self): ...
     def start_session(self, session_id=None): return session_id or "fake-session"
 
-    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True, room_type=None, place_confidence=None, heading=None) -> dict[str, Any]:
+    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True, room_type=None, place_confidence=None, heading=None, room_confidence=None) -> dict[str, Any]:
         ts, loc = ts or now_iso(), location or self.s.default_location
         dets = {d.idx: d for d in scene.objects if d.confidence >= self.s.min_confidence}
         anchors = {i: set() for i in dets}

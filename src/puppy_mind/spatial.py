@@ -20,7 +20,9 @@ from dataclasses import dataclass, field
 
 UNINFORMATIVE_ROOMS = {"unknown", "other", ""}
 # Things that walk around say nothing about WHERE we are and are never 'missing': they do not count for place recognition or misses.
-TRANSIENT = {"person", "cat", "dog", "bird", "pet"}
+TRANSIENT = {"person", "cat", "dog", "bird", "pet", "animal"}  # the model sometimes calls the cat "animal" (seen on the robot)
+# Labels that name nothing in particular: no evidence about which room this is.
+VAGUE = {"object", "unknown", "item", "thing", "stuff"}
 # Objects found in almost every room carry little evidence about WHICH room this is.
 COMMON_PRIOR = {"chair": 0.5, "table": 0.6, "door": 0.5, "box": 0.5, "bag": 0.6, "shoe": 0.6, "cable": 0.4, "person": 0.1, "cat": 0.3, "dog": 0.3}
 
