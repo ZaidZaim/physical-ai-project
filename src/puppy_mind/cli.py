@@ -380,8 +380,6 @@ def main(argv: list[str] | None = None) -> int:
         return scan(args.ip.split(":", 1)[1] if args.ip.startswith("auto:") else None) if args.ip.startswith("auto") else check(args.ip)
 
     if args.cmd == "serve":
-        import os
-
         import uvicorn
 
         if args.robot_test:

@@ -45,3 +45,17 @@ def test_replay_leaves_the_environment_as_it_found_it(monkeypatch):
     monkeypatch.delenv("PUPPY_FAKE_MEMORY", raising=False)
     tour.replay([], dataclasses.replace(get_settings(), neo4j_uri="bolt://nowhere.invalid:1"))
     assert "PUPPY_FAKE_MEMORY" not in os.environ
+
+
+def test_record_flag_is_accepted_by_the_commands_that_take_it(monkeypatch, tmp_path):
+    """--record crashed 'serve' on start (an 'import os' further down main() made os a local name)."""
+    import os
+
+    from puppy_mind import cli
+
+    monkeypatch.delenv("RECORD_TOUR", raising=False)
+    started = {}
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: started.setdefault("ok", True))
+    monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
+    cli.main(["serve", "--record", str(tmp_path / "t")])
+    assert started.get("ok") and os.environ.get("RECORD_TOUR") == str(tmp_path / "t")
