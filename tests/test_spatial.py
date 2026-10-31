@@ -163,3 +163,30 @@ def test_without_a_room_type_frames_of_a_new_place_must_share_objects():
     t2.set_current("Kitchen")
     t2.update(V(("bed", "white"), ("lamp", "black")), "unknown", 0.0, [KITCHEN, LIVING])
     assert t2.update(V(("bed", "white"), ("nightstand", "brown")), "unknown", 0.0, [KITCHEN, LIVING]).changed
+
+
+STUDY_BEDROOM = P("Bedroom", "bedroom", ("desk", "brown", "present"), ("box", "brown", "present"), ("box", "brown", "present"), ("wheel", "black", "present"))
+
+
+def test_a_room_the_model_now_calls_office_is_still_the_bedroom_with_the_desk():
+    """Seen on the robot: the bedroom with a desk and boxes was 'office' today; the room-type veto turned a 0.61 object match into
+    0.22 and made a duplicate 'Office'. Bedroom/office is a mild hint now: the objects decide."""
+    places = [HALLWAY, KITCHEN, STUDY_BEDROOM]
+    t = PlaceTracker(confirm_frames=2, confirm_new_frames=2)
+    t.set_current("Hallway")
+    assert t.update(V(("desk", "white"), ("box", "brown"), ("box", "brown")), "office", 0.8, places).uncertain
+    r = t.update(V(("box", "brown"), ("desk", "white")), "office", 0.8, places)
+    assert r.changed and not r.is_new and r.place == "Bedroom"
+
+
+def test_a_real_office_with_nothing_in_common_still_becomes_its_own_room():
+    d = decide([("printer", "white"), ("monitor", "black"), ("keyboard", "black")], "office", 0.9,
+               places=[HALLWAY, KITCHEN, P("Bedroom", "bedroom", ("bed", "white", "present"), ("nightstand", "brown", "present"))],
+               current="Hallway")
+    assert d.is_new and d.suggested_name == "Office"
+
+
+def test_dining_room_and_living_room_are_still_kept_apart():
+    """Same chairs and tables in both: these room types are NOT treated as interchangeable."""
+    d = decide([("chair", "brown"), ("table", "brown"), ("chair", "brown")], "dining room", 0.9, places=[HALLWAY, LIVING], current="Hallway")
+    assert d.is_new and d.suggested_name == "Dining Room"

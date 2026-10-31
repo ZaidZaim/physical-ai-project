@@ -38,6 +38,9 @@ Older databases are migrated automatically on start (nodes with our `obj-` / `pl
 
 ## Recognition rules worth knowing
 - One place per kind of room: a new view of a room type the robot already knows is filed under that room (a home has one kitchen).
+- Bedroom and office are easily confused by the vision model (the same room with a desk was 'bedroom' one day, 'office' the next), so
+  a mismatch between those two is a mild hint, not a veto: the objects decide. Living room and dining room are kept strict, because
+  this home has both, side by side, with the same chairs and tables.
   Use Merge in the Places tab if two rooms were created anyway.
 - People and pets are never used to recognise a place and never count as "missing" (that includes "animal": the model sometimes calls
   the cat that). Vague labels (`object`, `unknown`, `item`, `thing`) are not evidence of a place either.

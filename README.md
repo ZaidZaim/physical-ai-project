@@ -207,7 +207,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 128 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
+uv run pytest                          # 131 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on

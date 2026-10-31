@@ -4,6 +4,11 @@ What has been checked on real hardware and live services, and when. Newest first
 
 ## 2026-10-31: real-scene evaluation, room recognition, NAMS backfill
 
+- **Robot walk-through (14 frames, recorded):** Hallway -> Kitchen -> Hallway -> Bathroom -> Bedroom 2, every known room recognised
+  within 1-2 frames, no false room from a single frame. One flaw found: the room with the desk, stored as 'bedroom', was called
+  'office' and the room-type veto turned a 0.61 object match into 0.22, creating a duplicate 'Office'. Bedroom/office is now a mild
+  hint; replaying all 90 real frames: no false rooms (main: Garage + Office), living and dining room still apart. 'Office' was merged
+  into 'Bedroom' (Aura + NAMS). Turn-to / go-to were not exercised on this walk.
 - **Real tour:** 76 analysed frames from 10 robot sessions, exported from Aura and replayed through room recognition on throwaway
   memory. Room recognition as on `main` made a false "Garage" (88.5% of frames in the room recorded at the time). The new rules
   (a new room needs agreeing frames that look like the same place, also right after a start; "animal" counts as moving; vague

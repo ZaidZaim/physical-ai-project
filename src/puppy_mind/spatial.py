@@ -23,6 +23,16 @@ UNINFORMATIVE_ROOMS = {"unknown", "other", ""}
 TRANSIENT = {"person", "cat", "dog", "bird", "pet", "animal"}  # the model sometimes calls the cat "animal" (seen on the robot)
 # Labels that name nothing in particular: no evidence about which room this is.
 VAGUE = {"object", "unknown", "item", "thing", "stuff"}
+# Room types the vision model mixes up for the same room (seen on the robot: a desk + boxes room was 'bedroom' one day and 'office'
+# the next, which vetoed a 0.61 object match and made a duplicate 'Office'). A mismatch inside a group is a mild hint, not a veto.
+# Living room / dining room are deliberately NOT here: this home has both, side by side, with the same chairs and tables.
+CONFUSABLE_ROOMS = ({"bedroom", "office"},)
+
+
+def confusable(a: str, b: str) -> bool:
+    return a != b and any({a, b} <= g for g in CONFUSABLE_ROOMS)
+
+
 # Objects found in almost every room carry little evidence about WHICH room this is.
 COMMON_PRIOR = {"chair": 0.5, "table": 0.6, "door": 0.5, "box": 0.5, "bag": 0.6, "shoe": 0.6, "cable": 0.4, "person": 0.1, "cat": 0.3, "dog": 0.3}
 
@@ -73,12 +83,13 @@ def _color_match(a: str, b: str) -> float:
 class PlaceResolver:
     def __init__(self, stay_threshold: float = 0.25, switch_threshold: float = 0.45, switch_margin: float = 0.2,
                  min_objects_for_new: int = 2, room_bonus: float = 0.15, room_penalty: float = 0.8, strong_stay: float = 0.6,
-                 one_per_room: bool = True):
+                 one_per_room: bool = True, confusable_penalty: float = 0.2, confusable_min: float = 0.3):
         self.stay_threshold, self.switch_threshold, self.switch_margin = stay_threshold, switch_threshold, switch_margin
         self.min_objects_for_new = min_objects_for_new
         self.room_bonus, self.room_penalty = room_bonus, room_penalty
         self.strong_stay = strong_stay
         self.one_per_room = one_per_room  # a home has one kitchen: a new view of a known KIND of room is that room, not a new place
+        self.confusable_penalty, self.confusable_min = confusable_penalty, confusable_min
 
     # ---- scoring
     @staticmethod
@@ -111,6 +122,8 @@ class PlaceResolver:
         if room not in UNINFORMATIVE_ROOMS and place.room_type not in UNINFORMATIVE_ROOMS:
             if room == place.room_type:
                 s += self.room_bonus * room_conf
+            elif confusable(room, place.room_type):  # 'office' for a room known as 'bedroom': the objects decide
+                s *= 1.0 - self.confusable_penalty * room_conf
             else:  # a kitchen view cannot be the living room, however many chairs both have: strong veto, scaled by confidence
                 s *= 1.0 - self.room_penalty * room_conf
         return max(0.0, min(1.0, s))
@@ -133,7 +146,8 @@ class PlaceResolver:
             cur_place = next((p for p in places if p.name == current), None)
             room_match = bool(cur_place and room not in UNINFORMATIVE_ROOMS and room == cur_place.room_type and room_conf >= 0.5)
             room_clash = bool(cur_place and room not in UNINFORMATIVE_ROOMS and cur_place.room_type not in UNINFORMATIVE_ROOMS
-                              and room != cur_place.room_type and room_conf >= 0.5)  # the model says kitchen, we think living room
+                              and room != cur_place.room_type and not confusable(room, cur_place.room_type)
+                              and room_conf >= 0.5)  # the model says kitchen, we think living room
             if not room_clash and (cur >= self.stay_threshold or (best_s < self.switch_threshold and len(view) < self.min_objects_for_new)):
                 return Decision(current, False, True, cur, f"still looks like '{current}' ({cur:.2f})", scores,
                                 weak=not room_match and (cur < self.strong_stay or len(view) < 2))  # one familiar object proves little
@@ -149,6 +163,8 @@ class PlaceResolver:
         best_s = max(scores.values(), default=0.0)
         if self.one_per_room and room not in UNINFORMATIVE_ROOMS and room_conf >= 0.5:
             same = [p for p in places if p.room_type == room and p.name != current]
+            if not same:  # a room the model often names differently, when its objects clearly fit ('office' for the bedroom with the desk)
+                same = [p for p in places if confusable(p.room_type, room) and p.name != current and scores.get(p.name, 0.0) >= self.confusable_min]
             if same:  # revisiting a kind of room we already know: the best-fitting one of that kind
                 pick = max(same, key=lambda p: scores.get(p.name, 0.0))
                 low = scores.get(pick.name, 0.0) < 0.3 and len(view) >= 3
