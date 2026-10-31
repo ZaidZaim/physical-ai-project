@@ -42,6 +42,14 @@ def consent_from(text: str) -> bool | None:
     return yes
 
 
+_ASK = re.compile(r"\b(may|can|could|shall)\s+i\s+(remember|save|keep|store|note)\b", re.I)
+
+
+def asks_consent(reply: str) -> bool:
+    """The robot's reply asked for permission to remember the visitor."""
+    return bool(_ASK.search(reply or ""))
+
+
 def name_key(name: str) -> str:
     """Case, accent and punctuation-insensitive key: 'Zoe  Oneil' and 'zoë o'neil' match."""
     s = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
@@ -166,6 +174,7 @@ class Encounter:
     place: str | None = None
     messages: list[dict] = field(default_factory=list)
     summary: str = ""
+    consent_asked: bool = False  # the robot has asked the permission question (so it does not ask on every turn)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -279,8 +288,15 @@ class PeopleService:
 
     def _state(self, enc: Encounter) -> str:
         lines = ["", "STATE OF THIS CONVERSATION"]
-        lines.append({None: "- Consent to remember them: not asked yet.", True: "- Consent to remember them: granted.",
-                      False: "- Consent to remember them: they said NO. Save nothing."}[enc.consent])
+        if enc.consent is None and not enc.consent_asked:
+            lines.append("- Consent to remember them: NOT ASKED YET. If they have told you their name or anything about themselves "
+                         "(in this message or before), END this reply with the permission question.")
+        elif enc.consent is None:
+            lines.append("- Consent to remember them: you asked and they have not answered yet. If this message is their yes or no, call "
+                         "record_consent. Otherwise answer them and do not ask again in this reply.")
+        else:
+            lines.append({True: "- Consent to remember them: granted. Save what they told you with save_person_facts.",
+                          False: "- Consent to remember them: they said NO. Save nothing."}[enc.consent])
         if enc.name:
             lines.append(f"- Their name: {enc.name}.")
         if enc.greeted:
@@ -348,6 +364,7 @@ class PeopleService:
                 enc.id = uuid.uuid4().hex[:10]
                 self.encounters[enc.id] = enc
             enc.consent, enc.person_id, enc.name, enc.summary, enc.badge, enc.greeted = None, None, "", "", None, ""
+            enc.consent_asked = False
             enc.messages.clear()
             return {"new_conversation": True, "note": "Treat them as someone new: ask their name, and ask for consent before saving anything."}
         if name == "ask_world":
@@ -390,6 +407,8 @@ class PeopleService:
             else:
                 reply = "Sorry, my circuits got tangled on that one. Could you ask me again?"
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
+            if asks_consent(reply):
+                enc.consent_asked = True
             enc.last = time.monotonic()
         person = self.mem.get_person(enc.person_id) if enc.person_id else None
         out = {"encounter_id": enc.id, "reply": reply, "consent": enc.consent, "person": person, "evidence": trace}

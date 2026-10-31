@@ -263,3 +263,26 @@ def test_the_look_prompt_knows_the_camera_is_at_floor_level():
 
     assert "FLOOR LEVEL" in LOOK_PROMPT and "feet" in LOOK_PROMPT and "Sitting people count" in LOOK_PROMPT
     assert "feet" in PersonView.model_fields["facing_robot"].description
+
+
+def test_permission_is_asked_once_and_the_robot_is_told_when_to_ask():
+    from puppy_mind.people import asks_consent
+
+    assert asks_consent("GraphRAG is great. May I remember your name and company? Just say yes or no.")
+    assert asks_consent("Can I save your details for a follow-up?") and not asks_consent("I remember GraphRAG well.")
+    s, _ = svc([["Hello Zaid! GraphRAG links facts. May I remember your name, company and interests? Just say yes or no."],
+                ["Sure thing, ask away."], [call("new_visitor"), "Hi! What's your name?"]])
+    r = s.turn("Hi, I'm Zaid from Neo4j. What is GraphRAG?")
+    assert "NOT ASKED YET" in s.client.prompts[-1]
+    r = s.turn("Wait, what about vector search?", r["encounter_id"])  # asked, not answered: answer and do not ask again
+    assert "you asked and they have not answered yet" in s.client.prompts[-1]
+    s.turn("Hi, I'm Bob, my turn", r["encounter_id"])  # a new visitor must be asked again
+    assert "NOT ASKED YET" in s.client.prompts[-1]
+
+
+def test_the_wizard_is_told_to_keep_spoken_answers_short_and_to_save_earlier_facts():
+    from puppy_mind.wizard import system_prompt
+
+    p = system_prompt("PuppyPi", "the conference", "")
+    assert "at most 2 short sentences" in p and "END that reply with the permission question" in p
+    assert "save everything they already told you earlier" in p and "count as interests" in p
