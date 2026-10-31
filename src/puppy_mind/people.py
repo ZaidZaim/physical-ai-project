@@ -45,6 +45,17 @@ def consent_from(text: str) -> bool | None:
 _ASK = re.compile(r"\b(may|can|could|shall)\s+i\s+(remember|save|keep|store|note)\b", re.I)
 
 
+_INTRO = re.compile(r"\b(my name is|my name's|call me|i work|i'm working|i am working|i'm from|i am from|i'm with|i am with|"
+                    r"i'm (a|an|the) |i am (a|an|the) |i'm in |i am in )", re.I)
+_IM_NAME = re.compile(r"\b(?i:i'm|i am|this is) ([A-Z][a-z]+)")  # "I'm Ana" yes, "I'm fine" no: only the name must be capitalised
+CONSENT_QUESTION = "May I remember your name, company and interests so the Neo4j team can follow up with you? Just say yes or no."
+
+
+def introduces_self(text: str) -> bool:
+    """The visitor said who they are or what they do ("I'm Zaid", "I work at Neo4j")."""
+    return bool(_INTRO.search(text or "") or _IM_NAME.search(text or ""))
+
+
 def asks_consent(reply: str) -> bool:
     """The robot's reply asked for permission to remember the visitor."""
     return bool(_ASK.search(reply or ""))
@@ -380,7 +391,7 @@ class PeopleService:
             raise RuntimeError("OPENAI_API_KEY is not set")
         enc = self._encounter(encounter_id, place)
         with enc.lock:
-            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc))
+            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language)
             history = enc.messages[-12:]
             msgs: list[dict] = [{"role": "system", "content": sysmsg}, *history, {"role": "user", "content": text}]
             trace: list[dict] = []
@@ -401,11 +412,14 @@ class PeopleService:
                     trace.append({"tool": tc.function.name, "args": _redact(tc.function.name, args), "result": res})
                     msgs.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(res, default=str)[:6000]})
                     if tc.function.name == "new_visitor":  # forget the previous visitor's conversation, in this turn too
-                        msgs = [{"role": "system", "content": system_prompt(self.s.robot_name, self.s.event_name, self._state(enc))},
+                        msgs = [{"role": "system", "content": system_prompt(self.s.robot_name, self.s.event_name, self._state(enc),
+                                                                            self.s.voice_language)},
                                 *msgs[1 + len(history):]]
                         history = []
             else:
                 reply = "Sorry, my circuits got tangled on that one. Could you ask me again?"
+            if enc.consent is None and not enc.consent_asked and not asks_consent(reply) and introduces_self(text):
+                reply = (reply.rstrip() + " " + CONSENT_QUESTION).strip()  # the model sometimes forgets: the question is not optional
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
             if asks_consent(reply):
                 enc.consent_asked = True

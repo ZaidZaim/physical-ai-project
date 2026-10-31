@@ -286,3 +286,33 @@ def test_the_wizard_is_told_to_keep_spoken_answers_short_and_to_save_earlier_fac
     p = system_prompt("PuppyPi", "the conference", "")
     assert "at most 2 short sentences" in p and "END that reply with the permission question" in p
     assert "save everything they already told you earlier" in p and "count as interests" in p
+
+
+def test_the_booth_language_is_fixed_for_hearing_and_answering():
+    from types import SimpleNamespace
+
+    from puppy_mind.voice import Voice
+    from puppy_mind.wizard import system_prompt
+
+    calls = []
+    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(
+        create=lambda **kw: calls.append(kw) or SimpleNamespace(text="hello"))))
+    Voice(dataclasses.replace(S, voice_language="en"), client=client).transcribe(b"x", "s.webm")
+    assert calls[0]["language"] == "en"  # the speech model never guesses the language from a noisy clip
+    assert "Always answer in English" in system_prompt("PuppyPi", "the event", "")
+    assert "Always answer in German" in system_prompt("PuppyPi", "the event", "", "de")
+    s, _ = svc([["Hello!"]])
+    s.turn("hi")
+    assert "Always answer in English" in s.client.prompts[-1]
+
+
+def test_the_permission_question_is_added_when_the_model_forgets_it():
+    from puppy_mind.people import CONSENT_QUESTION, introduces_self
+
+    assert introduces_self("Sorry. My name is Zaid, I work at Neo4j.") and introduces_self("Hi, I'm Ana")
+    assert introduces_self("I am a data engineer") and not introduces_self("What is GraphRAG?") and not introduces_self("I'm fine thanks")
+    s, _ = svc([["Hello Zaid! Great to meet someone from Neo4j."], ["GraphRAG links facts."]])
+    r = s.turn("My name is Zaid, I work at Neo4j.")
+    assert r["reply"].endswith(CONSENT_QUESTION)
+    r = s.turn("What is GraphRAG?", r["encounter_id"])
+    assert CONSENT_QUESTION not in r["reply"]  # asked once, not on every turn

@@ -77,6 +77,9 @@ class Settings:
     stt_model: str = os.getenv("OPENAI_STT_MODEL", "whisper-1")
     tts_model: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
     tts_voice: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    # the booth language: speech is transcribed as this language (ISO 639-1) and the Wizard always answers in it. Without it the speech
+    # model guesses per recording, and a short noisy clip can come out as another language, which the Wizard then answers in.
+    voice_language: str = os.getenv("VOICE_LANGUAGE", "en")
     event_name: str = os.getenv("EVENT_NAME", "the conference")
     store_images: bool = _bool("STORE_IMAGES", False)
 

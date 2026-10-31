@@ -29,3 +29,32 @@ def test_threshold_sits_well_above_room_noise_but_never_too_low():
     assert pv.auto_threshold([50, 60, 80, 70]) == 300.0
     assert pv.auto_threshold([200, 300, 400, 350, 250]) == 1200.0
     assert pv.auto_threshold([]) == 300.0
+
+
+def test_a_turn_keeps_the_conversation_and_listening_resumes_only_after_the_reply(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    sent, played = [], []
+
+    class Resp:
+        status, headers = 200, {"X-Encounter": "enc-1", "X-Heard": "hi", "X-Reply": "hello"}
+
+        def read(self):
+            return b"RIFF"
+
+    monkeypatch.setattr(pv, "post_audio", lambda brain, wav, token, enc: sent.append(enc) or Resp())
+    monkeypatch.setattr(pv.subprocess, "run", lambda *a, **k: played.append(1) or NS(returncode=0, stderr=b""))
+    monkeypatch.setattr(pv.time, "sleep", lambda s: None)
+    v = pv.Voice(NS(brain="http://x", token="", speaker="plughw:2,0", forget_after=120.0))
+    v.talking.set()  # set by listen() when the sentence ended
+    v.turn(b"\0" * 32000)
+    assert not v.talking.is_set() and played == [1]  # listening again only after the reply was played
+    v.talking.set()
+    v.turn(b"\0" * 32000)
+    assert sent == [None, "enc-1"]  # the second sentence continues the same conversation
+
+
+def test_a_loud_start_up_measurement_never_makes_the_robot_deaf():
+    # seen on the robot: someone talked during the 2 s measurement -> threshold 88986, above any possible level
+    assert pv.auto_threshold([30000] * 60) == pv.DEFAULT_THRESHOLD
+    assert pv.auto_threshold([1500] * 60) == 4000.0  # capped: a speaking voice must always get through

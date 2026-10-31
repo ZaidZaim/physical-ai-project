@@ -36,7 +36,8 @@ class Voice:
         self.client = client
 
     def transcribe(self, audio: bytes, filename: str = "speech.wav") -> str:
-        r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), prompt=VOCAB_HINT)
+        r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), prompt=VOCAB_HINT,
+                                                    language=self.s.voice_language or None)  # never guess: see Settings.voice_language
         return (getattr(r, "text", "") or "").strip()
 
     def speak(self, text: str) -> bytes:
