@@ -19,7 +19,7 @@ from PIL import Image
 def ahash(jpeg: bytes) -> int:
     """8x8 average hash: cheap near-duplicate detection to avoid paying for identical frames."""
     img = Image.open(io.BytesIO(jpeg)).convert("L").resize((8, 8))
-    px = list(img.getdata())
+    px = list(img.tobytes())  # an 8-bit greyscale image: one byte per pixel (getdata is deprecated)
     avg = sum(px) / 64
     return sum(1 << i for i, p in enumerate(px) if p > avg)
 
