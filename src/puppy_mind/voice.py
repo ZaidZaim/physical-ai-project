@@ -10,7 +10,7 @@ import re
 from .config import Settings
 
 # Words a speech model tends to mangle; passed as a prompt so "Cypher" is not heard as "cipher".
-VOCAB_HINT = "Neo4j, Cypher, GraphRAG, Aura, AuraDB, GenAI, LLM, knowledge graph, vector index, embeddings, Graph Data Science, MCP"
+VOCAB_HINT = "Hey PuppyPi, PuppyPi, Neo4j, Cypher, GraphRAG, Aura, AuraDB, GenAI, LLM, knowledge graph, vector index, embeddings, Graph Data Science, MCP"
 
 
 # What Whisper-style models "hear" in silence or hum: video outros and subtitle credits from their training data. A visitor at a robot

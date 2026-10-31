@@ -6,8 +6,14 @@ knowledge graph. Everything remembered shows up in the **People** tab as a lead 
 
 ## What happens at the booth
 
-1. **Greeting.** A person is in view (the vision model already reports `person`). The robot says hello once per `GREET_COOLDOWN_S`
-   and never while someone is already talking to it. It does not ask the camera who the person is.
+1. **Greeting.** A person is in view (the vision model already reports `person`). The robot says hello once per `GREET_COOLDOWN_S`,
+   by voice only, and tells them how to start: *"Say 'Hey PuppyPi' and ask me anything…"*. It never greets while someone is already
+   talking to it, and it does not ask the camera who the person is.
+1. **Wake word.** The robot answers only when addressed: a conversation starts with **"Hey PuppyPi"** (or as a direct reply to its
+   greeting), and follow-ups need no wake word until it has been quiet for `WAKE_WINDOW_S` (45 s). After that, the next "Hey PuppyPi"
+   starts a fresh conversation, since it is most likely someone new. Everything else the microphone hears in the hall is ignored and
+   not echoed anywhere. (It is still transcribed on the laptop to look for the wake word; an on-robot wake-word detector would avoid
+   that, see "Not built".) `WAKE_WORD=` (empty) switches it off.
 2. **Recognition (no faces).** A returning visitor is recognised by what they *say* ("Hi, I'm Ana Berg, I was here earlier") or, if
    you set `PEOPLE_CONSENT=true` (signage says badges may be read), by the **name badge they wear**, read from the frame. Then:
    "Welcome back, Ana! Great to see you again from Acme. Last time we talked about graphrag."
@@ -28,9 +34,10 @@ Switch it on in the People tab (or `BOOTH_MODE=true`). Two things change:
   10°, capped at 20°). That puts faces and chest-height badges in frame instead of knees. It uses Hiwonder's own pose topic: pitch
   is in radians, nose-up is positive (their stock "LookDown" pose is −15°), and their node rejects anything beyond ±31°. Object
   memory still works, but low objects (on the floor, under tables) are seen less: switch booth mode off for room tours.
-- **It greets with a trick.** `GREET_ACTION=boxing` sits the dog back on its hind legs and pumps both front paws. That's Hiwonder's
-  stock `boxing` action group, run through `/puppy_control/runActionGroup` as `boxing.d6ac`. Others: `wave`, `shake_hands`, `bow`,
-  `nod`, or empty for none. Visitors can also ask for one ("can you box?"): the Wizard has a `do_trick` tool.
+- **Tricks.** By default it greets by voice only. `GREET_ACTION=boxing` adds a trick to every greeting: boxing sits the dog back on
+  its hind legs and pumps both front paws (Hiwonder's stock action group, run through `/puppy_control/runActionGroup` as `boxing.d6ac`;
+  others: `wave`, `shake_hands`, `bow`, `nod`). Visitors can always ask for one ("can you box?"): the Wizard has a `do_trick` tool,
+  and the People tab has **Try trick**.
 
 Tricks are physical, so `drive.py` guards them: they work only in booth mode and never while the robot walks or turns. At most one
 runs per `GESTURE_COOLDOWN_S` (60 s) and `MAX_GESTURES_PER_HOUR` (30) per hour, which limits servo heat and battery. While a trick
@@ -103,9 +110,15 @@ RETURN t.name, a.name, b.name
 
 ## The People tab
 
-Table of leads (filter by stage, search name / company / topic), a mini graph of people, companies and topics, a detail panel
-(everything remembered, conversation summaries), **Mark followed up**, **Forget this person**, and **Export CSV** for your CRM. Below
-it, a typed chat box that talks to the same brain as the voice, so you can try the whole flow without a robot.
+Graph first. On top, a **lead counter** that counts up (with a "New lead: name · company" banner) whenever a visitor says yes, plus
+hot / warm / cold and how many follow-ups are still open. The main area is the **graph**: each lead sized by lead score and coloured
+by stage, linked to their company and the topics they care about, so shared interests are visible at a glance.
+
+On the right, **Next steps for the Neo4j team**: one card per lead, highest score first, with the follow-up or call to action. The AI
+drafts it from the conversation (e.g. *"Send the aerospace knowledge-graph case study and offer a 30-min call on traceability"*) and
+keeps it current; once someone on the team edits it, it is marked "set by team" and the AI never overwrites it. Click a card or a
+node for everything remembered, **Mark done**, and **Forget this person**. **Export CSV** includes the next step. Search filters both
+the graph and the cards.
 
 ## Privacy, enforced in code
 
@@ -145,6 +158,10 @@ Laptop side: nothing extra, `.env` needs `OPENAI_API_KEY`. Optional: `EVENT_NAME
 > If the WonderEcho Pro's own wake-word firmware is active it may take the microphone: use it in plain USB-audio mode.
 
 ## Not built (on purpose)
+
+- **On-robot wake word.** "Hey PuppyPi" is checked on the laptop after transcription, so hall audio is still sent for transcription
+  (and dropped). A small on-device detector on the Pi (for example openWakeWord with a custom "Hey PuppyPi" model) would send nothing
+  until the wake word, which is better for privacy and cost at a busy booth.
 
 - **Face recognition.** It would make recognition seamless but it is biometric data; if you want it, it needs its own explicit opt-in
   and a legal review, not a quiet default. The badge and "say your name" paths cover the booth case.

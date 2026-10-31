@@ -115,23 +115,33 @@
   #timelineview { overflow:auto !important; background:var(--panel) } .tl { display:grid; grid-template-columns:90px 160px 80px 1fr; gap:0 14px; padding:9px 18px; border-bottom:1px solid var(--line); font:11.5px/1.5 var(--mono) }
   .tl .t { color:var(--mute) } .tl .s { font-family:var(--sans); color:var(--ink) }
 
-  /* ---- people (booth leads) */
+  /* ---- people (booth leads): graph first */
   #peopleview { display:flex; flex-direction:column; background:var(--panel) }
-  #pbar { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap }
-  #pbar input[type=text] { width:200px } #pbar select { font:11px var(--mono); background:var(--card); color:var(--ink); border:1px solid var(--line); padding:5px }
-  #pbar a { font:10.5px var(--mono); color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase }
-  #pbooth { display:flex; gap:10px; align-items:center; padding:6px 14px; border-bottom:1px solid var(--line); font:10.5px var(--mono); color:var(--mute); flex-wrap:wrap }
+  #pkpi { display:flex; gap:18px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  .leadcount { display:flex; align-items:baseline; gap:8px } .leadcount b { font:600 40px/1 var(--mono); color:var(--ink); transition:color .3s }
+  .leadcount span { font:11px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
+  .leadcount.bump b { color:var(--new); animation:bump .7s ease-out } @keyframes bump { 0% { transform:scale(1) } 30% { transform:scale(1.25) } 100% { transform:scale(1) } }
+  .leadsplit { display:flex; gap:8px; align-items:center; flex-wrap:wrap } .leadsplit b { font-weight:600 }
+  #pkpi input[type=text] { width:220px } #pkpi a { font:10.5px var(--mono); color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase }
+  #pbooth { display:flex; gap:10px; align-items:center; padding:6px 16px; border-bottom:1px solid var(--line); font:10.5px var(--mono); color:var(--mute); flex-wrap:wrap }
   #pbooth select, #pbooth input[type=number] { font:11px var(--mono); background:var(--card); color:var(--ink); border:1px solid var(--line); padding:3px 5px }
-  #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto }
-  #plist { overflow:auto; border-right:1px solid var(--line) } #plist tr { cursor:pointer } #plist tr:hover td, #plist tr.sel td { background:var(--card) }
-  #pside { overflow:auto; display:flex; flex-direction:column; min-height:0 } #pnet { height:200px; flex:none; border-bottom:1px solid var(--line) }
-  #pdetail { padding:12px 16px; font-size:12px; line-height:1.55 } #pdetail dl { display:grid; grid-template-columns:96px 1fr; gap:3px 10px; margin:8px 0 }
-  #pdetail dt { color:var(--mute); font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding-top:2px } #pdetail dd { margin:0 }
-  .stage { font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding:1px 6px; border:1px solid currentColor; border-radius:2px }
+  #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 340px }
+  #pnetwrap { position:relative; min-height:320px; border-right:1px solid var(--line) } #pnet { position:absolute; inset:0 }
+  #plegend { position:absolute; left:12px; bottom:10px; display:flex; gap:12px; flex-wrap:wrap; font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute); background:var(--panel); border:1px solid var(--line); padding:5px 9px }
+  #plegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:-1px } #plegend i.sq { border-radius:2px }
+  #pempty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:30px; color:var(--mute); font-size:13px; line-height:1.6 }
+  #ptoast { position:absolute; top:14px; left:50%; transform:translateX(-50%); background:var(--new); color:#fff; font:600 13px var(--sans); padding:8px 16px; border-radius:3px; box-shadow:0 4px 18px rgba(0,0,0,.25); animation:pop .3s ease-out }
+  #pside { overflow:auto; min-height:0; background:var(--panel) }
+  .pside-h { padding:10px 14px 6px; font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
+  .lead { padding:10px 14px; border-top:1px solid var(--line); cursor:pointer } .lead:hover, .lead.sel { background:var(--card) }
+  .lead .top { display:flex; justify-content:space-between; gap:8px; align-items:baseline } .lead .nm { font-weight:600 } .lead .co { color:var(--mute); font-size:11.5px }
+  .lead .next { margin-top:5px; font-size:12px; line-height:1.45 } .lead .next::before { content:"→ "; color:var(--accent) } .lead.done .next { color:var(--mute); text-decoration:line-through }
+  .stage { font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding:1px 6px; border:1px solid currentColor; border-radius:2px; white-space:nowrap }
   .stage.hot { color:var(--bad) } .stage.warm { color:var(--miss) } .stage.cold { color:var(--mute) }
-  #ptalk { grid-column:1 / span 2; border-top:1px solid var(--line); padding:8px 14px; display:flex; flex-direction:column; gap:6px }
-  #ptalklog { max-height:110px; overflow:auto; font-size:12px } #ptalklog div { padding:2px 0 } #ptalklog .you { color:var(--mute) }
-  #ptalkf { display:flex; gap:6px } #ptalkf input { flex:1 } #ptalkmic.rec { background:var(--bad); color:#fff; border-color:var(--bad) }
+  #pdetail { padding:12px 14px; font-size:12px; line-height:1.55 } #pdetail dl { display:grid; grid-template-columns:92px 1fr; gap:3px 10px; margin:8px 0 }
+  #pdetail dt { color:var(--mute); font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding-top:2px } #pdetail dd { margin:0 }
+  #pdetail textarea { width:100%; min-height:64px; resize:vertical; background:var(--card); color:var(--ink); border:1px solid var(--line); padding:7px 8px; font:12px/1.45 var(--sans) }
+  .nextbox { margin:10px 0; padding:9px 10px; border:1px solid var(--accent); border-radius:3px } .nextbox .lbl { color:var(--accent) }
 
   /* ---- right: ask + activity */
   .askhead { padding:12px 14px 6px } .askhead p { margin:5px 0 0; color:var(--mute); font-size:11px }
@@ -247,27 +257,27 @@
     <div class="view" id="schemaview" hidden><div id="onto"></div><div id="ontodetail"><span class="lbl">Ontology</span><div style="color:var(--mute);margin-top:4px">Click a type or a relationship. Circle size is how many exist in your graph right now.</div></div><div id="ontolegend"></div></div>
     <div class="view" id="timelineview" hidden><div id="timeline"></div></div>
     <div class="view" id="peopleview" hidden>
-      <div id="pbar">
-        <span class="lbl">Booth leads</span><span id="pcounts" class="tag"></span>
-        <select id="pstage"><option value="">all stages</option><option value="hot">hot</option><option value="warm">warm</option><option value="cold">cold</option></select>
-        <input type="text" id="psearch" placeholder="Search name, company, topic" autocomplete="off">
-        <button class="sm" id="prefresh">Refresh</button><span class="spacer"></span><a id="pexport" href="/api/people/export.csv" download>Export CSV</a>
+      <div id="pkpi">
+        <div class="leadcount" id="pleadbox" title="People who said yes to being remembered"><b id="pleads">0</b><span>leads</span></div>
+        <div class="leadsplit"><span class="stage hot"><b id="phot">0</b> hot</span><span class="stage warm"><b id="pwarm">0</b> warm</span><span class="stage cold"><b id="pcold">0</b> cold</span>
+          <span class="tag" id="popen" title="Leads with a next step that nobody has marked as done">0 follow-ups open</span></div>
+        <span class="spacer"></span>
+        <input type="text" id="psearch" placeholder="Find a lead, company or topic" autocomplete="off">
+        <a id="pexport" href="/api/people/export.csv" download>Export CSV</a>
       </div>
-      <div id="pbooth" title="Booth mode: the robot tilts nose-up to see faces and badges, and greets people at the booth with a trick">
+      <div id="pbooth" title="Booth mode: the robot tilts nose-up to see faces and badges, and greets people at the booth">
         <label class="chk"><input type="checkbox" id="boothon"> Booth mode</label>
         <span>look up <input type="number" id="boothdeg" min="0" max="20" step="1" style="width:52px"> °</span>
         <select id="trick"></select><button class="sm" id="trickgo">Try trick</button>
-        <label class="chk" title="Play greetings and the Wizard's replies on this computer, in the robot's voice. For testing without the robot's speaker script; turn it off when puppy_voice.py runs on the robot, or you hear everything twice."><input type="checkbox" id="speakhere"> Speak here</label>
+        <label class="chk" title="Play the robot's greetings on this computer, in the robot's voice (when the robot's own speaker is not running). Turn it off when puppy_voice.py runs on the robot, or you hear them twice."><input type="checkbox" id="speakhere"> Speak here</label>
         <span id="boothmsg"></span>
       </div>
       <div id="pbody">
-        <div id="plist"></div>
-        <div id="pside"><div id="pnet"></div><div id="pdetail"><span style="color:var(--mute)">Select a person. Only people who said yes to being remembered appear here.</span></div></div>
-        <div id="ptalk">
-          <div class="lbl"><span>Talk to the Graph Wizard (typed; the robot uses the same brain by voice)</span><button class="sm" id="ptalknew">New visitor</button></div>
-          <div id="ptalklog"></div>
-          <form id="ptalkf"><button type="button" id="ptalkmic" title="Hold to speak with your computer's microphone, release to send. The reply is spoken (needs Speak here) and works like the robot's own ears.">Hold to talk</button><input type="text" id="ptalkq" placeholder="…or type: say hello, or ask about Neo4j, GenAI, GraphRAG" autocomplete="off"><button class="pri">Say</button></form>
-        </div>
+        <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
+          <div id="pempty" hidden>No leads yet.<br>When a visitor says “Hey PuppyPi”, talks to the robot and agrees to be remembered, they appear here, linked to their company and the topics they care about.</div>
+          <div id="plegend"><span><i style="background:var(--bad)"></i>hot</span><span><i style="background:var(--miss)"></i>warm</span><span><i style="background:var(--gone)"></i>cold</span>
+            <span><i class="sq" style="background:var(--long)"></i>company</span><span><i class="sq" style="background:var(--reasoning)"></i>topic</span><span>size = lead score</span></div></div>
+        <aside id="pside"><div id="pcards"></div><div id="pdetail" hidden></div></aside>
       </div>
     </div>
   </section>
@@ -624,45 +634,105 @@ async function loadPlaces() {
   });
 }
 
-/* ---------- people: who the robot talked to (only those who said yes) ---------- */
+/* ---------- people: booth leads, graph first (only people who said yes) ---------- */
 const PTOK = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('brain_token') || '';
 const papi = (p, o = {}) => api(p, { ...o, headers:{ ...(o.headers || {}), ...(PTOK ? { 'X-Brain-Token': PTOK } : {}) } });
 if (PTOK) $('#pexport').href += '?token=' + encodeURIComponent(PTOK);
-let peopleNet = null, peopleSel = null, encId = null;
+let peopleNet = null, pNodes = null, pEdges = null, peopleSel = null, leadCount = null, leadsCache = [];
+const STAGE_COLOR = () => ({ hot:css('--bad'), warm:css('--miss'), cold:css('--gone') });
+const openFollowUp = p => !p.followed_up && !!(p.next_step || p.wants_follow_up || p.wants_demo);
+function countTo(el, to) {  // the lead counter counts up instead of jumping
+  const from = parseInt(el.textContent, 10) || 0;
+  if (from === to) return;
+  const t0 = performance.now(), dur = Math.min(900, 150 * Math.abs(to - from) + 300);
+  const step = now => { const k = Math.min(1, (now - t0) / dur); el.textContent = Math.round(from + (to - from) * k); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+  setTimeout(() => { el.textContent = to; }, dur + 50);  // a background tab pauses animation frames: always land on the number
+}
+function toast(text) {
+  const t = $('#ptoast'); t.textContent = text; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 4500);
+}
 async function loadPeople() {
-  const stage = $('#pstage').value, q = $('#psearch').value.trim();
-  const d = await papi('/api/people?' + new URLSearchParams({ ...(stage ? { stage } : {}), ...(q ? { q } : {}) }));
-  $('#pcounts').textContent = `${d.counts.people} people · ${d.counts.hot} hot · ${d.counts.warm} warm`;
-  $('#plist').innerHTML = d.people.length ? '<table><tr><th>Name</th><th>Company · role</th><th>Stage</th><th>Interests</th><th>Met</th></tr>' + d.people.map(p =>
-    `<tr data-id="${esc(p.person_id)}"${p.person_id === peopleSel ? ' class="sel"' : ''}><td>${esc(p.name)}${p.followed_up ? ' <span class="tag ok">followed up</span>' : ''}</td>`
-    + `<td>${esc([p.company, p.role].filter(Boolean).join(' · '))}</td><td><span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></td>`
-    + `<td>${esc(p.interests.slice(0, 3).join(', '))}</td><td>${esc((p.last_met || '').slice(5, 16).replace('T', ' '))}</td></tr>`).join('') + '</table>'
-    : '<div style="padding:18px;color:var(--mute);font-size:12px">No one yet. When the robot talks to someone and they say yes to being remembered, they show up here. Try the box below.</div>';
-  document.querySelectorAll('#plist tr[data-id]').forEach(r => r.onclick = () => showPerson(r.dataset.id));
-  const g = await papi('/api/people/graph'), C = { Person:css('--accent'), Company:css('--long'), Theme:css('--reasoning') };
-  const ST = { hot:css('--bad'), warm:css('--miss'), cold:css('--gone') };
-  const data = { nodes:new vis.DataSet(g.nodes.map(n => ({ id:n.id, label:n.label, shape:n.kind === 'Person' ? 'dot' : 'box', size:12, color:{ background: n.kind === 'Person' ? ST[n.stage] : C[n.kind], border: C[n.kind] }, font:{ size:10, color:css('--ink'), face:FONT } }))),
-    edges:new vis.DataSet(g.edges.map(e => ({ from:e.source, to:e.target, label:e.type === 'ENJOYED' ? 'enjoyed' : e.type === 'WORKS_AT' ? 'works at' : '', dashes:e.type === 'ENJOYED', arrows:'to', color:{ color:css('--mute') }, font:{ size:8, color:css('--mute'), strokeWidth:0 } }))) };
-  if (peopleNet) peopleNet.destroy();
-  peopleNet = new vis.Network($('#pnet'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-40, springLength:70 }, stabilization:{ iterations:120 } }, interaction:{ hover:true } });
-  peopleNet.on('click', p => { const id = p.nodes[0]; if (id && id.startsWith('psn-')) showPerson(id); });
+  const q = $('#psearch').value.trim();
+  const d = await papi('/api/people?' + new URLSearchParams(q ? { q } : {}));
+  const all = q ? (await papi('/api/people')).counts : d.counts;
+  if (leadCount !== null && all.people > leadCount) {  // someone new said yes: count up, celebrate, show who
+    const newest = [...d.people].sort((a, b) => (b.first_met || '').localeCompare(a.first_met || ''))[0];
+    $('#pleadbox').classList.remove('bump'); void $('#pleadbox').offsetWidth; $('#pleadbox').classList.add('bump');
+    if (newest) toast(`New lead: ${newest.name}${newest.company ? ' · ' + newest.company : ''}`);
+  }
+  leadCount = all.people;
+  countTo($('#pleads'), all.people); countTo($('#phot'), all.hot); countTo($('#pwarm'), all.warm); countTo($('#pcold'), all.people - all.hot - all.warm);
+  leadsCache = d.people;
+  const open = d.people.filter(openFollowUp).length;
+  $('#popen').textContent = `${open} follow-up${open === 1 ? '' : 's'} open`; $('#popen').classList.toggle('warn', open > 0);
+  renderCards();
+  await drawPeopleGraph(q ? new Set(d.people.map(p => p.person_id)) : null);
   if (peopleSel) showPerson(peopleSel, true);
 }
-async function showPerson(id, quiet) {
-  peopleSel = id;
-  if (!quiet) document.querySelectorAll('#plist tr[data-id]').forEach(r => r.classList.toggle('sel', r.dataset.id === id));
-  let p; try { p = await papi('/api/people/' + encodeURIComponent(id)); } catch (e) { peopleSel = null; return; }
-  const yn = v => v ? 'yes' : 'no', row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
-  $('#pdetail').innerHTML = `<b style="font-size:14px">${esc(p.name)}</b> <span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span><dl>`
-    + row('Company', p.company) + row('Role', p.role) + row('Function', p.function) + row('Email', p.email) + row('Building', p.use_case) + row('Knows Neo4j', p.familiarity)
-    + row('Interested in', p.interests.join(', ')) + row('Enjoyed', p.enjoyed.join(', ')) + `<dt>Wants</dt><dd>follow-up: ${yn(p.wants_follow_up)} · demo: ${yn(p.wants_demo)}</dd>` + row('Notes', p.notes)
-    + `<dt>Met</dt><dd>${p.meet_count}× · first ${esc((p.first_met || '').slice(0, 16).replace('T', ' '))}</dd></dl>`
-    + (p.encounters.length ? '<div class="lbl" style="margin:6px 0 2px">Conversations</div>' + p.encounters.map(e => `<div style="color:var(--mute)">${esc((e.ts || '').slice(5, 16).replace('T', ' '))}${e.place ? ' · ' + esc(e.place) : ''}: <span style="color:var(--ink)">${esc(e.summary || '')}</span></div>`).join('') : '')
-    + `<div style="margin-top:10px;display:flex;gap:6px"><button class="sm" id="pfu">${p.followed_up ? 'Mark not followed up' : 'Mark followed up'}</button><button class="sm" id="pforget" style="color:var(--bad)">Forget this person</button></div>`;
-  $('#pfu').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/followup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ done:!p.followed_up }) }); loadPeople(); };
-  $('#pforget').onclick = async () => { if (confirm(`Erase ${p.name} and their conversations? This cannot be undone.`)) { await papi('/api/people/' + encodeURIComponent(id), { method:'DELETE' }); peopleSel = null; $('#pdetail').textContent = 'Erased.'; loadPeople(); } };
+function renderCards() {
+  if (peopleSel && !$('#pdetail').hidden) return;
+  $('#pcards').innerHTML = `<div class="pside-h">Next steps for the Neo4j team</div>` + (leadsCache.length ? leadsCache.map(p =>
+    `<div class="lead${p.followed_up ? ' done' : ''}" data-id="${esc(p.person_id)}"><div class="top"><span><span class="nm">${esc(p.name)}</span>`
+    + `${p.company ? ' <span class="co">· ' + esc(p.company) + '</span>' : ''}</span><span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></div>`
+    + `<div class="next">${esc(p.next_step || (p.use_case ? 'Ask about: ' + p.use_case : 'No next step yet: open to add one'))}</div></div>`).join('')
+    : '<div class="pside-h" style="text-transform:none;letter-spacing:0;font-size:12px">Nothing to follow up yet.</div>');
+  document.querySelectorAll('#pcards .lead').forEach(c => c.onclick = () => showPerson(c.dataset.id));
 }
-/* Speak on this computer (OpenAI voice via the brain), one line at a time */
+async function drawPeopleGraph(only) {
+  const g = await papi('/api/people/graph'), ST = STAGE_COLOR(), C = { Company:css('--long'), Theme:css('--reasoning') };
+  const byId = Object.fromEntries(leadsCache.map(p => [p.person_id, p]));
+  let nodes = g.nodes, edges = g.edges;
+  if (only) {  // search: the matching leads and what they link to
+    const keep = new Set(only); edges = edges.filter(e => only.has(e.source)); edges.forEach(e => keep.add(e.target)); nodes = nodes.filter(n => keep.has(n.id));
+  }
+  $('#pempty').hidden = nodes.length > 0;
+  const N = nodes.map(n => n.kind === 'Person' ? {
+      id:n.id, label:n.label, shape:'dot', size:14 + (n.score || 0) * 0.32, borderWidth: n.id === peopleSel ? 4 : 2,
+      color:{ background:ST[n.stage] || ST.cold, border: n.id === peopleSel ? css('--ink') : ST[n.stage] || ST.cold, highlight:{ background:ST[n.stage] || ST.cold, border:css('--ink') } },
+      font:{ size:14, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') },
+      title:`${n.label} · ${n.stage} ${n.score || 0}` + (byId[n.id] && byId[n.id].next_step ? `\n→ ${byId[n.id].next_step}` : '') }
+    : { id:n.id, label:n.label, shape:'box', margin:6, color:{ background:C[n.kind], border:C[n.kind] }, font:{ size:11, color:'#fff', face:FONT } });
+  const E = edges.map((e, i) => ({ id:`${e.source}|${e.type}|${e.target}`, from:e.source, to:e.target, dashes:e.type === 'ENJOYED', arrows:{ to:{ enabled:true, scaleFactor:.5 } },
+    label: e.type === 'WORKS_AT' ? 'works at' : e.type === 'ENJOYED' ? 'enjoyed' : '', color:{ color:css('--mute'), opacity:.7 }, font:{ size:9, color:css('--mute'), strokeWidth:0, face:FONT } }));
+  if (!peopleNet) {
+    pNodes = new vis.DataSet(N); pEdges = new vis.DataSet(E);
+    peopleNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-70, springLength:110, avoidOverlap:.6 }, stabilization:{ iterations:150 } }, interaction:{ hover:true, tooltipDelay:120 } });
+    peopleNet.on('click', p => { const id = p.nodes[0]; if (id && id.startsWith('psn-')) showPerson(id); else if (!id) closePerson(); });
+    peopleNet.once('stabilizationIterationsDone', () => peopleNet.fit({ animation:true }));
+  } else {  // update in place: the graph grows instead of re-shuffling
+    const nid = new Set(N.map(n => n.id)), eid = new Set(E.map(e => e.id));
+    pNodes.remove(pNodes.getIds().filter(i => !nid.has(i))); pEdges.remove(pEdges.getIds().filter(i => !eid.has(i)));
+    pNodes.update(N); pEdges.update(E);
+  }
+}
+function closePerson() { peopleSel = null; $('#pdetail').hidden = true; $('#pcards').hidden = false; renderCards(); drawPeopleGraph(null).catch(() => {}); }
+async function showPerson(id, quiet) {
+  const first = peopleSel !== id; peopleSel = id;
+  let p; try { p = await papi('/api/people/' + encodeURIComponent(id)); } catch (e) { closePerson(); return; }
+  $('#pcards').hidden = true; $('#pdetail').hidden = false;
+  const editing = document.activeElement && document.activeElement.id === 'pnext';
+  if (quiet && editing) return;  // a live update must not wipe what someone is typing
+  const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '', last = p.encounters[0];
+  $('#pdetail').innerHTML = `<button class="sm" id="pback">← All leads</button>
+    <div style="margin:10px 0 2px"><b style="font-size:16px">${esc(p.name)}</b> <span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></div>
+    <div style="color:var(--mute)">${esc([p.role, p.company].filter(Boolean).join(' · '))}</div>
+    <div class="nextbox"><div class="lbl"><span>Next step for the Neo4j team</span><span class="tag">${p.next_step_by === 'team' ? 'set by team' : 'AI suggestion'}</span></div>
+      <textarea id="pnext" placeholder="e.g. send the aerospace case study, book a 30-min call">${esc(p.next_step || '')}</textarea>
+      <div style="display:flex;gap:6px;margin-top:6px"><button class="sm pri" id="pnextsave">Save</button><button class="sm" id="pfu">${p.followed_up ? '✓ Done (undo)' : 'Mark done'}</button></div></div>
+    <dl>${row('Building', p.use_case)}${row('Interested', p.interests.join(', '))}${row('Enjoyed', p.enjoyed.join(', '))}${row('Knows Neo4j', p.familiarity)}${row('Email', p.email)}
+      ${p.wants_demo || p.wants_follow_up ? `<dt>Asked for</dt><dd>${[p.wants_demo && 'a demo', p.wants_follow_up && 'a follow-up'].filter(Boolean).join(' and ')}</dd>` : ''}
+      <dt>Met</dt><dd>${p.meet_count}× · ${esc((p.last_met || '').slice(5, 16).replace('T', ' '))}${last && last.place ? ' · ' + esc(last.place) : ''}</dd></dl>
+    ${last && last.summary ? `<div class="lbl" style="margin:8px 0 2px">Conversation</div><div>${esc(last.summary)}</div>` : ''}
+    <div style="margin-top:14px"><button class="sm" id="pforget" style="color:var(--bad)">Forget this person</button></div>`;
+  $('#pback').onclick = closePerson;
+  $('#pnextsave').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/next_step`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text:$('#pnext').value }) }); $('#pnextsave').textContent = 'Saved ✓'; loadPeople().catch(() => {}); };
+  $('#pfu').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/followup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ done:!p.followed_up }) }); loadPeople(); };
+  $('#pforget').onclick = async () => { if (confirm(`Erase ${p.name} and their conversations? This cannot be undone.`)) { await papi('/api/people/' + encodeURIComponent(id), { method:'DELETE' }); closePerson(); loadPeople(); } };
+  if (first && peopleNet && pNodes && pNodes.get(id)) { drawPeopleGraph(null).catch(() => {}); peopleNet.selectNodes([id]); peopleNet.focus(id, { scale:1.1, animation:{ duration:500 } }); }
+}
+/* Speak on this computer (OpenAI voice via the brain), one line at a time: the robot's greetings when its own speaker is not running */
 let speakQ = Promise.resolve();
 try { $('#speakhere').checked = localStorage.getItem('speak_here') === '1'; } catch (_) {}
 $('#speakhere').onchange = () => { try { localStorage.setItem('speak_here', $('#speakhere').checked ? '1' : '0'); } catch (_) {} };
@@ -682,7 +752,7 @@ async function loadBooth() {
   const b = await api('/api/booth');
   $('#boothon').checked = b.on; $('#boothdeg').value = b.look_up_deg;
   if (!$('#trick').options.length) $('#trick').innerHTML = b.tricks.map(t => `<option${t === b.greet_action ? ' selected' : ''}>${esc(t)}</option>`).join('');
-  $('#boothmsg').textContent = b.on ? `greets with: ${b.greet_action || 'no trick'}` : 'off: no tricks, level camera';
+  $('#boothmsg').textContent = b.on ? (b.greet_action ? `greets with: ${b.greet_action}` : 'greets by voice, no trick') : 'off: level camera';
 }
 const boothSet = async () => { try { await papi('/api/booth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ on:$('#boothon').checked, look_up_deg:+$('#boothdeg').value }) }); } catch (e) { $('#boothmsg').textContent = e.message; } loadBooth(); };
 $('#boothon').onchange = boothSet; $('#boothdeg').onchange = boothSet;
@@ -690,80 +760,7 @@ $('#trickgo').onclick = async () => {
   try { const r = await papi('/api/gesture', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name:$('#trick').value }) });
     $('#boothmsg').textContent = r.ok ? `doing ${r.action}` : `not now: ${r.reason}`; } catch (e) { $('#boothmsg').textContent = e.message; }
 };
-$('#pstage').onchange = () => loadPeople(); $('#prefresh').onclick = () => loadPeople().catch(() => {});
 let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer = setTimeout(() => loadPeople().catch(() => {}), 250); };
-$('#ptalknew').onclick = () => { encId = null; $('#ptalklog').innerHTML = ''; };
-/* Hold to talk: the computer's microphone stands in for the robot's ears (same transcription and Wizard as /api/voice/turn) */
-let micRec = null, micChunks = [], micStream = null, micPeak = 0, micMeter = null;
-const MIC_SILENT = 0.003;  // peak (0..1) below this is digital silence (a muted mic): not sent. Quieter-than-normal audio is still sent:
-const MIC_QUIET = 0.02;    // the server drops what the speech model invents for silence ("Thanks for watching!"), so a soft voice may still work
-async function micStart(e) {
-  e.preventDefault();
-  if (micRec) return;
-  // A fresh microphone connection every time, released after: a kept one can go silent on Windows (after playback, a device change)
-  try { micStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true } }); }
-  catch (err) { log('bad', 'microphone blocked: allow it for this page'); return; }
-  micChunks = []; micPeak = 0;
-  const name = (micStream.getAudioTracks()[0] || {}).label || 'default microphone';
-  try {  // live loudness, so a muted or wrong microphone is obvious while you hold the button
-    const ctx = new AudioContext(), an = ctx.createAnalyser(), buf = new Float32Array(1024);
-    ctx.createMediaStreamSource(micStream).connect(an);
-    micMeter = setInterval(() => {
-      an.getFloatTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v));
-      micPeak = Math.max(micPeak, pk);
-      $('#ptalkmic').textContent = 'Listening ' + '▮'.repeat(Math.min(8, Math.round(pk * 30))).padEnd(8, '·');
-    }, 80);
-    micMeter.ctx = ctx;
-  } catch (_) { micPeak = 1; }
-  $('#ptalkmic').title = 'Recording from: ' + name;
-  micRec = new MediaRecorder(micStream);
-  micRec.ondataavailable = ev => ev.data.size && micChunks.push(ev.data);
-  micRec.onstop = () => { micSend(); };
-  micRec.start();
-  $('#ptalkmic').classList.add('rec'); $('#ptalkmic').textContent = 'Listening… release to send';
-}
-function micStop() { if (micRec && micRec.state === 'recording') micRec.stop(); }
-async function micSend() {
-  const type = micRec.mimeType || 'audio/webm', ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'mp4' : 'webm';
-  micRec = null;
-  if (micMeter) { clearInterval(micMeter); micMeter.ctx && micMeter.ctx.close(); micMeter = null; }
-  $('#ptalkmic').classList.remove('rec'); $('#ptalkmic').textContent = 'Hold to talk';
-  const mic = (micStream.getAudioTracks()[0] || {}).label || 'the default microphone';
-  micStream.getTracks().forEach(t => t.stop());  // release the microphone (the browser's recording indicator goes off too)
-  if (micPeak < MIC_SILENT) {
-    $('#ptalklog').insertAdjacentHTML('beforeend', `<div style="color:var(--miss)">Heard only silence from “${esc(mic)}”: it sends pure digital silence, so something mutes it. Check the mic-mute key on the laptop, Windows Settings → System → Sound → Input (“Test your microphone”), or a call app (Teams, Slack) that holds it muted.</div>`);
-    log('miss', `microphone silent: ${esc(mic)} (peak ${micPeak.toFixed(3)})`); return;
-  }
-  const blob = new Blob(micChunks, { type }), lg = $('#ptalklog');
-  if (blob.size < 2000) { log('miss', 'too short: hold the button while you speak'); return; }
-  if (micPeak < MIC_QUIET) log('miss', `microphone very quiet (peak ${micPeak.toFixed(3)}): sending anyway; speak closer to “${esc(mic)}”`);
-  const fd = new FormData(); fd.append('file', blob, 'speech.' + ext); if (encId) fd.append('encounter_id', encId);
-  lg.insertAdjacentHTML('beforeend', '<div class="you" id="ptalkwait">You: …</div>'); lg.scrollTop = lg.scrollHeight;
-  try {
-    const r = await fetch('/api/voice/turn', { method:'POST', body:fd, headers: PTOK ? { 'X-Brain-Token': PTOK } : {} });
-    const wait = $('#ptalkwait'); if (wait) wait.removeAttribute('id');
-    if (r.status === 204) { if (wait) wait.textContent = `You: (nothing understood${r.headers.get('X-Heard') ? ': the speech model only made out “' + decodeURIComponent(r.headers.get('X-Heard')) + '”' : ''}; speak closer to “${mic}” and try again)`; return; }
-    if (!r.ok) throw new Error(await r.text());
-    encId = r.headers.get('X-Encounter') || encId;
-    if (wait) wait.textContent = 'You: ' + decodeURIComponent(r.headers.get('X-Heard') || '');
-    lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(decodeURIComponent(r.headers.get('X-Reply') || ''))}</div>`); lg.scrollTop = lg.scrollHeight;
-    const url = URL.createObjectURL(await r.blob()), a = new Audio(url);  // you spoke, so the answer is always spoken
-    speakQ = speakQ.then(() => new Promise(res => { a.onended = a.onerror = res; a.play().catch(res); })).then(() => URL.revokeObjectURL(url));
-    loadPeople().catch(() => {});
-  } catch (err) { let m = err.message; try { m = JSON.parse(m).detail || m; } catch (_) {} lg.insertAdjacentHTML('beforeend', `<div style="color:var(--bad)">${esc(m)}</div>`); }
-}
-$('#ptalkmic').addEventListener('pointerdown', micStart);
-['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => $('#ptalkmic').addEventListener(ev, micStop));
-$('#ptalkf').onsubmit = async e => {
-  e.preventDefault(); const q = $('#ptalkq').value.trim(); if (!q) return; $('#ptalkq').value = '';
-  const lg = $('#ptalklog'); lg.insertAdjacentHTML('beforeend', `<div class="you">You: ${esc(q)}</div>`); lg.scrollTop = lg.scrollHeight;
-  try {
-    const r = await papi('/api/converse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text:q, encounter_id:encId }) });
-    encId = r.encounter_id; lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(r.reply)}</div>`); speak(r.reply);
-    if (r.evidence.some(t => ['save_person_facts', 'forget_me'].includes(t.tool))) loadPeople().catch(() => {});
-  } catch (err) { let m = err.message; try { m = JSON.parse(m).detail || m; } catch (_) {} lg.insertAdjacentHTML('beforeend', `<div style="color:var(--bad)">${esc(m)}</div>`); }
-  lg.scrollTop = lg.scrollHeight;
-};
 
 /* ---------- timeline ---------- */
 async function loadTimeline() {

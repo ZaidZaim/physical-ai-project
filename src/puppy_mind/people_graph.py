@@ -29,6 +29,7 @@ _SCALARS = {  # python key -> graph key
     "name": "name", "name_key": "nameKey", "role": "role", "function": "function", "company": "company", "email": "email",
     "use_case": "useCase", "familiarity": "familiarity", "wants_follow_up": "wantsFollowUp", "wants_demo": "wantsDemo",
     "notes": "notes", "lead_score": "leadScore", "lead_stage": "leadStage",
+    "next_step": "nextStep", "next_step_by": "nextStepBy",  # the follow-up / call to action for the Neo4j team; by "ai" or "team"
 }
 
 _PERSON_RETURN = """
@@ -37,7 +38,8 @@ _PERSON_RETURN = """
     coalesce(p.wantsDemo, false) AS wants_demo, coalesce(p.followedUp, false) AS followed_up, p.notes AS notes,
     coalesce(p.leadScore, 0) AS lead_score, coalesce(p.leadStage, 'cold') AS lead_stage, toString(p.firstMet) AS first_met,
     toString(p.lastMet) AS last_met, coalesce(p.meetCount, 0) AS meet_count,
-    [(p)-[:INTERESTED_IN]->(t:Theme) | t.name] AS interests, [(p)-[:ENJOYED]->(t:Theme) | t.name] AS enjoyed
+    [(p)-[:INTERESTED_IN]->(t:Theme) | t.name] AS interests, [(p)-[:ENJOYED]->(t:Theme) | t.name] AS enjoyed,
+    p.nextStep AS next_step, coalesce(p.nextStepBy, 'ai') AS next_step_by
 """
 
 
@@ -141,6 +143,11 @@ class PeopleGraph:
     def set_followed_up(self, person_id: str, done: bool) -> bool:
         return bool(self._write("MATCH (p:Person {personId:$pid}) SET p.followedUp = $d RETURN 1 AS ok", pid=person_id, d=done))
 
+    def set_next_step(self, person_id: str, text: str) -> bool:
+        """The team wrote the next step themselves: from now on the AI suggestion never overwrites it."""
+        return bool(self._write("MATCH (p:Person {personId:$pid}) SET p.nextStep = $t, p.nextStepBy = 'team' RETURN 1 AS ok",
+                                pid=person_id, t=text.strip()[:500]))
+
     def people_graph(self) -> dict[str, Any]:
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
@@ -148,10 +155,11 @@ class PeopleGraph:
             """
             MATCH (p:Person) WHERE p.personId IS NOT NULL
             OPTIONAL MATCH (p)-[r:WORKS_AT|INTERESTED_IN|ENJOYED]->(x)
-            RETURN p.personId AS pid, p.name AS name, coalesce(p.leadStage,'cold') AS stage, type(r) AS type,
+            RETURN p.personId AS pid, p.name AS name, coalesce(p.leadStage,'cold') AS stage, coalesce(p.leadScore, 0) AS score,
+                   type(r) AS type,
                    CASE WHEN x:Company THEN 'Company' WHEN x:Theme THEN 'Theme' END AS kind, x.name AS xname LIMIT 1500
             """):
-            nodes.setdefault(r["pid"], {"id": r["pid"], "kind": "Person", "label": r["name"], "stage": r["stage"]})
+            nodes.setdefault(r["pid"], {"id": r["pid"], "kind": "Person", "label": r["name"], "stage": r["stage"], "score": r["score"]})
             if r["xname"]:
                 xid = f"{r['kind']}:{r['xname']}"
                 nodes.setdefault(xid, {"id": xid, "kind": r["kind"], "label": r["xname"]})
@@ -221,6 +229,12 @@ class FakePeople:
     def forget_person(self, person_id: str) -> bool:
         return self._people().pop(person_id, None) is not None
 
+    def set_next_step(self, person_id: str, text: str) -> bool:
+        p = self._people().get(person_id)
+        if p:
+            p["next_step"], p["next_step_by"] = text.strip()[:500], "team"
+        return p is not None
+
     def set_followed_up(self, person_id: str, done: bool) -> bool:
         p = self._people().get(person_id)
         if p:
@@ -231,7 +245,8 @@ class FakePeople:
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
         for p in self._people().values():
-            nodes[p["person_id"]] = {"id": p["person_id"], "kind": "Person", "label": p.get("name"), "stage": p["lead_stage"]}
+            nodes[p["person_id"]] = {"id": p["person_id"], "kind": "Person", "label": p.get("name"), "stage": p["lead_stage"],
+                                     "score": p["lead_score"]}
             targets = [("WORKS_AT", "Company", p["company"])] if p.get("company") else []
             targets += [("INTERESTED_IN", "Theme", t) for t in p["interests"]] + [("ENJOYED", "Theme", t) for t in p["enjoyed"]]
             for rel, kind, name in targets:

@@ -82,7 +82,7 @@ def test_converse_endpoint(client):
 
 def test_voice_turn_returns_audio_and_headers_and_204_on_silence(client):
     server.brain.people.client = FakeChat([["Hello there"]])
-    r = client.post("/api/voice/turn", files={"file": ("s.wav", b"RIFF" + b"\0" * 60 + b"hello robot", "audio/wav")})
+    r = client.post("/api/voice/turn", files={"file": ("s.wav", b"RIFF" + b"\0" * 60 + b"Hey PuppyPi, hello robot", "audio/wav")})
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content == b"RIFFfake-wav:Hello there"
     assert r.headers["x-encounter"] and "hello%20robot" in r.headers["x-heard"] and r.headers["x-reply"] == "Hello%20there"
     assert client.post("/api/voice/turn", files={"file": ("s.wav", b"tiny", "audio/wav")}).status_code == 204
@@ -159,7 +159,8 @@ def test_speak_here_endpoint_returns_wav_and_is_local_only(client, monkeypatch):
 
 def test_hold_to_talk_webm_reaches_transcription_with_its_format(client):
     server.brain.people.client = FakeChat([["Hi! What's your name?"]])
-    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"hello robot", "audio/webm")})
+    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"hello robot", "audio/webm")},
+                    data={"require_wake": "false"})  # Hold to talk needs no wake word
     assert r.status_code == 200 and server.brain.voice.filenames[-1] == "speech.webm"
 
 
@@ -182,3 +183,42 @@ def test_recordings_made_while_the_robot_moves_are_dropped_without_transcribing(
     before = len(server.brain.voice.filenames)
     r = client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + b"hello robot", "audio/wav")})
     assert r.status_code == 204 and "moving" in r.headers["x-heard"] and len(server.brain.voice.filenames) == before
+
+
+def test_the_robot_answers_only_after_hey_puppypi_then_follow_ups_need_none(client):
+    server.brain.people.client = FakeChat([["Hi! What would you like to know?"], ["GraphRAG uses a graph."]])
+    post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
+                                              data={"encounter_id": enc} if enc else {})
+    r = post("so I told him about the party")  # hall chatter: not answered, and not echoed back
+    from urllib.parse import unquote
+    assert r.status_code == 204 and "party" not in unquote(r.headers["x-heard"]) and "Hey PuppyPi" in unquote(r.headers["x-heard"])
+    r = post("Hey Puppy Pi!")
+    assert r.status_code == 200
+    enc = r.headers["x-encounter"]
+    r = post("What is GraphRAG?", enc)  # the conversation is open: no wake word needed
+    assert r.status_code == 200 and r.headers["x-encounter"] == enc
+
+
+def test_after_the_conversation_went_quiet_the_wake_word_starts_a_fresh_one(client):
+    server.brain.people.client = FakeChat([["Hi!"], ["Hello again, who are you?"]])
+    post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
+                                              data={"encounter_id": enc} if enc else {})
+    enc = post("Hey PuppyPi").headers["x-encounter"]
+    server.brain.people.encounters[enc].last -= 999  # long quiet: the visitor left
+    assert post("what about vector search", enc).status_code == 204
+    r = post("Hey PuppyPi, I'm new here", enc)
+    assert r.status_code == 200 and r.headers["x-encounter"] != enc  # most likely someone else: a new conversation
+
+
+def test_no_trick_by_default_when_greeting():
+    from puppy_mind.config import Settings
+
+    assert Settings().greet_action == "" or __import__("os").getenv("GREET_ACTION")
+
+
+def test_next_step_endpoint_and_export(client):
+    pid = seed(client, company="Acme")
+    assert client.post(f"/api/people/{pid}/next_step", json={"text": "Book a demo with Ana"}).status_code == 200
+    assert client.get(f"/api/people/{pid}").json()["next_step"] == "Book a demo with Ana"
+    assert "next_step" in client.get("/api/people/export.csv").text.splitlines()[0]
+    assert client.get("/api/people/graph").json()["nodes"][0].get("score") is not None

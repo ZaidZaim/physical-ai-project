@@ -392,6 +392,10 @@ class FollowUp(BaseModel):
     done: bool = True
 
 
+class NextStep(BaseModel):
+    text: str
+
+
 def _robot_auth(token: str | None) -> None:
     if brain.s.brain_token and not secrets.compare_digest(token or "", brain.s.brain_token):
         raise HTTPException(401, "bad token")
@@ -420,7 +424,8 @@ def converse(body: Say, request: Request, x_brain_token: str | None = Header(Non
 
 
 @app.post("/api/voice/turn")
-def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None), x_brain_token: str | None = Header(None)):
+def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None), require_wake: bool = Form(True),
+               x_brain_token: str | None = Header(None)):
     """The robot (WAV) or the UI's Hold to talk (WebM) posts what its microphone heard; the reply comes back as WAV to play.
     204 when nothing intelligible was said."""
     _robot_auth(x_brain_token)
@@ -431,6 +436,10 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
+    if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)
+        ok, encounter_id = brain.people.addressed(text, encounter_id)
+        if not ok:  # what bystanders said is not echoed anywhere
+            return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))
     return Response(brain.voice.speak(r["reply"]), media_type="audio/wav",
                     headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600])})
@@ -460,8 +469,8 @@ def people_graph(request: Request, x_brain_token: str | None = Header(None), tok
     return brain.mem.people_graph()
 
 
-LEAD_COLUMNS = ["name", "company", "role", "function", "email", "lead_stage", "lead_score", "use_case", "familiarity", "interests", "enjoyed",
-                "wants_follow_up", "wants_demo", "followed_up", "notes", "first_met", "last_met", "meet_count"]
+LEAD_COLUMNS = ["name", "company", "role", "function", "email", "lead_stage", "lead_score", "next_step", "use_case", "familiarity",
+                "interests", "enjoyed", "wants_follow_up", "wants_demo", "followed_up", "notes", "first_met", "last_met", "meet_count"]
 
 
 @app.get("/api/people/export.csv")
@@ -490,6 +499,16 @@ def people_get(person_id: str, request: Request, x_brain_token: str | None = Hea
     if not p:
         raise HTTPException(404, "unknown person")
     return p
+
+
+@app.post("/api/people/{person_id}/next_step")
+def people_next_step(person_id: str, body: NextStep, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The Neo4j team's own next step for this lead (replaces the AI suggestion for good)."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.mem.set_next_step(person_id, body.text):
+        raise HTTPException(404, "unknown person")
+    brain.bus.publish("people", {"event": "next_step", "person_id": person_id})
+    return {"ok": True}
 
 
 @app.post("/api/people/{person_id}/followup")

@@ -70,7 +70,10 @@ class Settings:
     # booth mode: look slightly up at people and greet with a trick (Hiwonder action group; '' for none)
     booth_mode: bool = _bool("BOOTH_MODE", False)
     look_up_deg: float = float(os.getenv("LOOK_UP_DEG", "10"))
-    greet_action: str = os.getenv("GREET_ACTION", "boxing")
+    greet_action: str = os.getenv("GREET_ACTION", "")  # no trick when greeting by default; tricks still play on request
+    # the robot only starts a conversation when it hears this; follow-ups need no wake word for WAKE_WINDOW_S. Empty: no wake word.
+    wake_word: str = os.getenv("WAKE_WORD", "Hey PuppyPi")
+    wake_window_s: float = float(os.getenv("WAKE_WINDOW_S", "45"))
     gesture_cooldown_s: float = float(os.getenv("GESTURE_COOLDOWN_S", "60"))
     max_gestures_per_hour: int = int(os.getenv("MAX_GESTURES_PER_HOUR", "30"))
     encounter_idle_s: float = float(os.getenv("ENCOUNTER_IDLE_S", "300"))

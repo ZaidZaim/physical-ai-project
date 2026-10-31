@@ -450,3 +450,17 @@ def test_an_email_heard_in_the_visitors_words_is_held_then_saved_on_the_next_con
     assert not mem.list_people()[0].get("email")
     s.turn("exactly", r["encounter_id"])
     assert mem.list_people()[0]["email"] == "andreas.baum@maxbaum.com"
+
+
+def test_each_lead_gets_a_next_step_the_team_can_take_over():
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas", company="Maxbaum"), "Thanks!"],
+                  ["Graphs help with traceability."], ["Sure."]],
+                 extract_fn=lambda t: {"next_step": "Send the aerospace case study" if "aircraft" in t else "Share Graph Academy links"})
+    r = s.turn("Yes")
+    s.turn("We evaluate knowledge graphs for aircraft manufacturing.", r["encounter_id"])
+    p = mem.list_people()[0]
+    assert p["next_step"] == "Send the aerospace case study" and p["next_step_by"] == "ai"
+    assert mem.set_next_step(p["person_id"], "Call him Tuesday, Anna owns it")
+    s.turn("Anything else?", r["encounter_id"])  # the AI keeps suggesting, but the team's words win
+    p = mem.get_person(p["person_id"])
+    assert p["next_step"] == "Call him Tuesday, Anna owns it" and p["next_step_by"] == "team"

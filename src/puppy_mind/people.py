@@ -84,6 +84,19 @@ def confirms(text: str) -> bool:
     return bool(_CONFIRM.search(text or "")) and consent_from(text) is not False
 
 
+# "Hey PuppyPi" as speech-to-text writes it: "Hey Puppy Pi", "hey puppy pie", "Hi PuppyPi", "Okay poppy pi", "Hey, Puppy!"
+_HEY_PUPPY = re.compile(r"\b(hey|hi|hello|hallo|ok(ay)?|yo)\b\W*(puppy|poppy|puppi|pappy|papi|puppie)\W*(pi|pie|py|pye|pai|pee)?\b", re.I)
+
+
+def has_wake_word(text: str, wake: str = "Hey PuppyPi") -> bool:
+    """The visitor addressed the robot. Fuzzy for the default "Hey PuppyPi"; any other wake word must appear as words."""
+    if not (wake or "").strip():
+        return True
+    if name_key(wake).replace(" ", "") == "heypuppypi":
+        return bool(_HEY_PUPPY.search(text or ""))
+    return name_key(wake) in name_key(text)
+
+
 def introduces_self(text: str) -> bool:
     """The visitor said who they are or what they do ("I'm Zaid", "I work at Neo4j")."""
     return bool(_INTRO.search(text or "") or _IM_NAME.search(text or ""))
@@ -171,6 +184,8 @@ def merge_person(existing: dict | None, facts: dict, name: str) -> dict:
         v = (facts.get(k) or "").strip()
         if v:
             p[k] = v[:300]
+    if (facts.get("next_step") or "").strip() and p.get("next_step_by") != "team":  # never overwrite what the team wrote
+        p["next_step"], p["next_step_by"] = facts["next_step"].strip()[:500], "ai"
     if facts.get("familiarity") in ("none", "curious", "user", "expert"):
         p["familiarity"] = facts["familiarity"]
     for k in ("wants_follow_up", "wants_demo"):
@@ -182,8 +197,9 @@ def merge_person(existing: dict | None, facts: dict, name: str) -> dict:
     return p
 
 
-def greeting(person: dict | None, name: str = "", robot: str = "PuppyPi") -> str:
-    """What the robot says when it notices someone. `person` is a remembered visitor, `name` only what a badge says."""
+def greeting(person: dict | None, name: str = "", robot: str = "PuppyPi", wake: str = "") -> str:
+    """What the robot says when it notices someone. `person` is a remembered visitor, `name` only what a badge says. With a wake
+    word, a stranger is told how to start talking (a remembered visitor can just answer: the greeting opens the conversation)."""
     if person:
         who = first_name(person.get("name", ""))
         bits = f"Welcome back, {who}!" + (f" Great to see you again from {person['company']}." if person.get("company") else " Great to see you again.")
@@ -191,9 +207,10 @@ def greeting(person: dict | None, name: str = "", robot: str = "PuppyPi") -> str
         if topic:
             bits += f" Last time we talked about {topic}."
         return bits + " What shall we explore today?"
+    ask = f"Say \"{wake}\" and ask me anything about Neo4j, GenAI or GraphRAG." if wake else "Ask me anything about Neo4j, GenAI or GraphRAG."
     if name:
-        return f"Hello {first_name(name)}! I'm {robot}, the Graph Wizard. Ask me anything about Neo4j, GenAI or GraphRAG."
-    return f"Hi there! I'm {robot}, the Graph Wizard. Ask me anything about Neo4j, GenAI or GraphRAG, or tell me your name."
+        return f"Hello {first_name(name)}! I'm {robot}, the Graph Wizard. {ask}"
+    return f"Hi there! I'm {robot}, the Graph Wizard. {ask}" + ("" if wake else " Or tell me your name.")
 
 
 def safe_view(p: dict) -> dict:
@@ -245,6 +262,8 @@ class Facts(BaseModel):
     wants_follow_up: Literal["", "yes", "no"] = Field(description="yes/no only if they said whether they want a follow-up")
     wants_demo: Literal["", "yes", "no"] = Field(description="yes/no only if they said whether they want a demo")
     conversation_summary: str = Field(description="one sentence for the sales team: who they are and what the whole conversation was about")
+    next_step: str = Field(description="ONE concrete next action for the Neo4j team, based only on what they said they need, e.g. 'Send "
+                                       "the aerospace knowledge-graph case study and offer a 30-min call on traceability use cases'")
     email: str = Field(description="an email address the Visitor said, written normally (andreas.baum@maxbaum.com), else empty")
 
 
@@ -489,6 +508,21 @@ class PeopleService:
             return {"answer": r["answer"]}
         return {"error": f"unknown tool {name}"}
 
+    # ---- wake word (robot microphone only: Hold to talk and typing are addressed to the robot by definition)
+    def addressed(self, text: str, encounter_id: str | None) -> tuple[bool, str | None]:
+        """Should the robot answer what its microphone heard? Yes if it contains the wake word, or a conversation is open (the
+        last exchange or a greeting less than WAKE_WINDOW_S ago). Returns (answer?, encounter id to use): after a closed
+        conversation, a wake word starts a fresh one, since it is most likely someone new."""
+        now = time.monotonic()
+        enc = self.encounters.get(encounter_id or "")
+        if enc and now - enc.last < self.s.wake_window_s:
+            return True, enc.id
+        if self._recent_greeting and now - self._recent_greeting[0] < self.s.wake_window_s and not enc:
+            return True, None  # they may simply answer the greeting
+        if has_wake_word(text, self.s.wake_word):
+            return True, None
+        return False, None
+
     # ---- one conversational turn
     def turn(self, text: str, encounter_id: str | None = None, place: str | None = None) -> dict[str, Any]:
         if not self.client:
@@ -563,6 +597,8 @@ class PeopleService:
                     enc.pending_email = heard_email  # held: saved only when they confirm it read back, in a later answer
             new_name = (f.get("corrected_name") or "").strip()
             summary = (f.get("conversation_summary") or "").strip()
+            if (f.get("next_step") or "").strip():
+                update["next_step"] = f["next_step"].strip()
             if not update and not new_name and not summary:
                 return
             with enc.lock:
@@ -633,7 +669,8 @@ class PeopleService:
                                            "reason": "nobody in view" if not people else "everyone was greeted recently" if engaged else
                                            "nobody close to the robot and turned toward it"})
                 return
-            text = group_greeting(self.s.robot_name) if pick["kind"] == "group" else greeting(pick["person"], pick["name"], self.s.robot_name)
+            text = (group_greeting(self.s.robot_name, self.s.wake_word) if pick["kind"] == "group"
+                    else greeting(pick["person"], pick["name"], self.s.robot_name, self.s.wake_word))
             now = time.monotonic()
             self._greeted[pick["key"]] = now
             self._greet_times.append(now)
@@ -697,8 +734,9 @@ def choose_greeting(people: list[dict], lookup: Callable[[str, str], dict | None
     return sorted(cands, key=lambda c: c[:2])[0][2]
 
 
-def group_greeting(robot: str = "PuppyPi") -> str:
-    return f"Hello everyone! I'm {robot}, the Graph Wizard. Ask me anything about Neo4j, GenAI or GraphRAG. One at a time, please!"
+def group_greeting(robot: str = "PuppyPi", wake: str = "") -> str:
+    start = f"Say \"{wake}\" and ask" if wake else "Ask"
+    return f"Hello everyone! I'm {robot}, the Graph Wizard. {start} me anything about Neo4j, GenAI or GraphRAG. One at a time, please!"
 
 
 def _redact(tool: str, args: dict) -> dict:
