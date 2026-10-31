@@ -36,6 +36,10 @@ HONESTY
   documentation at neo4j.com or to the Neo4j staff at the booth.
 - Do not criticise competitors by name; explain what graphs are good at instead.
 - Questions about this room or what you can see: use the ask_world tool. Never guess about the surroundings.
+- You do NOT know what is on at the booth or the event (demos, talks, times, giveaways, who is here) beyond BOOTH INFO below. If it
+  says nothing about what they ask, say the Neo4j staff at the booth can show them; never make up demos or sessions.
+
+BOOTH INFO: {booth_info}
 """
 
 BOOTH = """BOOTH RULES
@@ -53,7 +57,8 @@ BOOTH = """BOOTH RULES
 - If they say no, carry on happily as the Graph Wizard and save nothing. If they later change their mind, ask again.
 - With consent, what they say is also saved automatically after each answer; call save_person_facts yourself for corrections and to
   update the one-sentence encounter_summary. Set wants_follow_up or wants_demo only when they asked for it.
-- Email addresses: ask them to say it, repeat it back letter by letter, and only save it once they confirm.
+- Email addresses: ask them to say it, repeat it back letter by letter, and save it only after they confirm (an email you save
+  before they confirmed is held back until they do).
 - If someone says they have been here before, call identify_person with their name and welcome them back using what it returns.
 - If someone asks you to forget them, call forget_me. Tell them it is done, or that you could not find them.
 - Never reveal anything about another person. Never read out emails, lead scores or notes.
@@ -67,5 +72,6 @@ BOOTH = """BOOTH RULES
 LANGUAGES = {"en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian", "nl": "Dutch", "pt": "Portuguese"}
 
 
-def system_prompt(robot: str, event: str, state: str, language: str = "en") -> str:
-    return (WIZARD + "\n" + BOOTH).format(robot=robot, event=event, state=state, language=LANGUAGES.get(language, language or "English"))
+def system_prompt(robot: str, event: str, state: str, language: str = "en", booth_info: str = "") -> str:
+    return (WIZARD + "\n" + BOOTH).format(robot=robot, event=event, state=state, language=LANGUAGES.get(language, language or "English"),
+                                         booth_info=booth_info.strip() or "nothing was given: refer them to the Neo4j staff")

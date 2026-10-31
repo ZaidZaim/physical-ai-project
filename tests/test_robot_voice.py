@@ -58,3 +58,11 @@ def test_a_loud_start_up_measurement_never_makes_the_robot_deaf():
     # seen on the robot: someone talked during the 2 s measurement -> threshold 88986, above any possible level
     assert pv.auto_threshold([30000] * 60) == pv.DEFAULT_THRESHOLD
     assert pv.auto_threshold([1500] * 60) == 4000.0  # capped: a speaking voice must always get through
+
+
+def test_a_click_is_not_speech_and_thinking_pauses_are_allowed():
+    import inspect
+
+    assert pv.MIN_VOICE_S >= 0.3
+    src = inspect.getsource(pv.main)
+    assert 'default=1.8' in src

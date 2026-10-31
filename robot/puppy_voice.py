@@ -27,6 +27,7 @@ import uuid
 import wave
 
 RATE, CHUNK_S = 16000, 0.03
+MIN_VOICE_S = 0.35  # at least this much actual loud sound before a recording is sent: a click plus silence is not speech
 DEFAULT_THRESHOLD = 800.0  # used when the start-up room measurement was not quiet
 PREFER = re.compile(r"wonder|echo|hiwonder|usb|uac", re.I)  # the WonderEcho Pro is a USB sound card
 SKIP = re.compile(r"bcm2835|vc4|hdmi|headphones", re.I)       # the Pi's own outputs (no microphone, not the robot speaker)
@@ -134,7 +135,7 @@ class Voice:
         mic = subprocess.Popen(["arecord", "-q", "-D", self.a.mic, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
                                stdout=subprocess.PIPE)
         n = int(RATE * CHUNK_S) * 2
-        floor, speech, quiet, started = 0.0, bytearray(), 0, False
+        floor, speech, quiet, started, voiced = 0.0, bytearray(), 0, False, 0
         end_quiet = int(self.a.silence / CHUNK_S)
         if self.a.threshold is None and not self.a.test_mic:  # measure the room first: stay quiet for two seconds
             print("Measuring room noise for 2 seconds: please stay quiet...")
@@ -153,7 +154,7 @@ class Voice:
             if not buf or len(buf) < n:
                 raise SystemExit("microphone stopped: check --mic (arecord -l)")
             if self.talking.is_set():
-                speech, quiet, started = bytearray(), 0, False
+                speech, quiet, started, voiced = bytearray(), 0, False, 0
                 continue
             level = rms(buf)
             if self.a.test_mic:
@@ -162,14 +163,14 @@ class Voice:
             floor = level if floor == 0 else (floor * 0.98 + level * 0.02 if not started else floor)
             loud = level > max(self.a.threshold, floor * 3)
             if loud:
-                started, quiet = True, 0
+                started, quiet, voiced = True, 0, voiced + 1
             elif started:
                 quiet += 1
             if started:
                 speech += buf
                 if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
-                    pcm, speech, quiet, started = bytes(speech), bytearray(), 0, False
-                    if len(pcm) > RATE * 2 * 0.5:  # ignore clicks and coughs shorter than half a second
+                    pcm, speech, quiet, started, loud_s, voiced = bytes(speech), bytearray(), 0, False, voiced * CHUNK_S, 0
+                    if loud_s >= MIN_VOICE_S:  # footsteps, clicks, a cough: not sent (each became a "Thanks for watching!" phantom)
                         self.talking.set()  # stop listening until the answer has been played
                         print("thinking...")
                         threading.Thread(target=self.turn, args=(pcm,), daemon=True).start()
@@ -199,7 +200,7 @@ def main():
     ap.add_argument("--mic", default="auto", help="ALSA capture device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
     ap.add_argument("--speaker", default="auto", help="ALSA playback device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
     ap.add_argument("--threshold", type=float, default=None, help="loudness (16-bit RMS) that counts as speech (default: measured at start)")
-    ap.add_argument("--silence", type=float, default=1.4, help="seconds of quiet that end a sentence (people pause mid-sentence)")
+    ap.add_argument("--silence", type=float, default=1.8, help="seconds of quiet that end a sentence (people pause to think)")
     ap.add_argument("--max-s", type=float, default=15.0, help="longest single utterance")
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")

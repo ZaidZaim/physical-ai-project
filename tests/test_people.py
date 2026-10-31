@@ -87,12 +87,15 @@ def test_consent_then_save_merge_and_returning_visitor():
     s, mem = svc([
         [call("record_consent", granted=True), call("save_person_facts", name="Ana Berg", role="Staff Engineer", company="Acme",
                                                       interests=["GraphRAG"], enjoyed=["the demo"], encounter_summary="Ana asked about GraphRAG."), "Thanks Ana!"],
-        [call("save_person_facts", wants_follow_up=True, email="ana@acme.com"), "Noted."],
+        [call("save_person_facts", wants_follow_up=True, email="ana@acme.com"), "Let me read it back: a-n-a at acme dot com?"],
+        ["Saved, thanks!"],
     ])
     r = s.turn("Yes please, go ahead")
     assert r["consent"] is True and r["person"]["name"] == "Ana Berg" and r["person"]["interests"] == ["graphrag"]
-    r2 = s.turn("Yes follow up with me", r["encounter_id"])
-    p = r2["person"]
+    r2 = s.turn("Yes follow up with me, my email is ana at acme.com", r["encounter_id"])
+    assert r2["person"]["wants_follow_up"] is True and not r2["person"].get("email")  # held back until she confirms it
+    confirmed = s.turn("exactly", r["encounter_id"])
+    p = mem.get_person(confirmed["person"]["person_id"])
     assert p["lead_stage"] == "hot" and p["meet_count"] == 1 and p["company"] == "Acme" and p["email"] == "ana@acme.com"
     assert len(mem.list_people()) == 1 and r2["evidence"][0]["args"]["email"] == "***"  # not echoed to the UI trace
     # a later visit: identify_person welcomes back with the safe view only, and consent carries over
@@ -328,10 +331,10 @@ def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
 
     def extract(transcript):
         seen.append(transcript)
+        if "physical AI" in transcript:  # the extractor sees the whole conversation: check the later fact first
+            return {"use_case": "a physical AI system", "interests": ["memory types"], "wants_follow_up": "", "corrected_name": ""}
         if "Rockstar" in transcript:
             return {"company": "Rockstar Games", "interests": ["agent memory"]}
-        if "physical AI" in transcript:
-            return {"use_case": "a physical AI system", "interests": ["memory types"], "wants_follow_up": "", "corrected_name": ""}
         return {}
 
     s, mem = svc([["Hello Rosenberg! May I remember you as Rosenberg from Rockstar Games? Just say yes or no."],
@@ -345,7 +348,7 @@ def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
     r = s.turn("We're building a physical AI system and wonder how Neo4j can fit.", r["encounter_id"])
     p = mem.get_person(p["person_id"])
     assert p["use_case"] == "a physical AI system" and "memory types" in p["interests"] and p["lead_stage"] in ("warm", "hot")
-    assert seen[-1].startswith("Robot: Great! What are you building?")  # the robot's question gives the answer its meaning
+    assert "Robot: Great! What are you building?\nVisitor: We're building" in seen[-1]  # whole conversation, robot's question included
 
 
 def test_nothing_is_extracted_or_saved_without_consent():
@@ -386,3 +389,64 @@ def test_an_unanswered_question_is_not_asked_again():
     first = s.client.prompts[-1].split("natural question about ")[1][:20]
     s.turn("Thank you", r["encounter_id"])
     assert s.client.prompts[-1].split("natural question about ")[1][:20] != first  # moved on to the next unknown
+
+
+def test_demo_and_follow_up_only_from_the_visitors_own_words():
+    from puppy_mind.people import explicit_wishes
+
+    assert explicit_wishes("I'd love a demo for my team") == {"wants_demo": True}
+    assert explicit_wishes("No demo needed, thanks") == {"wants_demo": False}
+    assert explicit_wishes("Please follow up with me") == {"wants_follow_up": True}
+    assert explicit_wishes("What kind of demos are at the booth?") == {}  # asking what exists is not asking for one
+    assert explicit_wishes("That's it, let's close it here") == {}  # a goodbye is not a no
+    # the model's or the extractor's guess never sets them (seen at the booth: a demo wish nobody voiced)
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas", wants_demo=True), "Thanks!"],
+                  ["Sure."]], extract_fn=lambda t: {"wants_demo": "yes", "wants_follow_up": "no"})
+    r = s.turn("Yes")
+    assert mem.list_people()[0]["wants_demo"] is False
+    s.turn("Actually yes, I'd love a demo", r["encounter_id"])
+    assert mem.list_people()[0]["wants_demo"] is True and mem.list_people()[0]["wants_follow_up"] is False
+
+
+def test_an_email_is_saved_only_after_the_visitor_confirms_it():
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas", email="andreas@maxbaum.com"),
+                   "Let's confirm: a-n-d-r-e-a-s at maxbaum dot com?"],
+                  ["Great, saved."]])
+    r = s.turn("Yes, it's andreas at maxbaum.com")
+    assert r["evidence"][1]["result"]["note"].startswith("email held back") and not mem.list_people()[0].get("email")
+    s.turn("exactly", r["encounter_id"])  # the model did not call the tool again: the code saves it on the confirmation
+    assert mem.list_people()[0]["email"] == "andreas@maxbaum.com"
+
+
+def test_the_summary_covers_the_whole_conversation():
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas", encounter_summary="Met Andreas."),
+                   "Thanks!"], ["Graphs help with traceability."]],
+                 extract_fn=lambda t: {"conversation_summary": "Andreas evaluates knowledge graphs for aircraft manufacturing."}
+                 if "aircraft" in t else {})
+    r = s.turn("Yes")
+    s.turn("We are figuring out why to use knowledge graphs in aircraft manufacturing.", r["encounter_id"])
+    enc = mem.get_person(mem.list_people()[0]["person_id"])["encounters"][0]
+    assert enc["summary"] == "Andreas evaluates knowledge graphs for aircraft manufacturing."
+
+
+def test_booth_facts_come_only_from_booth_info():
+    from puppy_mind.wizard import system_prompt
+
+    assert "refer them to the Neo4j staff" in system_prompt("PuppyPi", "the event", "")
+    p = system_prompt("PuppyPi", "the event", "", booth_info="Demos: GraphRAG chatbot at table 1.")
+    assert "BOOTH INFO: Demos: GraphRAG chatbot at table 1." in p and "never make up demos" in p
+
+
+def test_an_email_heard_in_the_visitors_words_is_held_then_saved_on_the_next_confirmation():
+    # replay of the booth: the model did not register the email itself; "exactly" must save it, "that's it" (a goodbye) must not
+    from puppy_mind.people import confirms
+
+    assert confirms("exactly") and confirms("yes, correct") and not confirms("That's it. Thank you so much.")
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas"), "Thanks!"],
+                  ["Let me repeat: a-n-d-r-e-a-s dot b-a-u-m at maxbaum dot com. Correct?"], ["Saved!"]],
+                 extract_fn=lambda t: {"email": "andreas.baum@maxbaum.com"} if "maxbaum" in t else {})
+    r = s.turn("Yes")
+    s.turn("So it's andreas.baum at maxbaum.com", r["encounter_id"])
+    assert not mem.list_people()[0].get("email")
+    s.turn("exactly", r["encounter_id"])
+    assert mem.list_people()[0]["email"] == "andreas.baum@maxbaum.com"

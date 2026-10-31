@@ -80,6 +80,8 @@ class Settings:
     # the booth language: speech is transcribed as this language (ISO 639-1) and the Wizard always answers in it. Without it the speech
     # model guesses per recording, and a short noisy clip can come out as another language, which the Wizard then answers in.
     voice_language: str = os.getenv("VOICE_LANGUAGE", "en")
+    # what is really on at the booth/event (demos, talks, times). Without it the Wizard says to ask the staff instead of inventing it.
+    booth_info: str = os.getenv("BOOTH_INFO", "")
     event_name: str = os.getenv("EVENT_NAME", "the conference")
     store_images: bool = _bool("STORE_IMAGES", False)
 
