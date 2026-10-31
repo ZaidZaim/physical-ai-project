@@ -15,6 +15,10 @@ The robot answers "where am I?" before "what is here?". The same chair in the ki
   (60 s) without a frame of the old room (frames skipped as near-duplicates count as "still here"). Seen on the robot: driving
   Bedroom 2 -> Living Room through the Dining Room taught a link that does not exist. The UI log says when a move is not learned.
 - Routes use links seen at least twice first; a route that needs a one-off link says it may be wrong.
+- **Turning on the spot cannot change rooms.** If the robot has only turned since it settled (no forward/back driving, last turn
+  within 60 s), a view into another room (open plan) is held back, not taken as a move. Carrying the robot by hand is unaffected.
+- Frames held back during an unconfirmed move are filed only if they pointed at the room the robot ends up in; a frame of a room
+  passed on the way is dropped instead of being filed in the wrong room.
 
 ## Objects and change
 - Object identity is scoped to a place, so look-alikes in different rooms stay separate.

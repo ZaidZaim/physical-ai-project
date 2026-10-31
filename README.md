@@ -140,7 +140,7 @@ does only what is safe:
 
 | Situation | It will |
 |---|---|
-| Same room, object seen during this visit | turn in place to face it (closed loop on the gyro) |
+| Same room, object seen during this visit | turn in place to face it (closed loop on the gyro), then **check with the camera**; if it is not in view, look a little left and right |
 | Same room, direction unknown | look around: turn in steps, let the camera check each view, stop and centre when it is seen |
 | Another room | give the route over the learned room map, e.g. `Bathroom -> Hallway -> Dining Room`, for **you** to drive |
 | Room not recognised yet / no gyro | say so, and not move |
@@ -208,7 +208,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 137 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
+uv run pytest                          # 143 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on

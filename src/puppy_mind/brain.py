@@ -90,6 +90,9 @@ class Brain:
         self.remember_exchanges = True  # False for evaluations: their Q&A must not end up in the robot's memory
         self._last_here: str | None = None  # time of the last frame that showed we were still in the current place
         self._suspect_since: str | None = None  # time of the first frame of a suspected move (cleared once we settle)
+        self._settled_motion: tuple[int, int] | None = None  # drive counters when we last settled in a place
+        self._candidate: str | None = None  # where the last unconfirmed frame pointed (filed only if that is where we end up)
+        self._confirmed_key: str | None = None
         self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
         self.last_objects: list[dict] = []  # what the latest checked view showed (label, color, zone; id once stored)
         self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
@@ -191,16 +194,19 @@ class Brain:
             # The robot may have just moved. Do NOT file this frame under the current place: it would teach that place about things
             # that live somewhere else (and then it could never leave). Hold it; it is filed under the new place if the move is
             # confirmed, and dropped if the next frame shows we never left (a blur, a passer-by).
-            self._deferred.append((scene, source, jpeg, ts or now_iso()))
+            self._deferred.append((scene, source, jpeg, ts or now_iso(), self._candidate))
             self._suspect_since = self._suspect_since or ts or now_iso()
             del self._deferred[:-max(1, self.s.place_confirm_frames)]
             return {"skipped": "possible change of place: waiting to confirm", "deferred": True, "location": loc, "reason": self.place_state["reason"]}
         held, self._deferred = (self._deferred if changed else []), []
-        for d_scene, d_src, d_jpeg, d_ts in held:  # frames that were waiting for this very decision
+        for d_scene, d_src, d_jpeg, d_ts, d_cand in held:  # frames that were waiting for this very decision
+            if d_cand != self._confirmed_key:  # it pointed somewhere else (a room on the way, a view into the next room): file nowhere
+                continue
             self._ingest(d_scene, loc, d_src, d_jpeg, d_ts, count_misses=False, place_conf=place_conf, heading=None)
         moved = self._moved or self._moved_view
         res = self._ingest(scene, loc, source, jpeg, ts, count_misses=not moved, place_conf=place_conf, heading=self.heading.value())
         self._last_here, self._suspect_since = res.get("ts") or ts or now_iso(), None  # settled: this frame shows where we are
+        self._settled_motion = self.drive.motion_snapshot()
         self._moved = self._moved_view = False
         return res
 
@@ -257,8 +263,15 @@ class Brain:
         prev = self.tracker.current  # None until a place has actually been recognised: the default name is not somewhere we came from
         r = self.tracker.update(view, scene.room_type, scene.room_confidence, self._places())
         r = self._verify_room(r, scene, jpeg, view)
+        if prev and (r.changed or r.uncertain) and self.drive.turned_in_place_since(self._settled_motion):
+            # Seen on the robot: looking round an open-plan living room, two views into the dining room 'moved' it there and
+            # cancelled its search. Turning on the spot cannot change rooms: this view looks into another room, it is not in it.
+            self.tracker.set_current(prev)
+            r = TrackResult(prev, False, False, True, r.confidence, f"only turned on the spot in '{prev}': this view looks into another room")
+        self._candidate = r.candidate
         self._just_changed = r.changed
         if r.changed:
+            self._confirmed_key = "new" if r.is_new else r.place
             if r.is_new:
                 name = r.suggested_name or "Unnamed area 1"
                 self.mem.ensure_place(name, scene.room_type, provisional=True)
@@ -379,7 +392,7 @@ class Brain:
         if plan.kind == "scan" and not (self.perception and self.fps > 0):
             out["run"] = {"started": False, "reason": "To look around I need the camera running with frame analysis on. Start the camera and ask again."}
         elif execute and plan.kind in ("turn", "scan"):
-            out["run"] = self.nav.start(plan)
+            out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
 
     def _seen_now(self, target: dict, seq: int) -> dict | None:

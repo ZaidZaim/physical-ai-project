@@ -337,3 +337,65 @@ def test_a_route_that_needs_a_one_off_link_says_it_may_be_wrong(brain):
     brain.location = "Bathroom"
     plan = brain.go_to("cat", execute=False)["plan"]
     assert plan["route"] == ["Bathroom", "Hallway"] and "only seen once" in plan["message"]
+
+
+# ---------------------------------------------------------------- after a turn, the camera decides
+def _camera_rig(target_heading, visible_within=25.0):
+    d = DriveState()
+    d.arm(True)
+    sim = SimRobot(d)
+    seq, stop = {"n": 0}, threading.Event()
+
+    def camera():  # a new analysed frame whenever the robot stands still
+        while not stop.is_set():
+            time.sleep(0.02)
+            if d.current()["yaw"] == 0.0:
+                seq["n"] += 1
+
+    def seen(target, s):
+        rel = wrap180(target_heading - sim.heading)
+        return {"zone": "center"} if abs(rel) <= visible_within else None
+
+    nav = Navigator(d, sim.value, publish=lambda t, e: None, obs_seq_fn=lambda: seq["n"], seen_fn=seen,
+                    tick_s=0.005, tolerance_deg=6.0, settle_s=0.0, obs_wait_s=0.5, stall_s=0.3)
+    threading.Thread(target=camera, daemon=True).start()
+    return d, sim, nav, stop
+
+
+def test_after_a_turn_the_camera_confirms_the_object():
+    d, sim, nav, stop = _camera_rig(target_heading=90)
+    try:
+        nav.start(turn_plan(90))
+        nav.wait(10)
+        assert nav.state["phase"] == "done" and "I can see it" in nav.state["message"], nav.state
+    finally:
+        stop.set(); sim.close()
+
+
+def test_if_the_gyro_slipped_it_looks_a_little_to_the_side_and_finds_it():
+    d, sim, nav, stop = _camera_rig(target_heading=125, visible_within=20)  # the object is really 35 deg further left than remembered
+    try:
+        nav.start(turn_plan(90))
+        nav.wait(10)
+        assert nav.state["phase"] == "done" and "I can see it" in nav.state["message"], nav.state
+        assert abs(wrap180(sim.heading - 125)) <= 26
+    finally:
+        stop.set(); sim.close()
+
+
+def test_if_it_is_not_there_it_says_so_instead_of_claiming_success():
+    d, sim, nav, stop = _camera_rig(target_heading=270, visible_within=10)
+    try:
+        nav.start(turn_plan(90))
+        nav.wait(10)
+        assert nav.state["phase"] == "stopped" and "can't see it now" in nav.state["message"], nav.state
+        assert not d.auto
+    finally:
+        stop.set(); sim.close()
+
+
+def test_without_the_camera_running_the_turn_is_not_checked(rig):
+    d, sim, nav, _ = rig
+    nav.start(turn_plan(60), verify=False)
+    nav.wait(5)
+    assert nav.state["phase"] == "done" and nav.state["message"].startswith("Turned")

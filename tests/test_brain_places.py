@@ -323,3 +323,36 @@ def test_passing_through_another_room_on_the_way_is_not_learned_as_neighbours(br
         t += 8
     assert brain.location == "Living Room"
     assert [a["place"] for a in places(brain)["Bedroom"]["adjacent"]] == ["Dining Room"]  # no Bedroom - Living Room link
+
+
+def test_turning_on_the_spot_cannot_take_the_robot_into_another_room(brain):
+    """On the robot: looking round an open-plan living room, two views into the dining room 'moved' it there."""
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(LIVING)
+    brain.observe_scene(LIVING)
+    brain.observe_scene(LIVING)
+    assert brain.location == "Living Room"
+    brain.drive.arm(True)
+    brain.drive.command(0.0, 0.0, 1.0)  # turning on the spot
+    for _ in range(3):
+        brain.observe_scene(KITCHEN)  # the kitchen, seen through the open door
+    assert brain.location == "Living Room" and "turned on the spot" in brain.place_state["reason"]
+    assert not any(o["label"] == "fridge" and o["loc"] == "Living Room" for o in brain.mem.objs.values())  # not filed here either
+    brain.drive.command(1.0, 0.0, 0.0)  # now it walks
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    assert brain.location == "Kitchen"
+
+
+def test_a_frame_of_another_room_on_the_way_is_not_filed_in_the_room_we_reach(brain):
+    """On the robot: a dining-room frame on the way to the living room was filed there ('eight chairs in the living room')."""
+    DINING = view("dining room", ("cat tree", "grey"), ("radiator", "white"), ("sideboard", "brown"))
+    for v in (KITCHEN, KITCHEN, DINING, DINING, LIVING, LIVING, DINING, DINING, KITCHEN, KITCHEN):  # learn the rooms
+        brain.observe_scene(v)
+    assert brain.location == "Kitchen"
+    for v in (DINING, LIVING, LIVING):  # kitchen -> one dining-room frame -> living room
+        brain.observe_scene(v)
+    assert brain.location == "Living Room"
+    living = {o["label"] for o in brain.mem.objs.values() if o["loc"] == "Living Room"}
+    assert not living & {"cat tree", "radiator", "sideboard"}, living

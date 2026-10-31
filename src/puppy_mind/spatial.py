@@ -70,6 +70,7 @@ class TrackResult:
     suggested_name: str | None = None
     hint: str = ""
     detour: bool = False       # while this change was being confirmed, a frame pointed at ANOTHER known place: we went through it
+    candidate: str | None = None  # an unconfirmed move: where this frame points ("new" or a place name); None if it points nowhere
 
 
 def _color_match(a: str, b: str) -> float:
@@ -260,7 +261,7 @@ class PlaceTracker:
             self.current = d.place
             return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint, detour=detour)
         return TrackResult(self.current, False, False, True, d.confidence,
-                           f"{d.reason}; waiting for confirmation ({self._count}/{need})")
+                           f"{d.reason}; waiting for confirmation ({self._count}/{need})", candidate="new" if d.is_new else d.place)
 
     def confirm_new(self, name: str) -> None:
         """Brain created the place the last result asked for."""
