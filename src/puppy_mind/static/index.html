@@ -257,6 +257,7 @@
         <label class="chk"><input type="checkbox" id="boothon"> Booth mode</label>
         <span>look up <input type="number" id="boothdeg" min="0" max="20" step="1" style="width:52px"> °</span>
         <select id="trick"></select><button class="sm" id="trickgo">Try trick</button>
+        <label class="chk" title="Play greetings and the Wizard's replies on this computer, in the robot's voice. For testing without the robot's speaker script; turn it off when puppy_voice.py runs on the robot, or you hear everything twice."><input type="checkbox" id="speakhere"> Speak here</label>
         <span id="boothmsg"></span>
       </div>
       <div id="pbody">
@@ -509,7 +510,8 @@ function connect() {
     d.ids.forEach(id => glow(id, css('--ask'), 3500));
   });
   es.addEventListener('greeting', e => { const d = JSON.parse(e.data);
-    if (d.skipped) { log('miss', `${d.people} in view, ${d.engaged} at the booth: nobody to greet`); return; }
+    if (d.skipped) { log('miss', `person in view, not greeted: ${esc(d.reason || 'nobody to greet')}${d.people !== undefined ? ` (${d.people} seen, ${d.engaged} close and turned to the robot)` : ''}`); return; }
+    speak(d.text);
     log('new', `greeted ${d.kind === 'group' ? 'a group' : d.returning ? 'a returning visitor' : d.name || 'someone'} (${d.people} in view): “${esc(d.text)}”${d.trick ? (d.trick.ok ? ' + ' + esc(d.trick.action) : ' (no trick: ' + esc(d.trick.reason) + ')') : ''}`); });
   es.addEventListener('gesture', e => { const d = JSON.parse(e.data); log(d.ok ? 'ask' : 'miss', d.ok ? `trick: ${esc(d.name)}` : `trick ${esc(d.name)} skipped: ${esc(d.reason)}`); });
   es.addEventListener('converse', e => { const d = JSON.parse(e.data); log('ask', `booth chat (${esc(d.tools.join(' → ') || 'no tools')}): “${esc(d.reply)}”`); });
@@ -660,6 +662,22 @@ async function showPerson(id, quiet) {
   $('#pfu').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/followup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ done:!p.followed_up }) }); loadPeople(); };
   $('#pforget').onclick = async () => { if (confirm(`Erase ${p.name} and their conversations? This cannot be undone.`)) { await papi('/api/people/' + encodeURIComponent(id), { method:'DELETE' }); peopleSel = null; $('#pdetail').textContent = 'Erased.'; loadPeople(); } };
 }
+/* Speak on this computer (OpenAI voice via the brain), one line at a time */
+let speakQ = Promise.resolve();
+try { $('#speakhere').checked = localStorage.getItem('speak_here') === '1'; } catch (_) {}
+$('#speakhere').onchange = () => { try { localStorage.setItem('speak_here', $('#speakhere').checked ? '1' : '0'); } catch (_) {} };
+function speak(text) {
+  if (!text || !$('#speakhere').checked) return;
+  speakQ = speakQ.then(async () => {
+    try {
+      const r = await fetch('/api/voice/say', { method:'POST', headers:{ 'Content-Type':'application/json', ...(PTOK ? { 'X-Brain-Token': PTOK } : {}) }, body:JSON.stringify({ text }) });
+      if (!r.ok) throw new Error(await r.text());
+      const url = URL.createObjectURL(await r.blob()), a = new Audio(url);
+      await new Promise(res => { a.onended = a.onerror = res; a.play().catch(res); });
+      URL.revokeObjectURL(url);
+    } catch (e) { log('bad', 'could not speak: ' + esc(String(e.message || e).slice(0, 120))); }
+  });
+}
 async function loadBooth() {
   const b = await api('/api/booth');
   $('#boothon').checked = b.on; $('#boothdeg').value = b.look_up_deg;
@@ -680,7 +698,7 @@ $('#ptalkf').onsubmit = async e => {
   const lg = $('#ptalklog'); lg.insertAdjacentHTML('beforeend', `<div class="you">You: ${esc(q)}</div>`); lg.scrollTop = lg.scrollHeight;
   try {
     const r = await papi('/api/converse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text:q, encounter_id:encId }) });
-    encId = r.encounter_id; lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(r.reply)}</div>`);
+    encId = r.encounter_id; lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(r.reply)}</div>`); speak(r.reply);
     if (r.evidence.some(t => ['save_person_facts', 'forget_me'].includes(t.tool))) loadPeople().catch(() => {});
   } catch (err) { let m = err.message; try { m = JSON.parse(m).detail || m; } catch (_) {} lg.insertAdjacentHTML('beforeend', `<div style="color:var(--bad)">${esc(m)}</div>`); }
   lg.scrollTop = lg.scrollHeight;

@@ -143,3 +143,11 @@ def test_aura_people_queries_never_pass_a_parameter_named_like_the_query_helper_
     s.save_person({"person_id": "psn-1", "name": "Ana", "company": "Acme", "interests": ["x"], "enjoyed": ["y"]},
                   encounter_id="e", place="Booth", summary="", ts="2026-10-31T10:00:00+00:00")
     assert s.calls and all("q" not in p for p in s.calls)
+
+
+def test_speak_here_endpoint_returns_wav_and_is_local_only(client, monkeypatch):
+    r = client.post("/api/voice/say", json={"text": "Hello there"})
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.endswith(b"Hello there")
+    with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
+        server.brain.voice = FakeVoice()
+        assert c.post("/api/voice/say", json={"text": "hi"}).status_code == 403

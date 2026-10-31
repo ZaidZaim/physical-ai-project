@@ -535,3 +535,12 @@ def booth_set(body: Booth, request: Request, x_brain_token: str | None = Header(
 def gesture(body: Trick, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     _local_auth(request, x_brain_token, token)
     return brain.gesture(body.name)
+
+
+@app.post("/api/voice/say")
+def voice_say(body: Say, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """Text -> WAV in the robot's voice, for the UI's 'Speak here' (testing without the robot's speaker). This machine only."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.voice:
+        raise HTTPException(503, "OPENAI_API_KEY is not set")
+    return Response(brain.voice.speak(body.text[:1500]), media_type="audio/wav")

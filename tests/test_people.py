@@ -241,3 +241,25 @@ def test_do_trick_tool_uses_the_rate_limited_gesture():
     s, _ = svc([[call("do_trick", name="boxing"), "Ta-da!"]], gesture_fn=lambda n: {"ok": False, "reason": "tricks are rate-limited"})
     r = s.turn("can you do boxing?")
     assert r["evidence"][0]["result"]["reason"] == "tricks are rate-limited"
+
+
+def test_a_person_in_view_who_is_not_greeted_is_logged_with_the_reason():
+    events = []
+    bus = NS(publish=lambda kind, d: events.append((kind, d)))
+    s, _ = svc([["Hello!"]], bus=bus, look_fn=look(V(facing=False)))
+    s.on_view(person_scene(), b"x")  # seen from the side: looked at, not greeted
+    assert wait(lambda: any(d.get("skipped") for k, d in events if k == "greeting"))
+    assert [d["reason"] for k, d in events if k == "greeting"] == ["nobody close to the robot and turned toward it"]
+    s.turn("hi")
+    s._skip_note = -1e9
+    s.on_view(person_scene(), b"x")
+    assert events[-1][1]["reason"] == "already talking to someone"
+    s.on_view(person_scene(), b"x")  # the same reason again within 20 s is not repeated
+    assert sum(1 for k, d in events if d.get("reason") == "already talking to someone") == 1
+
+
+def test_the_look_prompt_knows_the_camera_is_at_floor_level():
+    from puppy_mind.people import LOOK_PROMPT, PersonView
+
+    assert "FLOOR LEVEL" in LOOK_PROMPT and "feet" in LOOK_PROMPT and "Sitting people count" in LOOK_PROMPT
+    assert "feet" in PersonView.model_fields["facing_robot"].description

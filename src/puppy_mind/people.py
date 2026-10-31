@@ -171,8 +171,8 @@ class Encounter:
 
 class PersonView(BaseModel):
     zone: Literal["left", "center", "right"] = Field(description="third of the frame the person is in")
-    facing_robot: bool = Field(description="their face or body is turned toward the camera")
-    close: bool = Field(description="within about two metres: head and upper body fill a large part of the frame")
+    facing_robot: bool = Field(description="turned toward the robot: face, body or feet point at the camera, or they look down at it")
+    close: bool = Field(description="within about two metres of the robot; from floor level their legs and feet look large")
     badge_name: str = Field(description="name printed on a clearly legible conference badge they wear, or empty")
     badge_company: str = Field(description="company printed on that badge, or empty")
 
@@ -252,6 +252,7 @@ class PeopleService:
         self._greeting = threading.Lock()
         self._recent_greeting: tuple[float, str, dict | None] | None = None  # (when, text, badge) for the next conversation to pick up
         self._greet_times: list[float] = []
+        self._skip_note = -1e9  # when the UI was last told why a person in view was not greeted
         self.look_fn = look_fn if look_fn is not None else (self._look if client is not None else None)
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
 
@@ -406,9 +407,15 @@ class PeopleService:
             return False
         now = time.monotonic()
         self._greet_times = [t for t in self._greet_times if now - t < 3600]
-        if (now - max(self._greeted.values(), default=-1e9) < s.greet_cooldown_s
-                or len(self._greet_times) >= s.max_greetings_per_hour
-                or any(now - e.last < 60 for e in self.encounters.values())):
+        wait = s.greet_cooldown_s - (now - max(self._greeted.values(), default=-1e9))
+        reason = ("already talking to someone" if any(now - e.last < 60 for e in self.encounters.values()) else
+                  f"greeted someone {int(s.greet_cooldown_s - wait)} s ago (cooldown {int(s.greet_cooldown_s)} s)" if wait > 0 else
+                  "hourly greeting limit reached" if len(self._greet_times) >= s.max_greetings_per_hour else
+                  "still looking at the previous view" if self._greeting.locked() else "")
+        if reason:
+            if now - self._skip_note > 20:  # say why, but not on every frame
+                self._skip_note = now
+                self._publish("greeting", {"skipped": True, "reason": reason})
             return False
         if not self._greeting.acquire(blocking=False):
             return False
@@ -431,8 +438,10 @@ class PeopleService:
                 people = [{**p, "badge_name": "", "badge_company": ""} for p in people]
             pick = choose_greeting(people, lambda k, c: match_person(self.mem.find_people(k), c), self._recently, self.s.group_min)
             if pick is None:
-                self._publish("greeting", {"skipped": True, "people": len(people),
-                                           "engaged": sum(bool(p["facing_robot"] and p["close"]) for p in people)})
+                engaged = sum(bool(p["facing_robot"] and p["close"]) for p in people)
+                self._publish("greeting", {"skipped": True, "people": len(people), "engaged": engaged,
+                                           "reason": "nobody in view" if not people else "everyone was greeted recently" if engaged else
+                                           "nobody close to the robot and turned toward it"})
                 return
             text = group_greeting(self.s.robot_name) if pick["kind"] == "group" else greeting(pick["person"], pick["name"], self.s.robot_name)
             now = time.monotonic()
@@ -455,14 +464,21 @@ class PeopleService:
                  if self.s.people_consent else "Leave badge_name and badge_company empty: do not read badges.")
         r = self.client.chat.completions.parse(
             model=self.s.vision_model, temperature=0, response_format=Crowd,
-            messages=[{"role": "system", "content": "You are the eyes of a small robot dog at a conference booth. List each person visible "
-                       "(at most 8, nearest first). facing_robot: their face or body is turned toward the camera. close: within about two "
-                       "metres, so their head and upper body take up a large part of the frame; people walking past in the background are "
-                       "not close. " + badge + " Never identify anyone from their face."},
+            messages=[{"role": "system", "content": LOOK_PROMPT + badge + " Never identify anyone from their face."},
                       {"role": "user", "content": [{"type": "text", "text": "Who is here?"},
                                                    {"type": "image_url", "image_url": {"url": _prepare(jpeg), "detail": "high"}}]}])
         c = r.choices[0].message.parsed
         return [v.model_dump() for v in (c.people if c else [])][:8]
+
+
+LOOK_PROMPT = (
+    "You are the eyes of a small robot dog. Its camera is at FLOOR LEVEL, about 15 cm high and tilted slightly up, so a person "
+    "near it often shows only as legs and feet, maybe a lower body, and their face is usually out of frame. List each person "
+    "visible, even if only their legs or feet are, at most 8, nearest first. Sitting people count. "
+    "facing_robot: they are turned toward the robot, i.e. their toes, knees or body point at the camera, their face is turned to "
+    "it, or they are looking down at it. Someone seen from the side or back, or walking across the view, is not facing it. "
+    "close: within about two metres; from the floor their legs and feet look large, and someone in the background looks small. "
+)
 
 
 def choose_greeting(people: list[dict], lookup: Callable[[str, str], dict | None], recently: Callable[[str], bool],
