@@ -390,11 +390,14 @@ class Nams:
                        "metadata": {"kind": "observation", "observation_id": p["observation_id"], "location": p["location"], "ts": p["ts"]}})
         self.stats["synced_observations"] += 1
 
-    def sync_snapshot(self, objects: list[dict], relations: list[dict], location: str, robot: str) -> dict:
-        """Backfill an existing Aura world model (objects + active spatial relations) into NAMS."""
+    def sync_snapshot(self, objects: list[dict], relations: list[dict], location: str, robot: str, place_id: str | None = None) -> dict:
+        """Backfill an existing Aura world model (objects + active spatial relations) into NAMS.
+
+        The place entity must have the same name live syncing gives it ("Hallway af09af"): under the bare name ("Hallway") NAMS merges
+        it into an entity it extracted from text, a merged result is never mirrored onto, and no object would get its place link."""
         ts = objects[0]["last_seen"] if objects else ""
         robot_id = self._fixed_entity("robot", robot, T_ROBOT, "Hiwonder PuppyPi quadruped robot")
-        place_id = self._fixed_entity("place", location, T_PLACE, f"Place observed by {robot}")
+        place_ent = self._fixed_entity("place", self._place_name(location, place_id), T_PLACE, f"Place observed by {robot}")
         objs = [{"id": o["id"], "label": o["label"], "color": o.get("color") or "unknown"} for o in objects]
         self._ensure_objects(objs, location, ts)
         rels = []
@@ -402,8 +405,8 @@ class Nams:
             link = self._links.get(o["id"])
             if link and robot_id:
                 rels.append({"relationshipType": "OBSERVED", "sourceId": robot_id, "targetId": link["id"]})
-            if link and place_id:
-                rels.append({"relationshipType": "LOCATED_AT", "sourceId": link["id"], "targetId": place_id})
+            if link and place_ent:
+                rels.append({"relationshipType": "LOCATED_AT", "sourceId": link["id"], "targetId": place_ent})
         for r in relations:
             a, b = self._links.get(r["a"]), self._links.get(r["b"])
             if a and b and r["predicate"] in SPATIAL:

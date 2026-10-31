@@ -2,6 +2,28 @@
 
 What has been checked on real hardware and live services, and when. Newest first. The README says how to run the checks.
 
+## 2026-10-31: real-scene evaluation, room recognition, NAMS backfill
+
+- **Robot walk-through (14 frames, recorded):** Hallway -> Kitchen -> Hallway -> Bathroom -> Bedroom 2, every known room recognised
+  within 1-2 frames, no false room from a single frame. One flaw found: the room with the desk, stored as 'bedroom', was called
+  'office' and the room-type veto turned a 0.61 object match into 0.22, creating a duplicate 'Office'. Bedroom/office is now a mild
+  hint; replaying all 90 real frames: no false rooms (main: Garage + Office), living and dining room still apart. 'Office' was merged
+  into 'Bedroom' (Aura + NAMS). Turn-to / go-to were not exercised on this walk.
+- **Room map:** a second drive (Bedroom 2 -> Living Room -> Hallway) taught 'Bedroom 2 is next to the Living Room' although a
+  Dining Room frame came in between. Now a move is learned only if direct (no frame of a third known room) and quick (<= 60 s);
+  routes prefer links seen twice. Replaying all 109 real frames: that link is no longer learned, the real ones still are. Removed
+  from Aura. Hallway-Living Room, Bedroom-Kitchen and Bathroom-Bedroom 2 were direct and quick: only the owner can say if they exist.
+- **Real tour:** 76 analysed frames from 10 robot sessions, exported from Aura and replayed through room recognition on throwaway
+  memory. Room recognition as on `main` made a false "Garage" (88.5% of frames in the room recorded at the time). The new rules
+  (a new room needs agreeing frames that look like the same place, also right after a start; "animal" counts as moving; vague
+  labels are not evidence) made no false room and found every real one, 93%. Requiring 3 frames for a new room lost a short
+  bathroom visit, so the default stays 2. ("Bedroom 2" needs the picture check, which a replay without images cannot run.)
+- **Real-house Q&A:** 12 questions about the home against the live memory: 12/12, including "have you ever seen a car?" and "is there
+  a fridge in the kitchen?" (neither seen). The node and relationship counts were identical before and after: evaluations no
+  longer store their Q&A. One answer surfaced a data question: the white bed was sighted in both "Bedroom" and "Bedroom 2".
+- **NAMS backfill:** `nams-sync` named the place entity "Hallway" instead of "Hallway af09af", which NAMS merged into an extracted
+  entity, so no object got its place link. Fixed; Hallway backfilled: 35/35 objects linked (was 1/35).
+
 ## 2026-10-22: graph best practices, naming migration, phase 5 on the robot
 
 - **Schema review** against Neo4j modeling best practices ([ONTOLOGY_REVIEW.md](ONTOLOGY_REVIEW.md)). Applied live on AuraDB

@@ -26,7 +26,8 @@ WALL = view("unknown")
 @pytest.fixture
 def brain(monkeypatch):
     monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
-    s = dataclasses.replace(get_settings(), nams_api_key="", miss_threshold=2, place_confirm_frames=2, default_location="Start")
+    s = dataclasses.replace(get_settings(), nams_api_key="", miss_threshold=2, place_confirm_frames=2,
+                            new_place_confirm_frames=2, default_location="Start")  # these tests are about naming and the map, not confirmation
     b = Brain(s, need_openai=False)
     yield b
     b.close()
@@ -253,3 +254,105 @@ def test_a_doubtful_room_is_checked_against_pictures_and_a_second_bedroom_gets_i
     assert brain.location == "Bedroom 2" and FakePerception.calls >= 1
     names = {p["name"] for p in brain.mem.list_places()}
     assert {"Bedroom", "Bedroom 2"} <= names
+
+
+def test_with_three_new_room_frames_a_new_room_waits_but_a_known_one_still_takes_two(monkeypatch):
+    monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
+    b = Brain(dataclasses.replace(get_settings(), nams_api_key="", place_confirm_frames=2, new_place_confirm_frames=3,
+                                  default_location="Start"), need_openai=False)
+    try:
+        b.observe_scene(KITCHEN)                       # empty memory: the first view is the first room
+        for _ in range(2):
+            b.observe_scene(LIVING)
+        assert b.location == "Kitchen"                 # two odd frames are not enough for a room never seen before
+        b.observe_scene(LIVING)
+        assert b.location == "Living Room"
+        for _ in range(2):
+            b.observe_scene(KITCHEN)
+        assert b.location == "Kitchen"                 # going back to a known room: two frames
+    finally:
+        b.close()
+
+
+def test_a_close_up_of_the_cat_is_not_a_room(brain):
+    """Seen on the real tour: two frames of 'animal, bag' (the cat, called 'animal') became a room, later named 'Hallway 2'."""
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    cat = view("unknown", ("animal", "grey"), ("bag", "black"))
+    vague = view("unknown", ("object", "unknown"), ("unknown", "unknown"))
+    for v in (cat, cat, vague, vague):
+        brain.observe_scene(v)
+    assert brain.location == "Kitchen" and sorted(places(brain)) == ["Kitchen"]
+
+
+def _at(sec):
+    return f"2026-10-31T14:{sec // 60:02d}:{sec % 60:02d}+00:00"
+
+
+def test_a_quick_direct_move_teaches_the_map_but_a_long_drive_does_not(brain):
+    q = brain.bus.subscribe()
+    brain.observe_scene(KITCHEN, ts=_at(0))
+    brain.observe_scene(KITCHEN, ts=_at(5))
+    brain.observe_scene(LIVING, ts=_at(20))  # 15 s later: walked straight through the door
+    brain.observe_scene(LIVING, ts=_at(25))
+    assert places(brain)["Kitchen"]["adjacent"] == [{"place": "Living Room", "times": 1}]
+    brain.observe_scene(LIVING, ts=_at(30))
+    brain.observe_scene(KITCHEN, ts=_at(200))  # nearly three minutes of driving with no usable frame: may have passed other rooms
+    brain.observe_scene(KITCHEN, ts=_at(205))
+    assert brain.location == "Kitchen"
+    assert places(brain)["Kitchen"]["adjacent"] == [{"place": "Living Room", "times": 1}]  # not counted again
+    events = []
+    while not q.empty():
+        t, d = q.get_nowait()
+        if t == "map":
+            events.append(d)
+    assert [e["learned"] for e in events] == [True, False] and "without a usable frame" in events[1]["reason"]
+
+
+def test_passing_through_another_room_on_the_way_is_not_learned_as_neighbours(brain):
+    """On the robot: Bedroom 2 -> Living Room with one Dining Room frame on the way taught 'Bedroom 2 is next to the Living Room'."""
+    BEDROOM = view("bedroom", ("bed", "white"), ("nightstand", "brown"), ("lamp", "white"))
+    DINING = view("dining room", ("cat tree", "grey"), ("radiator", "white"), ("sideboard", "brown"))
+    walk = (BEDROOM, BEDROOM, DINING, DINING, LIVING, LIVING, DINING, DINING, BEDROOM, BEDROOM)  # learns Bedroom-Dining, Dining-Living
+    for i, v in enumerate(walk):
+        brain.observe_scene(v, ts=_at(i * 8))
+    assert brain.location == "Bedroom" and [a["place"] for a in places(brain)["Bedroom"]["adjacent"]] == ["Dining Room"]
+    t = 100
+    for v in (DINING, LIVING, LIVING):  # bedroom -> one dining-room frame -> living room, all within seconds
+        brain.observe_scene(v, ts=_at(t))
+        t += 8
+    assert brain.location == "Living Room"
+    assert [a["place"] for a in places(brain)["Bedroom"]["adjacent"]] == ["Dining Room"]  # no Bedroom - Living Room link
+
+
+def test_turning_on_the_spot_cannot_take_the_robot_into_another_room(brain):
+    """On the robot: looking round an open-plan living room, two views into the dining room 'moved' it there."""
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(LIVING)
+    brain.observe_scene(LIVING)
+    brain.observe_scene(LIVING)
+    assert brain.location == "Living Room"
+    brain.drive.arm(True)
+    brain.drive.command(0.0, 0.0, 1.0)  # turning on the spot
+    for _ in range(3):
+        brain.observe_scene(KITCHEN)  # the kitchen, seen through the open door
+    assert brain.location == "Living Room" and "turned on the spot" in brain.place_state["reason"]
+    assert not any(o["label"] == "fridge" and o["loc"] == "Living Room" for o in brain.mem.objs.values())  # not filed here either
+    brain.drive.command(1.0, 0.0, 0.0)  # now it walks
+    brain.observe_scene(KITCHEN)
+    brain.observe_scene(KITCHEN)
+    assert brain.location == "Kitchen"
+
+
+def test_a_frame_of_another_room_on_the_way_is_not_filed_in_the_room_we_reach(brain):
+    """On the robot: a dining-room frame on the way to the living room was filed there ('eight chairs in the living room')."""
+    DINING = view("dining room", ("cat tree", "grey"), ("radiator", "white"), ("sideboard", "brown"))
+    for v in (KITCHEN, KITCHEN, DINING, DINING, LIVING, LIVING, DINING, DINING, KITCHEN, KITCHEN):  # learn the rooms
+        brain.observe_scene(v)
+    assert brain.location == "Kitchen"
+    for v in (DINING, LIVING, LIVING):  # kitchen -> one dining-room frame -> living room
+        brain.observe_scene(v)
+    assert brain.location == "Living Room"
+    living = {o["label"] for o in brain.mem.objs.values() if o["loc"] == "Living Room"}
+    assert not living & {"cat tree", "radiator", "sideboard"}, living

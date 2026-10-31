@@ -140,7 +140,7 @@ does only what is safe:
 
 | Situation | It will |
 |---|---|
-| Same room, object seen during this visit | turn in place to face it (closed loop on the gyro) |
+| Same room, object seen during this visit | turn in place to face it (closed loop on the gyro), then **check with the camera**; if it is not in view, look a little left and right |
 | Same room, direction unknown | look around: turn in steps, let the camera check each view, stop and centre when it is seen |
 | Another room | give the route over the learned room map, e.g. `Bathroom -> Hallway -> Dining Room`, for **you** to drive |
 | Room not recognised yet / no gyro | say so, and not move |
@@ -173,6 +173,8 @@ does only what is safe:
 |---|---|
 | `init` | constraints, indexes and migrations in Aura; checks connectivity |
 | `serve` · `robot-test [--real-memory]` | web UI + API · the same plus finding the robot, its camera and rosbridge |
+| `--record [DIR]` (on `serve`, `robot-test`, `watch`) | record a **tour**: every analysed frame's picture and detections, into `tours/` |
+| `export-tour` · `replay-tour <tour> [-v] [--new-frames N]` | the frames stored in Aura as a tour (read-only) · replay one through room recognition on throwaway memory |
 | `watch` · `observe <image>` | analyse `CAMERA_SOURCE` continuously · one image file |
 | `ask ["question"] [--evidence]` | ask once, or chat |
 | `stats` | counts in memory |
@@ -180,7 +182,7 @@ does only what is safe:
 | `imu-check --robot-ip <ip>` | turns the robot left for 2 s and checks that the gyro heading rises |
 | `robot-check <ip\|auto>` | probes the robot and finds a working camera URL |
 | `nams-check` · `nams-setup [--activate]` · `nams-sync [--rebuild]` | NAMS key/workspace · install the PuppyPi ontology · backfill entities |
-| `seed --yes` · `eval` | write a scripted "booth day" · the 20-question check (**disposable database only**, see below) |
+| `seed --yes` · `eval [questions.json]` | write a scripted "booth day" · ask a question set and score it (never stores the Q&A) |
 | `purge-demo [--yes]` · `reset-spatial [--yes]` · `reset --yes` | remove demo data only · all places/objects/sightings · everything this app stores |
 
 ## Configuration
@@ -195,7 +197,8 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 | `CAMERA_SOURCE` | - | `webcam:0`, `folder:./frames`, or the robot's MJPEG URL |
 | `WATCH_INTERVAL_S` | `5` | seconds between analysed frames |
 | `ROBOT_NAME`, `DEFAULT_LOCATION` | `PuppyPi`, `Demo Area` | |
-| `AUTO_PLACE`, `PLACE_CONFIRM_FRAMES` | `true`, `2` | recognise rooms automatically; frames needed to confirm a change of room |
+| `AUTO_PLACE`, `PLACE_CONFIRM_FRAMES`, `NEW_PLACE_CONFIRM_FRAMES` | `true`, `2`, `2` | recognise rooms automatically; agreeing frames to confirm a move to a known room / a room never seen before |
+| `ADJACENCY_MAX_GAP_S` | `60` | a move between rooms teaches "these are neighbours" only if it took at most this long |
 | `MIN_CONFIDENCE`, `MISS_THRESHOLD`, `MIN_OVERLAP` | `0.5`, `3`, `0.5` | detection floor; misses before `possibly_gone`; view overlap that counts as evidence |
 | `CAMERA_FOV_DEG` | `70` | horizontal field of view, used for bearings |
 | `OBJECT_VOCAB`, `STRICT_VOCAB` | a common list, `false` | the labels to prefer (or allow only) |
@@ -205,15 +208,23 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 117 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server)
+uv run pytest                          # 143 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on
+uv run puppy-mind export-tour && uv run puppy-mind replay-tour tours/<file>.jsonl -v   # room recognition on YOUR real frames
+uv run puppy-mind eval tours/real-questions.json   # questions about your home, against your real memory (writes nothing)
 ```
 
 Unit tests run against an in-memory stand-in, so they do not exercise the Cypher: run `verify_spatial.py` after changing any query.
-`seed`, `eval` and `eval/verify_graph.py` expect a database holding **only** the scripted scene. Run them on an empty, throwaway
-database, never on the one with real robot memory. If demo data did get in, `purge-demo` removes just that. What has been verified
+**Real scenes:** a *tour* is the robot's frames in order. `export-tour` takes the ones already in Aura; `--record` saves new ones with
+their pictures. `replay-tour` runs a tour through the real room tracker and matching on throwaway memory, so a change to room
+recognition can be checked against your actual home before it reaches the robot. Write questions about your home in
+`tours/real-questions.json` (start from [eval/real_questions.example.json](eval/real_questions.example.json)). Tours describe your
+home, so `tours/` is git-ignored.
+
+`seed`, `eval eval/questions.json` and `eval/verify_graph.py` expect a database holding **only** the scripted scene. Run them on an
+empty, throwaway database, never on the one with real robot memory. If demo data did get in, `purge-demo` removes just that. What has been verified
 on real hardware, and when: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ## Project layout
@@ -240,6 +251,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
 | [ONTOLOGY_REVIEW.md](docs/ONTOLOGY_REVIEW.md) | the model checked against Neo4j modeling practice |
 | [AURA_VIEWS.md](docs/AURA_VIEWS.md) | clean, one-question queries for Aura |
 | [ROBOT_SETUP.md](docs/ROBOT_SETUP.md) | getting the robot on the network, camera, drive |
+| [ROBOT_WALKTHROUGH.md](docs/ROBOT_WALKTHROUGH.md) | a 20-minute test across rooms: recognition, "turn to it", routes |
 | [VERIFICATION.md](docs/VERIFICATION.md) | what was tested on real hardware and services, and when |
 
 ## Honest limits
@@ -247,7 +259,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
 - **One camera, no position:** spatial relations are qualitative, and "where" means a room, not coordinates. The heading is relative
   to where the robot entered the room and drifts slowly; it is reset on every change of room.
 - **No obstacle sensing,** so the robot never drives itself anywhere. Phase 5 turns in place only.
-- **Room recognition can be fooled** by a single unusual frame (once, the Hallway stairs became a "Garage"). Merge such places in the
-  Places tab.
+- **Room recognition can still be fooled,** though no longer by one odd frame: a new room needs agreeing frames that look like the same
+  place, even right after a start (one frame of the Hallway stairs once became a "Garage"). Merge a wrong room in the Places tab.
 - **Look-alike objects** seen from different angles can split into two. `consolidate` merges ones that never appear in the same frame.
 - `eval` uses a scripted scene and substring checks: a floor, not a proof. The model is non-deterministic, so re-run it after prompt changes.

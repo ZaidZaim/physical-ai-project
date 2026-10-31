@@ -24,6 +24,7 @@ from .drive import DriveState
 from .pose import wrap180, wrap360
 
 ALREADY_FACING_DEG = 12.0
+CHECK_OFFSETS = (0.0, 40.0, -80.0)  # after a turn: where we turned, 40 degrees left of it, 40 degrees right of it
 
 
 @dataclass
@@ -47,7 +48,7 @@ def pick_target(candidates: list[dict], here: str | None) -> dict | None:
 
 
 def plan_go_to(target: dict | None, here: str | None, heading: float | None, bearing: float | None,
-               route: list[str] | None) -> Plan:
+               route: list[str] | None, weak_route: bool = False) -> Plan:
     """Decide what 'go to it' means right now. `bearing` must come from THIS visit to `here` (the heading frame resets on entry)."""
     if target is None:
         return Plan("not_found", "I have no memory of anything like that.")
@@ -59,8 +60,9 @@ def plan_go_to(target: dict | None, here: str | None, heading: float | None, bea
             return Plan("unknown_route", f"The {name} was last seen in {where}{caveat}. I don't know how {here or 'here'} connects to "
                                          f"{where} yet: drive me there and I can look for it.", target)
         hops = " -> ".join(route)
+        doubt = " Part of this route was only seen once, so it may be wrong." if weak_route else ""
         return Plan("route", f"The {name} was last seen in {where}{caveat}. I can't walk between rooms on my own (I have no obstacle "
-                             f"sensing), so please drive me: {hops}. Once I recognise {where}, ask again and I'll turn to it.",
+                             f"sensing), so please drive me: {hops}.{doubt} Once I recognise {where}, ask again and I'll turn to it.",
                     target, route=route)
     if heading is None:
         return Plan("no_heading", f"The {name} is here in {where}{caveat}, but I have no gyro heading right now, so I can't turn to it "
@@ -92,7 +94,8 @@ class Navigator:
         self.state: dict[str, Any] = {"active": False, "phase": "idle", "message": ""}
 
     # ---- control
-    def start(self, plan: Plan) -> dict[str, Any]:
+    def start(self, plan: Plan, verify: bool = True) -> dict[str, Any]:
+        """verify: after a turn, check with the camera that the object is in view (and look a little either side if not)."""
         if plan.kind not in ("turn", "scan"):
             return {"started": False, "reason": plan.message}
         with self._lock:
@@ -103,7 +106,7 @@ class Navigator:
                                                     "robot), then ask again."}
             self._cancel.clear()
             self._set(active=True, phase=plan.kind, message=plan.message, target=plan.target)
-            self._thread = threading.Thread(target=self._run, args=(plan,), daemon=True, name="navigator")
+            self._thread = threading.Thread(target=self._run, args=(plan, verify), daemon=True, name="navigator")
             self._thread.start()
         return {"started": True, "message": plan.message}
 
@@ -134,11 +137,16 @@ class Navigator:
             return "lost the gyro heading"
         return None
 
-    def _run(self, plan: Plan) -> None:
+    def _run(self, plan: Plan, verify: bool = True) -> None:
         try:
             if plan.kind == "turn":
                 ok, why = self._turn_by(plan.turn_deg or 0.0)
-                self._finish(ok, plan.message.replace("Turning", "Turned", 1) if ok else why)
+                if not ok:
+                    self._finish(False, why)
+                elif verify and self.obs_seq_fn and self.seen_fn:
+                    self._check(plan.target or {})
+                else:
+                    self._finish(True, plan.message.replace("Turning", "Turned", 1))
             else:
                 self._scan(plan.target or {})
         except Exception as e:  # never leave the robot turning because of a bug
@@ -192,6 +200,37 @@ class Navigator:
                 return seq
             time.sleep(self.tick)
         return None
+
+    def _check(self, target: dict) -> None:
+        """After a turn: the gyro says we face it; the camera decides. Seen on the robot: after ~500 degrees of fast turns the gyro had
+        slipped ~50 degrees, so a bearing from several turns ago could be off. Look where we turned, then a little left, then right."""
+        name = f"{target.get('color') or ''} {target.get('label')}".strip()
+        seq = self.obs_seq_fn()
+        for offset in CHECK_OFFSETS:
+            if offset:
+                self._set(phase="check", message=f"I don't see the {name} yet: looking a little {'left' if offset > 0 else 'right'}...")
+                ok, why = self._turn_by(offset)
+                if not ok:
+                    return self._finish(False, why)
+            else:
+                self._set(phase="check", message=f"Checking with the camera that the {name} is in front of me...")
+            new = self._wait_observation(seq)
+            if new is None:
+                why = self._abort_reason()
+                if why:
+                    return self._finish(False, why)
+                return self._finish(True, f"Turned to the {name}, but the camera did not confirm it (no new frame).")
+            seq = new
+            hit = self.seen_fn(target, seq)
+            if hit:
+                nudge = {"left": self.fov / 3.0, "right": -self.fov / 3.0}.get(hit.get("zone", "center"), 0.0)
+                if nudge:
+                    ok, why = self._turn_by(nudge)
+                    if not ok:
+                        return self._finish(False, f"I saw the {name} but stopped while centring it: {why}")
+                return self._finish(True, f"Facing the {name}: I can see it.")
+        self._finish(False, f"I turned to where I last saw the {name}, but I can't see it now (it may have moved, or my sense of "
+                            f"direction slipped). Ask me to look around for it.")
 
     def _scan(self, target: dict) -> None:
         if not (self.obs_seq_fn and self.seen_fn):

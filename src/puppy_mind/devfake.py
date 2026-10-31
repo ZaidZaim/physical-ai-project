@@ -28,7 +28,7 @@ class FakeMemory:
     def init_schema(self): ...
     def start_session(self, session_id=None): return session_id or "fake-session"
 
-    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True, room_type=None, place_confidence=None, heading=None) -> dict[str, Any]:
+    def ingest(self, scene: Scene, *, session_id, location=None, source="camera", ts=None, image_ref=None, count_misses=True, room_type=None, place_confidence=None, heading=None, room_confidence=None) -> dict[str, Any]:
         ts, loc = ts or now_iso(), location or self.s.default_location
         dets = {d.idx: d for d in scene.objects if d.confidence >= self.s.min_confidence}
         anchors = {i: set() for i in dets}
@@ -122,11 +122,13 @@ class FakeMemory:
         key = tuple(sorted((a, b)))
         self.adj[key] = self.adj.get(key, 0) + 1
 
-    def route_between(self, a, b, max_hops=8):
+    def route_between(self, a, b, max_hops=8, min_count=1):
         if a == b:
             return [a]
         nbrs: dict[str, set] = {}
-        for x, y in self.adj:
+        for (x, y), n in self.adj.items():
+            if n < min_count:
+                continue
             nbrs.setdefault(x, set()).add(y)
             nbrs.setdefault(y, set()).add(x)
         paths, seen = [[a]], {a}

@@ -325,3 +325,19 @@ def test_merging_places_moves_object_links_and_deletes_only_our_old_place_mirror
     assert deleted == [garage]  # the extracted look-alike and the Hallway mirror are left alone
     assert ("Garage 0c1dca", "Object") in fake.entities and ("Hallway af09af", "Location") in fake.entities
     n.close()
+
+
+def test_backfill_links_objects_to_the_same_place_entity_live_syncing_uses():
+    """nams-sync used the bare place name; NAMS merged it into an extracted 'hallway' entity and no object got its place link."""
+    fake = FakeNams()
+    n, _ = make(fake)
+    n.submit_observation({**obs([O("o1", "table", "brown")]), "location": "Hallway", "place_id": "plc-52af09af"})
+    assert n.flush(5)
+    live = fake.entities[("Hallway af09af", "Location")]
+    fake.calls.clear()
+    out = n.sync_snapshot([{"id": "o1", "label": "table", "color": "brown", "last_seen": "t"}], [], "Hallway", "PuppyPi", place_id="plc-52af09af")
+    assert out["linked"] == 1
+    assert not [e for c in fake.calls_to("POST", "/v1/entities/bulk") for e in c["entities"] if e["type"] == "Location"]  # reused, not re-created
+    rels = [r for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
+    assert {r["targetId"] for r in rels if r["relationshipType"] == "LOCATED_AT"} == {live}
+    n.close()

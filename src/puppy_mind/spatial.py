@@ -20,7 +20,19 @@ from dataclasses import dataclass, field
 
 UNINFORMATIVE_ROOMS = {"unknown", "other", ""}
 # Things that walk around say nothing about WHERE we are and are never 'missing': they do not count for place recognition or misses.
-TRANSIENT = {"person", "cat", "dog", "bird", "pet"}
+TRANSIENT = {"person", "cat", "dog", "bird", "pet", "animal"}  # the model sometimes calls the cat "animal" (seen on the robot)
+# Labels that name nothing in particular: no evidence about which room this is.
+VAGUE = {"object", "unknown", "item", "thing", "stuff"}
+# Room types the vision model mixes up for the same room (seen on the robot: a desk + boxes room was 'bedroom' one day and 'office'
+# the next, which vetoed a 0.61 object match and made a duplicate 'Office'). A mismatch inside a group is a mild hint, not a veto.
+# Living room / dining room are deliberately NOT here: this home has both, side by side, with the same chairs and tables.
+CONFUSABLE_ROOMS = ({"bedroom", "office"},)
+
+
+def confusable(a: str, b: str) -> bool:
+    return a != b and any({a, b} <= g for g in CONFUSABLE_ROOMS)
+
+
 # Objects found in almost every room carry little evidence about WHICH room this is.
 COMMON_PRIOR = {"chair": 0.5, "table": 0.6, "door": 0.5, "box": 0.5, "bag": 0.6, "shoe": 0.6, "cable": 0.4, "person": 0.1, "cat": 0.3, "dog": 0.3}
 
@@ -57,6 +69,8 @@ class TrackResult:
     reason: str
     suggested_name: str | None = None
     hint: str = ""
+    detour: bool = False       # while this change was being confirmed, a frame pointed at ANOTHER known place: we went through it
+    candidate: str | None = None  # an unconfirmed move: where this frame points ("new" or a place name); None if it points nowhere
 
 
 def _color_match(a: str, b: str) -> float:
@@ -71,12 +85,13 @@ def _color_match(a: str, b: str) -> float:
 class PlaceResolver:
     def __init__(self, stay_threshold: float = 0.25, switch_threshold: float = 0.45, switch_margin: float = 0.2,
                  min_objects_for_new: int = 2, room_bonus: float = 0.15, room_penalty: float = 0.8, strong_stay: float = 0.6,
-                 one_per_room: bool = True):
+                 one_per_room: bool = True, confusable_penalty: float = 0.2, confusable_min: float = 0.3):
         self.stay_threshold, self.switch_threshold, self.switch_margin = stay_threshold, switch_threshold, switch_margin
         self.min_objects_for_new = min_objects_for_new
         self.room_bonus, self.room_penalty = room_bonus, room_penalty
         self.strong_stay = strong_stay
         self.one_per_room = one_per_room  # a home has one kitchen: a new view of a known KIND of room is that room, not a new place
+        self.confusable_penalty, self.confusable_min = confusable_penalty, confusable_min
 
     # ---- scoring
     @staticmethod
@@ -109,6 +124,8 @@ class PlaceResolver:
         if room not in UNINFORMATIVE_ROOMS and place.room_type not in UNINFORMATIVE_ROOMS:
             if room == place.room_type:
                 s += self.room_bonus * room_conf
+            elif confusable(room, place.room_type):  # 'office' for a room known as 'bedroom': the objects decide
+                s *= 1.0 - self.confusable_penalty * room_conf
             else:  # a kitchen view cannot be the living room, however many chairs both have: strong veto, scaled by confidence
                 s *= 1.0 - self.room_penalty * room_conf
         return max(0.0, min(1.0, s))
@@ -131,7 +148,8 @@ class PlaceResolver:
             cur_place = next((p for p in places if p.name == current), None)
             room_match = bool(cur_place and room not in UNINFORMATIVE_ROOMS and room == cur_place.room_type and room_conf >= 0.5)
             room_clash = bool(cur_place and room not in UNINFORMATIVE_ROOMS and cur_place.room_type not in UNINFORMATIVE_ROOMS
-                              and room != cur_place.room_type and room_conf >= 0.5)  # the model says kitchen, we think living room
+                              and room != cur_place.room_type and not confusable(room, cur_place.room_type)
+                              and room_conf >= 0.5)  # the model says kitchen, we think living room
             if not room_clash and (cur >= self.stay_threshold or (best_s < self.switch_threshold and len(view) < self.min_objects_for_new)):
                 return Decision(current, False, True, cur, f"still looks like '{current}' ({cur:.2f})", scores,
                                 weak=not room_match and (cur < self.strong_stay or len(view) < 2))  # one familiar object proves little
@@ -147,6 +165,8 @@ class PlaceResolver:
         best_s = max(scores.values(), default=0.0)
         if self.one_per_room and room not in UNINFORMATIVE_ROOMS and room_conf >= 0.5:
             same = [p for p in places if p.room_type == room and p.name != current]
+            if not same:  # a room the model often names differently, when its objects clearly fit ('office' for the bedroom with the desk)
+                same = [p for p in places if confusable(p.room_type, room) and p.name != current and scores.get(p.name, 0.0) >= self.confusable_min]
             if same:  # revisiting a kind of room we already know: the best-fitting one of that kind
                 pick = max(same, key=lambda p: scores.get(p.name, 0.0))
                 low = scores.get(pick.name, 0.0) < 0.3 and len(view) >= 3
@@ -171,18 +191,37 @@ class PlaceResolver:
 
 
 class PlaceTracker:
-    """Hysteresis around PlaceResolver: a change (switch or new place) needs `confirm_frames` consecutive agreeing frames."""
+    """Hysteresis around PlaceResolver: a change needs `confirm_frames` consecutive agreeing frames.
 
-    def __init__(self, resolver: PlaceResolver | None = None, confirm_frames: int = 2):
+    A brand-new place needs more (`confirm_new_frames`), and those frames must look like the SAME new place (same kind of room or
+    shared objects): two unrelated odd frames are not evidence of a room we have never seen. Right after a start (no current place)
+    recognising a KNOWN place is immediate, but a new one still has to be confirmed; only on an empty memory is the first view
+    made a place at once. (Measured: one frame of the Hallway stairs, the first after a restart, became a false "Garage".)
+    """
+
+    def __init__(self, resolver: PlaceResolver | None = None, confirm_frames: int = 2, confirm_new_frames: int | None = None):
         self.resolver = resolver or PlaceResolver()
         self.confirm = max(1, confirm_frames)
+        self.new_frames = max(self.confirm, confirm_new_frames or self.confirm)
         self.current: str | None = None
         self._pending: tuple | None = None
         self._count = 0
         self._neutral = 0  # consecutive weak 'stay' frames while a move is suspected
+        self._new_room = "unknown"  # what the frames of a suspected NEW place looked like (to check they agree)
+        self._new_labels: set[str] = set()
+        self._suspected: set[str] = set()  # known places frames pointed at since we last settled (more than one = a detour)
 
     def set_current(self, name: str | None) -> None:
         self.current, self._pending, self._count = name, None, 0
+        self._suspected = set()
+
+    def _same_new_place(self, view: list[dict], room: str) -> bool:
+        """Does this frame look like the new place the previous frames suggested?"""
+        labels = {v["label"].lower() for v in view}
+        if room not in UNINFORMATIVE_ROOMS and self._new_room not in UNINFORMATIVE_ROOMS:
+            return room == self._new_room
+        union = labels | self._new_labels
+        return bool(union) and len(labels & self._new_labels) / len(union) >= 0.25
 
     def update(self, view: list[dict], room: str, room_conf: float, places: list[PlaceInfo]) -> TrackResult:
         d = self.resolver.decide(view, room, room_conf, places, self.current)
@@ -194,20 +233,37 @@ class PlaceTracker:
                 return TrackResult(self.current, False, False, True, d.confidence,
                                    f"{d.reason}; move still suspected ({self._count}/{self.confirm})")
             self._pending, self._count, self._neutral = None, 0, 0
+            self._suspected = set()
             return TrackResult(self.current, False, False, False, d.confidence, d.reason, hint=d.hint)
         self._neutral = 0
+        if not d.is_new and d.place:
+            self._suspected.add(d.place)
         key = ("new",) if d.is_new else ("switch", d.place)
-        self._count = self._count + 1 if key == self._pending else 1
+        room_l = (room or "unknown").lower()
+        if key == self._pending and (not d.is_new or self._same_new_place(view, room_l)):
+            self._count += 1
+        else:
+            self._count = 1
+            self._new_room, self._new_labels = room_l, set()
+        if d.is_new:
+            self._new_labels |= {v["label"].lower() for v in view}
+            if self._new_room in UNINFORMATIVE_ROOMS:
+                self._new_room = room_l
         self._pending = key
-        if self.current is None or self._count >= self.confirm:
+        need = self.new_frames if d.is_new else self.confirm
+        immediate = self.current is None and (not d.is_new or not places)  # after a start: known places at once; new ones only on empty memory
+        if immediate or self._count >= need:
             self._pending, self._count = None, 0
+            detour = bool(self._suspected - {d.place})  # e.g. a dining-room frame on the way from the bedroom to the living room
+            self._suspected = set()
             if d.is_new:
-                return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name)
+                return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name, detour=detour)
             self.current = d.place
-            return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint)
+            return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint, detour=detour)
         return TrackResult(self.current, False, False, True, d.confidence,
-                           f"{d.reason}; waiting for confirmation ({self._count}/{self.confirm})")
+                           f"{d.reason}; waiting for confirmation ({self._count}/{need})", candidate="new" if d.is_new else d.place)
 
     def confirm_new(self, name: str) -> None:
         """Brain created the place the last result asked for."""
         self.current, self._pending, self._count = name, None, 0
+        self._suspected = set()

@@ -13,6 +13,7 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +24,10 @@ from .graph import Memory, now_iso
 from .models import Scene
 from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
-from .spatial import TRANSIENT, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
+from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
 from .sources import FolderSource, FrameSource, ahash, hamming
+from .tour import TourRecorder
 
 _OBJ_ID = re.compile(r"obj-[0-9a-f]{8}")
 
@@ -74,7 +76,7 @@ class Brain:
         self._moved = False  # robot moved since the last observation
         self.session = self.mem.start_session()
         self.location = self.s.default_location
-        self.tracker = PlaceTracker(PlaceResolver(), self.s.place_confirm_frames)
+        self.tracker = PlaceTracker(PlaceResolver(), self.s.place_confirm_frames, self.s.new_place_confirm_frames)
         self.place_mode = "auto" if self.s.auto_place else "manual"
         self.place_state: dict[str, Any] = {"mode": self.place_mode, "name": self.location, "confidence": None, "reason": "not yet observed", "room_type": "unknown", "uncertain": False}
         self._place_ids: dict[str, str] = {}
@@ -84,6 +86,13 @@ class Brain:
         self._room_checks: dict[str, int] = {}
         self.heading = HeadingTracker()  # orientation relative to where we entered the current place (IMU gyro; None without data)
         self.heading_epoch = now_iso()  # when the current heading frame began: bearings recorded before it are in another frame
+        self.recorder = TourRecorder(os.environ["RECORD_TOUR"]) if os.getenv("RECORD_TOUR") else None
+        self.remember_exchanges = True  # False for evaluations: their Q&A must not end up in the robot's memory
+        self._last_here: str | None = None  # time of the last frame that showed we were still in the current place
+        self._suspect_since: str | None = None  # time of the first frame of a suspected move (cleared once we settle)
+        self._settled_motion: tuple[int, int] | None = None  # drive counters when we last settled in a place
+        self._candidate: str | None = None  # where the last unconfirmed frame pointed (filed only if that is where we end up)
+        self._confirmed_key: str | None = None
         self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
         self.last_objects: list[dict] = []  # what the latest checked view showed (label, color, zone; id once stored)
         self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
@@ -141,6 +150,8 @@ class Brain:
             res = self.observe_frame(jpeg, source=source, location=location)
             if "skipped" in res:
                 self.bus.publish("status", {"state": "idle", "note": res["skipped"]})
+                if res["skipped"].startswith("frame nearly identical") and self.tracker.current and not self._suspect_since:
+                    self._last_here = now_iso()  # same view as before: still here (keeps the room-map clock honest while standing still)
             self.obs_seq += 1  # a near-duplicate keeps last_objects: same view, same things
         except Exception as e:  # keep the loop alive through API/network errors
             self.bus.publish("error", {"error": str(e)[:300]})
@@ -158,7 +169,11 @@ class Brain:
             return {"skipped": "frame nearly identical to previous"}
         self._last_hash[source] = h
         scene = self.perception.describe(jpeg)
-        return self.observe_scene(scene, source=source, location=location, jpeg=jpeg)
+        res = self.observe_scene(scene, source=source, location=location, jpeg=jpeg)
+        if self.recorder:  # a real tour for later evaluation (tour.py): the picture, what perception saw, the room chosen
+            self.recorder.add(scene, jpeg, ts=res.get("ts") or now_iso(), session=self.session, place=res.get("location"),
+                              note=res.get("skipped", ""))
+        return res
 
     def observe_scene(self, scene: Scene, *, source: str = "camera", location: str | None = None,
                       jpeg: bytes | None = None, ts: str | None = None) -> dict[str, Any]:
@@ -169,7 +184,7 @@ class Brain:
         if location:  # scripted callers (tests, replay) pin the place
             loc = location
         elif self.place_mode == "auto":
-            loc, uncertain, place_conf = self._resolve_place(scene, jpeg)
+            loc, uncertain, place_conf = self._resolve_place(scene, jpeg, ts or now_iso())
             changed = self._just_changed
             if self.tracker.current is None:  # no place recognised yet: do not file anything under the default name
                 return {"skipped": "no place recognised yet: waiting for a frame that shows enough", "location": loc}
@@ -179,14 +194,19 @@ class Brain:
             # The robot may have just moved. Do NOT file this frame under the current place: it would teach that place about things
             # that live somewhere else (and then it could never leave). Hold it; it is filed under the new place if the move is
             # confirmed, and dropped if the next frame shows we never left (a blur, a passer-by).
-            self._deferred.append((scene, source, jpeg, ts or now_iso()))
+            self._deferred.append((scene, source, jpeg, ts or now_iso(), self._candidate))
+            self._suspect_since = self._suspect_since or ts or now_iso()
             del self._deferred[:-max(1, self.s.place_confirm_frames)]
             return {"skipped": "possible change of place: waiting to confirm", "deferred": True, "location": loc, "reason": self.place_state["reason"]}
         held, self._deferred = (self._deferred if changed else []), []
-        for d_scene, d_src, d_jpeg, d_ts in held:  # frames that were waiting for this very decision
+        for d_scene, d_src, d_jpeg, d_ts, d_cand in held:  # frames that were waiting for this very decision
+            if d_cand != self._confirmed_key:  # it pointed somewhere else (a room on the way, a view into the next room): file nowhere
+                continue
             self._ingest(d_scene, loc, d_src, d_jpeg, d_ts, count_misses=False, place_conf=place_conf, heading=None)
         moved = self._moved or self._moved_view
         res = self._ingest(scene, loc, source, jpeg, ts, count_misses=not moved, place_conf=place_conf, heading=self.heading.value())
+        self._last_here, self._suspect_since = res.get("ts") or ts or now_iso(), None  # settled: this frame shows where we are
+        self._settled_motion = self.drive.motion_snapshot()
         self._moved = self._moved_view = False
         return res
 
@@ -199,7 +219,8 @@ class Brain:
             image_ref = str(d / f"{int(time.time() * 1000)}.jpg")
             Path(image_ref).write_bytes(jpeg)
         res = self.mem.ingest(scene, session_id=self.session, location=loc, source=source, ts=ts, image_ref=image_ref,
-                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading)
+                              count_misses=count_misses, room_type=scene.room_type, place_confidence=place_conf, heading=heading,
+                              room_confidence=scene.room_confidence)
         learned = self.mem.learn_room_type(loc) if hasattr(self.mem, "learn_room_type") else None
         if learned:
             self.bus.publish("place", {"name": loc, "learned_room_type": learned})
@@ -235,14 +256,22 @@ class Brain:
             self._place_ids[name] = self.mem.ensure_place(name, room, False)
         return self._place_ids[name]
 
-    def _resolve_place(self, scene: Scene, jpeg: bytes | None = None) -> tuple[str, bool, float | None]:
+    def _resolve_place(self, scene: Scene, jpeg: bytes | None = None, ts: str | None = None) -> tuple[str, bool, float | None]:
         """Decide which place this frame belongs to. Returns (place, uncertain, confidence)."""
-        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects if o.confidence >= self.s.min_confidence and o.label.lower() not in TRANSIENT]
+        view = [{"label": o.label.lower(), "color": o.color.lower()} for o in scene.objects
+                if o.confidence >= self.s.min_confidence and o.label.lower() not in TRANSIENT | VAGUE]
         prev = self.tracker.current  # None until a place has actually been recognised: the default name is not somewhere we came from
         r = self.tracker.update(view, scene.room_type, scene.room_confidence, self._places())
         r = self._verify_room(r, scene, jpeg, view)
+        if prev and (r.changed or r.uncertain) and self.drive.turned_in_place_since(self._settled_motion):
+            # Seen on the robot: looking round an open-plan living room, two views into the dining room 'moved' it there and
+            # cancelled its search. Turning on the spot cannot change rooms: this view looks into another room, it is not in it.
+            self.tracker.set_current(prev)
+            r = TrackResult(prev, False, False, True, r.confidence, f"only turned on the spot in '{prev}': this view looks into another room")
+        self._candidate = r.candidate
         self._just_changed = r.changed
         if r.changed:
+            self._confirmed_key = "new" if r.is_new else r.place
             if r.is_new:
                 name = r.suggested_name or "Unnamed area 1"
                 self.mem.ensure_place(name, scene.room_type, provisional=True)
@@ -259,9 +288,11 @@ class Brain:
                 except Exception:
                     pass
             if prev and prev != name:
-                if not (r.is_new and self._room_of(prev) == scene.room_type):  # a 'jump' to a second room of the same kind is not adjacency
+                why_not = self._not_adjacent(r, prev, scene.room_type, ts or now_iso())
+                if not why_not:
                     self.mem.note_transition(prev, name)
                     self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
+                self.bus.publish("map", {"from": prev, "to": name, "learned": not why_not, "reason": why_not or "rooms next to each other"})
                 self._moved_view = True
             self.bus.publish("place", {"name": name, "previous": prev, "new": r.is_new, "confidence": round(r.confidence, 2),
                                        "reason": r.reason, "room_type": scene.room_type})
@@ -272,6 +303,26 @@ class Brain:
         self.place_state = {"mode": "auto", "name": self.location, "confidence": round(r.confidence, 2), "reason": r.reason,
                             "room_type": scene.room_type, "uncertain": r.uncertain, "hint": r.hint}
         return self.location, r.uncertain, r.confidence
+
+    def _not_adjacent(self, r: TrackResult, prev: str, room: str, ts: str) -> str:
+        """Why this change of place must NOT be learned as 'prev is next to the new place' ('' = learn it).
+
+        Seen on the robot: driving Bedroom 2 -> Living Room through the Hallway and the Dining Room taught 'Bedroom 2 is next to the
+        Living Room', and a route to the toilet could then lead through a bedroom. Only a direct, quick change is evidence."""
+        if r.is_new and self._room_of(prev) == room:
+            return "a second room of the same kind, not a neighbour"
+        if r.detour:
+            return "went through another known room on the way"
+        if not self._last_here:
+            return "no recent frame of the previous place"
+        try:
+            first = datetime.fromisoformat(self._suspect_since or ts)
+            gap = (first - datetime.fromisoformat(self._last_here)).total_seconds()
+        except ValueError:
+            return ""
+        if gap > self.s.adjacency_max_gap_s:
+            return f"{gap:.0f} s without a usable frame: may have passed through other rooms"
+        return ""
 
     def _verify_room(self, r: TrackResult, scene: Scene, jpeg: bytes | None, view: list[dict]) -> TrackResult:
         """The resolver doubts it: few known objects, but this kind of room is known. Look at the pictures instead of guessing:
@@ -291,7 +342,8 @@ class Brain:
             return r
         room = scene.room_type if scene.room_type not in ("unknown", "other", "") else (self._room_of(cand) or "room")
         name = PlaceResolver.suggest_name(room, 1.0, self._places())
-        return TrackResult(None, True, True, False, m.confidence, f"a different {room} from '{cand}' ({m.reason})", suggested_name=name)
+        return TrackResult(None, True, True, False, m.confidence, f"a different {room} from '{cand}' ({m.reason})", suggested_name=name,
+                           detour=r.detour)
 
     def _room_of(self, name: str) -> str | None:
         return next((p.room_type for p in self._places() if p.name == name), None)
@@ -327,16 +379,20 @@ class Brain:
             return {"plan": Plan("no_place", f"I don't know which room I'm in yet.{where} Start the camera so I can recognise "
                                              "the room, then ask again.", target).as_dict()}
         route = bearing = None
+        weak = False
         if target and target.get("location") and target["location"] != here:
-            route = self.mem.route_between(here, target["location"])
+            route = self.mem.route_between(here, target["location"], min_count=2)  # links seen more than once first
+            if not route:
+                route = self.mem.route_between(here, target["location"])
+                weak = route is not None and len(route) > 1
         elif target and heading is not None:
             bearing = self.mem.bearing_since(target["id"], here, self.heading_epoch)
-        plan = plan_go_to(target, here, heading, bearing, route)
+        plan = plan_go_to(target, here, heading, bearing, route, weak_route=weak)
         out: dict[str, Any] = {"plan": plan.as_dict()}
         if plan.kind == "scan" and not (self.perception and self.fps > 0):
             out["run"] = {"started": False, "reason": "To look around I need the camera running with frame analysis on. Start the camera and ask again."}
         elif execute and plan.kind in ("turn", "scan"):
-            out["run"] = self.nav.start(plan)
+            out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
 
     def _seen_now(self, target: dict, seq: int) -> dict | None:
@@ -434,7 +490,8 @@ class Brain:
         assert self.agent, "agent disabled"
         r = self.agent.ask(question, self.session)
         ids = sorted(set(_OBJ_ID.findall(str(r["evidence"]))))
-        threading.Thread(target=self._remember_exchange, args=(question, r, ids), daemon=True).start()  # off the answer path
+        if self.remember_exchanges:
+            threading.Thread(target=self._remember_exchange, args=(question, r, ids), daemon=True).start()  # off the answer path
         self.bus.publish("query", {"question": question, "tools": [t["tool"] for t in r["evidence"]], "ids": ids})
         return r
 

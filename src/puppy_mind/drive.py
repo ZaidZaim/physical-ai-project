@@ -37,6 +37,10 @@ class DriveState:
         self.robot_applied: dict[str, float] = {}
         self._moving_until = 0.0
         self._auto = False  # the navigator is driving (only while armed; any user input ends it)
+        # what the robot has done, so the brain can tell "only turned on the spot" from "walked somewhere"
+        self.translations = 0  # commands that moved it forward/back/sideways
+        self.rotations = 0     # commands that turned it
+        self.last_rotation = 0.0
 
     # ---- controller side
     def arm(self, on: bool) -> None:
@@ -64,6 +68,11 @@ class DriveState:
             self._stamp = time.monotonic()
             if self._x or self._y or self._yaw:
                 self._moving_until = self._stamp + DEADMAN_S + SETTLE_S
+            if self._x or self._y:
+                self.translations += 1
+            if self._yaw:
+                self.rotations += 1
+                self.last_rotation = self._stamp
 
     def stop(self) -> None:
         with self._lock:
@@ -113,6 +122,18 @@ class DriveState:
             self.robot_applied = applied
 
     # ---- queries
+    def turned_in_place_since(self, snapshot: tuple[int, int] | None, within_s: float = 60.0) -> bool:
+        """Since `snapshot` (translations, rotations): the robot was turned, recently, and never driven anywhere."""
+        if snapshot is None:
+            return False
+        with self._lock:
+            return (self.rotations > snapshot[1] and self.translations == snapshot[0]
+                    and time.monotonic() - self.last_rotation <= within_s)
+
+    def motion_snapshot(self) -> tuple[int, int]:
+        with self._lock:
+            return self.translations, self.rotations
+
     @property
     def moving(self) -> bool:
         """True while commanded to move and for SETTLE_S afterwards (perception should wait)."""
