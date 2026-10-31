@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .brain import Brain
 from .drive import TRICKS
+from .voice import heard_nothing
 from .scenario import _scene
 from .sources import open_source
 
@@ -425,8 +426,8 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     _robot_auth(x_brain_token)
     _need_voice()
     text = brain.voice.transcribe(file.file.read(), file.filename or "speech.wav")  # the extension tells the model the format
-    if len(text) < 2:
-        return Response(status_code=204)
+    if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
+        return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))
     return Response(brain.voice.speak(r["reply"]), media_type="audio/wav",
                     headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600])})

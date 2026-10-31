@@ -5,10 +5,25 @@ the laptop does the understanding and the talking (same split as the camera: the
 """
 from __future__ import annotations
 
+import re
+
 from .config import Settings
 
 # Words a speech model tends to mangle; passed as a prompt so "Cypher" is not heard as "cipher".
 VOCAB_HINT = "Neo4j, Cypher, GraphRAG, Aura, AuraDB, GenAI, LLM, knowledge graph, vector index, embeddings, Graph Data Science, MCP"
+
+
+# What Whisper-style models "hear" in silence or hum: video outros and subtitle credits from their training data. A visitor at a robot
+# booth never says these, so a transcript made of them means the microphone gave us nothing.
+_SILENCE = re.compile(
+    r"thanks? (you )?(so much )?for watching|subscribe|click the bell|see you (in the )?next (video|time)|"
+    r"subtitles? (by|from)|amara\.org|transcribed by", re.I)
+
+
+def heard_nothing(text: str) -> bool:
+    """True when a transcript is empty, a lone filler word, or one of the phrases the model invents for silence."""
+    t = re.sub(r"[^\w\s']", " ", (text or "").lower()).split()
+    return not t or (len(t) == 1 and t[0] in ("you", "bye", "uh", "um", "hmm", "so", "okay")) or bool(_SILENCE.search(text or ""))
 
 
 class Voice:

@@ -694,13 +694,26 @@ $('#pstage').onchange = () => loadPeople(); $('#prefresh').onclick = () => loadP
 let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer = setTimeout(() => loadPeople().catch(() => {}), 250); };
 $('#ptalknew').onclick = () => { encId = null; $('#ptalklog').innerHTML = ''; };
 /* Hold to talk: the computer's microphone stands in for the robot's ears (same transcription and Wizard as /api/voice/turn) */
-let micRec = null, micChunks = [], micStream = null;
+let micRec = null, micChunks = [], micStream = null, micPeak = 0, micMeter = null;
+const MIC_SILENT = 0.02;  // peak loudness (0..1) below this is silence: never sent (the speech model invents "Thanks for watching!" for silence)
 async function micStart(e) {
   e.preventDefault();
   if (micRec) return;
   try { micStream = micStream || await navigator.mediaDevices.getUserMedia({ audio:true }); }
   catch (err) { log('bad', 'microphone blocked: allow it for this page'); return; }
-  micChunks = [];
+  micChunks = []; micPeak = 0;
+  const name = (micStream.getAudioTracks()[0] || {}).label || 'default microphone';
+  try {  // live loudness, so a muted or wrong microphone is obvious while you hold the button
+    const ctx = new AudioContext(), an = ctx.createAnalyser(), buf = new Float32Array(1024);
+    ctx.createMediaStreamSource(micStream).connect(an);
+    micMeter = setInterval(() => {
+      an.getFloatTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v));
+      micPeak = Math.max(micPeak, pk);
+      $('#ptalkmic').textContent = 'Listening ' + '▮'.repeat(Math.min(8, Math.round(pk * 30))).padEnd(8, '·');
+    }, 80);
+    micMeter.ctx = ctx;
+  } catch (_) { micPeak = 1; }
+  $('#ptalkmic').title = 'Recording from: ' + name;
   micRec = new MediaRecorder(micStream);
   micRec.ondataavailable = ev => ev.data.size && micChunks.push(ev.data);
   micRec.onstop = micSend;
@@ -711,7 +724,13 @@ function micStop() { if (micRec && micRec.state === 'recording') micRec.stop(); 
 async function micSend() {
   const type = micRec.mimeType || 'audio/webm', ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'mp4' : 'webm';
   micRec = null;
+  if (micMeter) { clearInterval(micMeter); micMeter.ctx && micMeter.ctx.close(); micMeter = null; }
   $('#ptalkmic').classList.remove('rec'); $('#ptalkmic').textContent = 'Hold to talk';
+  const mic = (micStream.getAudioTracks()[0] || {}).label || 'the default microphone';
+  if (micPeak < MIC_SILENT) {
+    $('#ptalklog').insertAdjacentHTML('beforeend', `<div style="color:var(--miss)">Heard only silence from “${esc(mic)}”. Pick another microphone with the mic icon in the address bar (or in Windows sound settings), then reload.</div>`);
+    log('miss', `microphone silent: ${esc(mic)} (peak ${micPeak.toFixed(3)})`); return;
+  }
   const blob = new Blob(micChunks, { type }), lg = $('#ptalklog');
   if (blob.size < 2000) { log('miss', 'too short: hold the button while you speak'); return; }
   const fd = new FormData(); fd.append('file', blob, 'speech.' + ext); if (encId) fd.append('encounter_id', encId);
@@ -719,7 +738,7 @@ async function micSend() {
   try {
     const r = await fetch('/api/voice/turn', { method:'POST', body:fd, headers: PTOK ? { 'X-Brain-Token': PTOK } : {} });
     const wait = $('#ptalkwait'); if (wait) wait.removeAttribute('id');
-    if (r.status === 204) { if (wait) wait.textContent = 'You: (nothing understood, try again)'; return; }
+    if (r.status === 204) { if (wait) wait.textContent = `You: (nothing understood${r.headers.get('X-Heard') ? ': the speech model only made out “' + decodeURIComponent(r.headers.get('X-Heard')) + '”' : ''}; speak closer to “${mic}” and try again)`; return; }
     if (!r.ok) throw new Error(await r.text());
     encId = r.headers.get('X-Encounter') || encId;
     if (wait) wait.textContent = 'You: ' + decodeURIComponent(r.headers.get('X-Heard') || '');

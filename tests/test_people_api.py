@@ -161,3 +161,15 @@ def test_hold_to_talk_webm_reaches_transcription_with_its_format(client):
     server.brain.people.client = FakeChat([["Hi! What's your name?"]])
     r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"hello robot", "audio/webm")})
     assert r.status_code == 200 and server.brain.voice.filenames[-1] == "speech.webm"
+
+
+def test_phrases_the_speech_model_invents_for_silence_never_reach_the_wizard(client):
+    from puppy_mind.voice import heard_nothing
+
+    assert heard_nothing("Thank you for watching. Please subscribe to my channel and click the bell.")
+    assert heard_nothing("Thanks for watching!") and heard_nothing("you") and heard_nothing("")
+    assert not heard_nothing("Hi, I'm Zaid from Neo4j") and not heard_nothing("Thank you") and not heard_nothing("Yes")
+    assert not heard_nothing("Docs are on neo4j.com")
+    server.brain.people.client = FakeChat([])  # the Wizard must not be called at all
+    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"Thanks for watching!", "audio/webm")})
+    assert r.status_code == 204 and "watching" in r.headers["x-heard"].lower()
