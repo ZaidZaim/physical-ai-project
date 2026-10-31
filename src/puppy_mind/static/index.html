@@ -699,7 +699,8 @@ const MIC_SILENT = 0.02;  // peak loudness (0..1) below this is silence: never s
 async function micStart(e) {
   e.preventDefault();
   if (micRec) return;
-  try { micStream = micStream || await navigator.mediaDevices.getUserMedia({ audio:true }); }
+  // A fresh microphone connection every time, released after: a kept one can go silent on Windows (after playback, a device change)
+  try { micStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true } }); }
   catch (err) { log('bad', 'microphone blocked: allow it for this page'); return; }
   micChunks = []; micPeak = 0;
   const name = (micStream.getAudioTracks()[0] || {}).label || 'default microphone';
@@ -716,7 +717,7 @@ async function micStart(e) {
   $('#ptalkmic').title = 'Recording from: ' + name;
   micRec = new MediaRecorder(micStream);
   micRec.ondataavailable = ev => ev.data.size && micChunks.push(ev.data);
-  micRec.onstop = micSend;
+  micRec.onstop = () => { micSend(); };
   micRec.start();
   $('#ptalkmic').classList.add('rec'); $('#ptalkmic').textContent = 'Listening… release to send';
 }
@@ -727,6 +728,7 @@ async function micSend() {
   if (micMeter) { clearInterval(micMeter); micMeter.ctx && micMeter.ctx.close(); micMeter = null; }
   $('#ptalkmic').classList.remove('rec'); $('#ptalkmic').textContent = 'Hold to talk';
   const mic = (micStream.getAudioTracks()[0] || {}).label || 'the default microphone';
+  micStream.getTracks().forEach(t => t.stop());  // release the microphone (the browser's recording indicator goes off too)
   if (micPeak < MIC_SILENT) {
     $('#ptalklog').insertAdjacentHTML('beforeend', `<div style="color:var(--miss)">Heard only silence from “${esc(mic)}”. Pick another microphone with the mic icon in the address bar (or in Windows sound settings), then reload.</div>`);
     log('miss', `microphone silent: ${esc(mic)} (peak ${micPeak.toFixed(3)})`); return;
