@@ -26,7 +26,8 @@ WALL = view("unknown")
 @pytest.fixture
 def brain(monkeypatch):
     monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
-    s = dataclasses.replace(get_settings(), nams_api_key="", miss_threshold=2, place_confirm_frames=2, default_location="Start")
+    s = dataclasses.replace(get_settings(), nams_api_key="", miss_threshold=2, place_confirm_frames=2,
+                            new_place_confirm_frames=2, default_location="Start")  # these tests are about naming and the map, not confirmation
     b = Brain(s, need_openai=False)
     yield b
     b.close()
@@ -253,3 +254,21 @@ def test_a_doubtful_room_is_checked_against_pictures_and_a_second_bedroom_gets_i
     assert brain.location == "Bedroom 2" and FakePerception.calls >= 1
     names = {p["name"] for p in brain.mem.list_places()}
     assert {"Bedroom", "Bedroom 2"} <= names
+
+
+def test_by_default_a_new_room_takes_three_frames_but_a_known_one_two(monkeypatch):
+    monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
+    b = Brain(dataclasses.replace(get_settings(), nams_api_key="", place_confirm_frames=2, new_place_confirm_frames=3,
+                                  default_location="Start"), need_openai=False)
+    try:
+        b.observe_scene(KITCHEN)                       # empty memory: the first view is the first room
+        for _ in range(2):
+            b.observe_scene(LIVING)
+        assert b.location == "Kitchen"                 # two odd frames are not enough for a room never seen before
+        b.observe_scene(LIVING)
+        assert b.location == "Living Room"
+        for _ in range(2):
+            b.observe_scene(KITCHEN)
+        assert b.location == "Kitchen"                 # going back to a known room: two frames
+    finally:
+        b.close()

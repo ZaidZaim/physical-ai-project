@@ -67,8 +67,8 @@ def _nams_cmd(args, s) -> int:
                     if n._req("DELETE", f"/v1/entities/{v['id']}") is not None:
                         gone += 1
                 names = {s.robot_name: "Agent"}
-                for loc in {o["location"] for o in mem.export_for_nams(args.location)["objects"]}:
-                    names[loc] = "Location"
+                for loc, pid in {(o["location"], o.get("place_id")) for o in mem.export_for_nams(args.location)["objects"]}:
+                    names[n._place_name(loc, pid)] = "Location"  # the same name live syncing uses ("Hallway af09af")
                 for nm, typ in names.items():  # our fixed entities, recognised by our own description text
                     for e in (n._req("GET", "/v1/entities/by-name", params={"name": nm, "type": typ}) or {}).get("entities", []):
                         if (e.get("description") or "").startswith(("Place observed by", "Hiwonder PuppyPi")):
@@ -84,7 +84,7 @@ def _nams_cmd(args, s) -> int:
             for loc, objs in by_loc.items():
                 ids = {o["id"] for o in objs}
                 rels = [r for r in snap["relations"] if r["a"] in ids and r["b"] in ids]
-                print(loc, n.sync_snapshot(objs, rels, loc, s.robot_name))
+                print(loc, n.sync_snapshot(objs, rels, loc, s.robot_name, place_id=objs[0].get("place_id")))
             n.flush(60)
             print("done:", n.status())
             mem.close()

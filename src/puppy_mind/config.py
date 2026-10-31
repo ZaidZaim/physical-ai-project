@@ -54,6 +54,8 @@ class Settings:
     # horizontal field of view of the camera, used to turn 'left/centre/right third of the frame' into a bearing. A guess until measured.
     camera_fov_deg: float = float(os.getenv("CAMERA_FOV_DEG", "70"))
     place_confirm_frames: int = int(os.getenv("PLACE_CONFIRM_FRAMES", "2"))
+    # a place never seen before needs more agreeing frames than a move between known places (a single odd frame made a false room)
+    new_place_confirm_frames: int = int(os.getenv("NEW_PLACE_CONFIRM_FRAMES", "3"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)
     store_images: bool = _bool("STORE_IMAGES", False)

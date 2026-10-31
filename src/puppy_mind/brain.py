@@ -74,7 +74,7 @@ class Brain:
         self._moved = False  # robot moved since the last observation
         self.session = self.mem.start_session()
         self.location = self.s.default_location
-        self.tracker = PlaceTracker(PlaceResolver(), self.s.place_confirm_frames)
+        self.tracker = PlaceTracker(PlaceResolver(), self.s.place_confirm_frames, self.s.new_place_confirm_frames)
         self.place_mode = "auto" if self.s.auto_place else "manual"
         self.place_state: dict[str, Any] = {"mode": self.place_mode, "name": self.location, "confidence": None, "reason": "not yet observed", "room_type": "unknown", "uncertain": False}
         self._place_ids: dict[str, str] = {}

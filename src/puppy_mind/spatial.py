@@ -171,18 +171,35 @@ class PlaceResolver:
 
 
 class PlaceTracker:
-    """Hysteresis around PlaceResolver: a change (switch or new place) needs `confirm_frames` consecutive agreeing frames."""
+    """Hysteresis around PlaceResolver: a change needs `confirm_frames` consecutive agreeing frames.
 
-    def __init__(self, resolver: PlaceResolver | None = None, confirm_frames: int = 2):
+    A brand-new place needs more (`confirm_new_frames`), and those frames must look like the SAME new place (same kind of room or
+    shared objects): two unrelated odd frames are not evidence of a room we have never seen. Right after a start (no current place)
+    recognising a KNOWN place is immediate, but a new one still has to be confirmed; only on an empty memory is the first view
+    made a place at once. (Measured: one frame of the Hallway stairs, the first after a restart, became a false "Garage".)
+    """
+
+    def __init__(self, resolver: PlaceResolver | None = None, confirm_frames: int = 2, confirm_new_frames: int | None = None):
         self.resolver = resolver or PlaceResolver()
         self.confirm = max(1, confirm_frames)
+        self.new_frames = max(self.confirm, confirm_new_frames or self.confirm)
         self.current: str | None = None
         self._pending: tuple | None = None
         self._count = 0
         self._neutral = 0  # consecutive weak 'stay' frames while a move is suspected
+        self._new_room = "unknown"  # what the frames of a suspected NEW place looked like (to check they agree)
+        self._new_labels: set[str] = set()
 
     def set_current(self, name: str | None) -> None:
         self.current, self._pending, self._count = name, None, 0
+
+    def _same_new_place(self, view: list[dict], room: str) -> bool:
+        """Does this frame look like the new place the previous frames suggested?"""
+        labels = {v["label"].lower() for v in view}
+        if room not in UNINFORMATIVE_ROOMS and self._new_room not in UNINFORMATIVE_ROOMS:
+            return room == self._new_room
+        union = labels | self._new_labels
+        return bool(union) and len(labels & self._new_labels) / len(union) >= 0.25
 
     def update(self, view: list[dict], room: str, room_conf: float, places: list[PlaceInfo]) -> TrackResult:
         d = self.resolver.decide(view, room, room_conf, places, self.current)
@@ -197,16 +214,27 @@ class PlaceTracker:
             return TrackResult(self.current, False, False, False, d.confidence, d.reason, hint=d.hint)
         self._neutral = 0
         key = ("new",) if d.is_new else ("switch", d.place)
-        self._count = self._count + 1 if key == self._pending else 1
+        room_l = (room or "unknown").lower()
+        if key == self._pending and (not d.is_new or self._same_new_place(view, room_l)):
+            self._count += 1
+        else:
+            self._count = 1
+            self._new_room, self._new_labels = room_l, set()
+        if d.is_new:
+            self._new_labels |= {v["label"].lower() for v in view}
+            if self._new_room in UNINFORMATIVE_ROOMS:
+                self._new_room = room_l
         self._pending = key
-        if self.current is None or self._count >= self.confirm:
+        need = self.new_frames if d.is_new else self.confirm
+        immediate = self.current is None and (not d.is_new or not places)  # after a start: known places at once; new ones only on empty memory
+        if immediate or self._count >= need:
             self._pending, self._count = None, 0
             if d.is_new:
                 return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name)
             self.current = d.place
             return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint)
         return TrackResult(self.current, False, False, True, d.confidence,
-                           f"{d.reason}; waiting for confirmation ({self._count}/{self.confirm})")
+                           f"{d.reason}; waiting for confirmation ({self._count}/{need})")
 
     def confirm_new(self, name: str) -> None:
         """Brain created the place the last result asked for."""

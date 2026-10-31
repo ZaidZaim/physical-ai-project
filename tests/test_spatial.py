@@ -118,3 +118,48 @@ def test_but_a_different_kind_of_room_still_becomes_a_new_place():
 def test_low_confidence_room_type_does_not_trigger_the_same_room_shortcut():
     d = decide(V(("window", "white"), ("cabinet", "white")), room="kitchen", conf=0.3, current="Kitchen")
     assert d.is_new  # not sure it is even a kitchen: do not assume it is the same room
+
+
+HALLWAY = P("Hallway", "hallway", ("door", "brown", "present"), ("stairs", "brown", "present"), ("box", "brown", "present"), ("shoe", "black", "present"))
+
+
+def test_one_odd_frame_right_after_a_start_does_not_create_a_room():
+    """The false 'Garage': the first frame after a restart showed the Hallway stairs, the model called it a garage, and the
+    tracker made a new room at once. Now a new room needs confirming even right after a start; the Hallway is recognised instead."""
+    t = PlaceTracker(confirm_frames=2, confirm_new_frames=3)
+    places = [HALLWAY, KITCHEN, LIVING]
+    r = t.update(V(("staircase", "brown")), "garage", 0.8, places)
+    assert not r.changed and r.uncertain and t.current is None
+    r = t.update(V(("door", "brown"), ("box", "brown"), ("stairs", "brown")), "hallway", 0.9, places)
+    assert r.changed and not r.is_new and r.place == "Hallway"  # a KNOWN place is still recognised at once after a start
+
+
+def test_a_genuinely_new_room_needs_three_agreeing_frames():
+    t = PlaceTracker(confirm_frames=2, confirm_new_frames=3)
+    t.set_current("Kitchen")
+    bed = V(("bed", "white"), ("lamp", "black"))
+    assert t.update(bed, "bedroom", 0.9, [KITCHEN, LIVING]).uncertain
+    assert t.update(bed, "bedroom", 0.9, [KITCHEN, LIVING]).uncertain
+    r = t.update(V(("bed", "white"), ("wardrobe", "white")), "bedroom", 0.9, [KITCHEN, LIVING])
+    assert r.changed and r.is_new and r.suggested_name == "Bedroom"
+
+
+def test_unrelated_odd_frames_do_not_add_up_to_a_new_room():
+    t = PlaceTracker(confirm_frames=2, confirm_new_frames=2)
+    t.set_current("Kitchen")
+    assert not t.update(V(("bed", "white"), ("lamp", "black")), "bedroom", 0.9, [KITCHEN, LIVING]).changed
+    r = t.update(V(("car", "red"), ("bicycle", "blue")), "garage", 0.9, [KITCHEN, LIVING])  # a different 'new' place: starts over
+    assert not r.changed and r.uncertain
+    r = t.update(V(("car", "red"), ("toolbox", "red")), "garage", 0.9, [KITCHEN, LIVING])  # ...and the garage confirms on its own
+    assert r.changed and r.is_new and r.suggested_name == "Garage"
+
+
+def test_without_a_room_type_frames_of_a_new_place_must_share_objects():
+    t = PlaceTracker(confirm_frames=2, confirm_new_frames=2)
+    t.set_current("Kitchen")
+    t.update(V(("bed", "white"), ("lamp", "black")), "unknown", 0.0, [KITCHEN, LIVING])
+    assert not t.update(V(("car", "red"), ("bicycle", "blue")), "unknown", 0.0, [KITCHEN, LIVING]).changed
+    t2 = PlaceTracker(confirm_frames=2, confirm_new_frames=2)
+    t2.set_current("Kitchen")
+    t2.update(V(("bed", "white"), ("lamp", "black")), "unknown", 0.0, [KITCHEN, LIVING])
+    assert t2.update(V(("bed", "white"), ("nightstand", "brown")), "unknown", 0.0, [KITCHEN, LIVING]).changed

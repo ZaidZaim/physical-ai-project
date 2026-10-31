@@ -976,7 +976,7 @@ class Memory:
             MATCH (o:Item)-[:LOCATED_AT]->(l:Place)
             WHERE $loc IS NULL OR toLower(l.name) = toLower($loc)
             RETURN o.itemId AS id, o.label AS label, o.color AS color, o.status AS status,
-                   toString(o.lastSeen) AS last_seen, l.name AS location
+                   toString(o.lastSeen) AS last_seen, l.name AS location, l.placeId AS place_id
             ORDER BY o.firstSeen
             """,
             loc=location,
