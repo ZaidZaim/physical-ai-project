@@ -283,3 +283,43 @@ def test_a_close_up_of_the_cat_is_not_a_room(brain):
     for v in (cat, cat, vague, vague):
         brain.observe_scene(v)
     assert brain.location == "Kitchen" and sorted(places(brain)) == ["Kitchen"]
+
+
+def _at(sec):
+    return f"2026-10-31T14:{sec // 60:02d}:{sec % 60:02d}+00:00"
+
+
+def test_a_quick_direct_move_teaches_the_map_but_a_long_drive_does_not(brain):
+    q = brain.bus.subscribe()
+    brain.observe_scene(KITCHEN, ts=_at(0))
+    brain.observe_scene(KITCHEN, ts=_at(5))
+    brain.observe_scene(LIVING, ts=_at(20))  # 15 s later: walked straight through the door
+    brain.observe_scene(LIVING, ts=_at(25))
+    assert places(brain)["Kitchen"]["adjacent"] == [{"place": "Living Room", "times": 1}]
+    brain.observe_scene(LIVING, ts=_at(30))
+    brain.observe_scene(KITCHEN, ts=_at(200))  # nearly three minutes of driving with no usable frame: may have passed other rooms
+    brain.observe_scene(KITCHEN, ts=_at(205))
+    assert brain.location == "Kitchen"
+    assert places(brain)["Kitchen"]["adjacent"] == [{"place": "Living Room", "times": 1}]  # not counted again
+    events = []
+    while not q.empty():
+        t, d = q.get_nowait()
+        if t == "map":
+            events.append(d)
+    assert [e["learned"] for e in events] == [True, False] and "without a usable frame" in events[1]["reason"]
+
+
+def test_passing_through_another_room_on_the_way_is_not_learned_as_neighbours(brain):
+    """On the robot: Bedroom 2 -> Living Room with one Dining Room frame on the way taught 'Bedroom 2 is next to the Living Room'."""
+    BEDROOM = view("bedroom", ("bed", "white"), ("nightstand", "brown"), ("lamp", "white"))
+    DINING = view("dining room", ("cat tree", "grey"), ("radiator", "white"), ("sideboard", "brown"))
+    walk = (BEDROOM, BEDROOM, DINING, DINING, LIVING, LIVING, DINING, DINING, BEDROOM, BEDROOM)  # learns Bedroom-Dining, Dining-Living
+    for i, v in enumerate(walk):
+        brain.observe_scene(v, ts=_at(i * 8))
+    assert brain.location == "Bedroom" and [a["place"] for a in places(brain)["Bedroom"]["adjacent"]] == ["Dining Room"]
+    t = 100
+    for v in (DINING, LIVING, LIVING):  # bedroom -> one dining-room frame -> living room, all within seconds
+        brain.observe_scene(v, ts=_at(t))
+        t += 8
+    assert brain.location == "Living Room"
+    assert [a["place"] for a in places(brain)["Bedroom"]["adjacent"]] == ["Dining Room"]  # no Bedroom - Living Room link

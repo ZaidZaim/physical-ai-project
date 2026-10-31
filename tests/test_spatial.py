@@ -190,3 +190,26 @@ def test_dining_room_and_living_room_are_still_kept_apart():
     """Same chairs and tables in both: these room types are NOT treated as interchangeable."""
     d = decide([("chair", "brown"), ("table", "brown"), ("chair", "brown")], "dining room", 0.9, places=[HALLWAY, LIVING], current="Hallway")
     assert d.is_new and d.suggested_name == "Dining Room"
+
+
+DINING = P("Dining Room", "dining room", ("table", "brown", "present"), ("chair", "brown", "present"), ("cat tree", "grey", "present"), ("radiator", "white", "present"))
+BED2 = P("Bedroom 2", "bedroom", ("bed", "white", "present"), ("nightstand", "brown", "present"), ("lamp", "white", "present"))
+
+
+def test_a_change_that_passed_through_another_known_room_is_flagged_as_a_detour():
+    """On the robot: Bedroom 2 -> Living Room, with one Dining Room frame on the way. That is not 'Bedroom 2 is next to the Living Room'."""
+    t = PlaceTracker(confirm_frames=2)
+    t.set_current("Bedroom 2")
+    places = [BED2, DINING, LIVING]
+    t.update(V(("cat tree", "grey"), ("radiator", "white"), ("table", "brown")), "dining room", 0.9, places)
+    t.update(V(("sofa", "grey"), ("tv", "black")), "living room", 0.9, places)
+    r = t.update(V(("sofa", "grey"), ("tv", "black")), "living room", 0.9, places)
+    assert r.changed and r.place == "Living room" and r.detour
+
+
+def test_a_direct_change_is_not_a_detour():
+    t = PlaceTracker(confirm_frames=2)
+    t.set_current("Kitchen")
+    t.update(V(("sofa", "grey"), ("tv", "black")), "living room", 0.9, [KITCHEN, LIVING])
+    r = t.update(V(("sofa", "grey"), ("tv", "black")), "living room", 0.9, [KITCHEN, LIVING])
+    assert r.changed and not r.detour

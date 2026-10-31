@@ -9,6 +9,10 @@ What has been checked on real hardware and live services, and when. Newest first
   'office' and the room-type veto turned a 0.61 object match into 0.22, creating a duplicate 'Office'. Bedroom/office is now a mild
   hint; replaying all 90 real frames: no false rooms (main: Garage + Office), living and dining room still apart. 'Office' was merged
   into 'Bedroom' (Aura + NAMS). Turn-to / go-to were not exercised on this walk.
+- **Room map:** a second drive (Bedroom 2 -> Living Room -> Hallway) taught 'Bedroom 2 is next to the Living Room' although a
+  Dining Room frame came in between. Now a move is learned only if direct (no frame of a third known room) and quick (<= 60 s);
+  routes prefer links seen twice. Replaying all 109 real frames: that link is no longer learned, the real ones still are. Removed
+  from Aura. Hallway-Living Room, Bedroom-Kitchen and Bathroom-Bedroom 2 were direct and quick: only the owner can say if they exist.
 - **Real tour:** 76 analysed frames from 10 robot sessions, exported from Aura and replayed through room recognition on throwaway
   memory. Room recognition as on `main` made a false "Garage" (88.5% of frames in the room recorded at the time). The new rules
   (a new room needs agreeing frames that look like the same place, also right after a start; "animal" counts as moving; vague

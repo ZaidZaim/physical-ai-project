@@ -130,6 +130,7 @@ class Memory:
             self._write(f"UNWIND $pairs AS p MATCH ()-[r:{rel}]->() WHERE r[p.old] IS NOT NULL SET r[p.new] = r[p.old], r[p.old] = null",
                         pairs=[{"old": o, "new": n} for o, n in keys.items()])
         self._write("MATCH (l:Place) WHERE l.placeId IS NULL SET l.placeId = 'plc-' + substring(randomUUID(), 0, 8)")  # every place gets a stable id
+        self._write("MATCH (:Place)-[a:ADJACENT_TO]->(:Place) WHERE a.lastSeen IS NULL SET a.lastSeen = a.firstSeen")  # links made by merging places
 
     def init_schema(self) -> None:
         self._migrate_labels()
@@ -792,15 +793,17 @@ class Memory:
             x=x, y=y, ts=now_iso(),
         )
 
-    def route_between(self, a: str, b: str, max_hops: int = 8) -> list[str] | None:
-        """Shortest chain of places from a to b over the learned adjacency (undirected); None if they are not connected."""
+    def route_between(self, a: str, b: str, max_hops: int = 8, min_count: int = 1) -> list[str] | None:
+        """Shortest chain of places from a to b over the learned adjacency (undirected), using only links seen at least `min_count`
+        times; None if they are not connected that way."""
         if a == b:
             return [a]
         rows = self._read(
             f"""
             MATCH p = shortestPath((x:Place {{name: $a}})-[:ADJACENT_TO*..{int(max_hops)}]-(y:Place {{name: $b}}))
+            WHERE all(r IN relationships(p) WHERE coalesce(r.count, 1) >= $min)
             RETURN [n IN nodes(p) | n.name] AS route
-            """, a=a, b=b)
+            """, a=a, b=b, min=min_count)
         return rows[0]["route"] if rows else None
 
     def bearing_since(self, item_id: str, place: str, since_iso: str) -> float | None:
@@ -895,7 +898,7 @@ class Memory:
             WITH d, n, sum(r.count) AS c
             WITH d, n, c, CASE WHEN d.name < n.name THEN [d, n] ELSE [n, d] END AS ordered
             WITH ordered[0] AS x, ordered[1] AS y, c
-            MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.firstSeen = datetime(), a.count = 0
+            MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.firstSeen = datetime(), a.lastSeen = datetime(), a.count = 0
             SET a.count = a.count + c
             """, s=src, d=dst)
         self._write("MATCH (s:Place {name: $s}) DETACH DELETE s", s=src)

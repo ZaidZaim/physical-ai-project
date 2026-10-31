@@ -314,3 +314,26 @@ def test_brain_says_it_does_not_know_the_room_before_recognising_one(brain):
     assert out["plan"]["kind"] == "no_place" and "Hallway" in out["plan"]["message"] and "Demo Area" not in out["plan"]["message"]
     assert "run" not in out and not brain.drive.auto
 
+
+
+def test_routes_prefer_links_seen_more_than_once(brain):
+    brain.observe_scene(scene(("cat", "gray", "left"), ("door", "white", "center")), location="Hallway")
+    for p in ("Living Room", "Dining Room", "Bedroom 2", "Bathroom"):
+        brain.mem.ensure_place(p, "unknown")
+    for _ in range(3):
+        brain.mem.note_transition("Living Room", "Dining Room")
+        brain.mem.note_transition("Dining Room", "Hallway")
+    brain.mem.note_transition("Living Room", "Bedroom 2")  # once, on a long drive: probably wrong
+    brain.mem.note_transition("Bedroom 2", "Hallway")
+    brain.location = "Living Room"
+    plan = brain.go_to("cat", execute=False)["plan"]
+    assert plan["route"] == ["Living Room", "Dining Room", "Hallway"] and "only seen once" not in plan["message"]
+
+
+def test_a_route_that_needs_a_one_off_link_says_it_may_be_wrong(brain):
+    brain.observe_scene(scene(("cat", "gray", "left"), ("door", "white", "center")), location="Hallway")
+    brain.mem.ensure_place("Bathroom", "bathroom")
+    brain.mem.note_transition("Bathroom", "Hallway")
+    brain.location = "Bathroom"
+    plan = brain.go_to("cat", execute=False)["plan"]
+    assert plan["route"] == ["Bathroom", "Hallway"] and "only seen once" in plan["message"]

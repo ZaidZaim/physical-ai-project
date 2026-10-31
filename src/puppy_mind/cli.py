@@ -327,8 +327,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rooms now:      {res['rooms']}")
         print(f"rooms recorded: {res['rooms_recorded']}")
         print(f"same room as recorded: {res['agreement']:.0%}" if res["agreement"] is not None else "no frames filed")
-        for (a, b), c in res["transitions"].most_common():
-            print(f"  {a} -> {b}: {c}x")
+        print("room map learned (neighbours, times):")
+        for link, c in res["map"].items():
+            print(f"  {link}: {c}x")
         return 0
 
     if args.cmd == "imu-check":

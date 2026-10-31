@@ -122,11 +122,13 @@ class FakeMemory:
         key = tuple(sorted((a, b)))
         self.adj[key] = self.adj.get(key, 0) + 1
 
-    def route_between(self, a, b, max_hops=8):
+    def route_between(self, a, b, max_hops=8, min_count=1):
         if a == b:
             return [a]
         nbrs: dict[str, set] = {}
-        for x, y in self.adj:
+        for (x, y), n in self.adj.items():
+            if n < min_count:
+                continue
             nbrs.setdefault(x, set()).add(y)
             nbrs.setdefault(y, set()).add(x)
         paths, seen = [[a]], {a}

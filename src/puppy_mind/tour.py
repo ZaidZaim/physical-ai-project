@@ -138,6 +138,7 @@ def replay(frames: list[dict], settings, *, verbose: bool = False) -> dict[str, 
                 "rooms_recorded": sorted({r["was"] for r in rows if r["was"]}),
                 "agreement": round(agree / len(stored), 3) if stored else None,
                 "transitions": Counter((a["now"], b["now"]) for a, b in zip(stored, stored[1:]) if a["now"] != b["now"]),
+                "map": {" - ".join(k): n for k, n in sorted(getattr(brain.mem, "adj", {}).items())},
                 "rows": rows}
     finally:
         brain.close()

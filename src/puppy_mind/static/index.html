@@ -450,6 +450,10 @@ function connect() {
   es.addEventListener('drive', e => {
     const d = JSON.parse(e.data); log('ask', `drive ${d.armed ? 'armed' : 'disarmed'}${d.moving ? ' · moving' : ''}${d.robot_online ? '' : ' · robot offline'}`);
   });
+  es.addEventListener('map', e => {  // a change of room: learned as neighbours, or not (and why)
+    const d = JSON.parse(e.data);
+    log(d.learned ? 'new' : 'miss', d.learned ? `map: <b>${esc(d.from)}</b> is next to <b>${esc(d.to)}</b>` : `map: not linking ${esc(d.from)} and ${esc(d.to)} (${esc(d.reason)})`);
+  });
   let navPhase = '';
   es.addEventListener('nav', e => {  // phase 5: the robot turning to / looking for something (any drive key also cancels it)
     const d = JSON.parse(e.data), rem = d.active && d.remaining_deg != null ? ` · ${Math.abs(Math.round(d.remaining_deg))}° to go` : '';

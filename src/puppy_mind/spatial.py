@@ -69,6 +69,7 @@ class TrackResult:
     reason: str
     suggested_name: str | None = None
     hint: str = ""
+    detour: bool = False       # while this change was being confirmed, a frame pointed at ANOTHER known place: we went through it
 
 
 def _color_match(a: str, b: str) -> float:
@@ -207,9 +208,11 @@ class PlaceTracker:
         self._neutral = 0  # consecutive weak 'stay' frames while a move is suspected
         self._new_room = "unknown"  # what the frames of a suspected NEW place looked like (to check they agree)
         self._new_labels: set[str] = set()
+        self._suspected: set[str] = set()  # known places frames pointed at since we last settled (more than one = a detour)
 
     def set_current(self, name: str | None) -> None:
         self.current, self._pending, self._count = name, None, 0
+        self._suspected = set()
 
     def _same_new_place(self, view: list[dict], room: str) -> bool:
         """Does this frame look like the new place the previous frames suggested?"""
@@ -229,8 +232,11 @@ class PlaceTracker:
                 return TrackResult(self.current, False, False, True, d.confidence,
                                    f"{d.reason}; move still suspected ({self._count}/{self.confirm})")
             self._pending, self._count, self._neutral = None, 0, 0
+            self._suspected = set()
             return TrackResult(self.current, False, False, False, d.confidence, d.reason, hint=d.hint)
         self._neutral = 0
+        if not d.is_new and d.place:
+            self._suspected.add(d.place)
         key = ("new",) if d.is_new else ("switch", d.place)
         room_l = (room or "unknown").lower()
         if key == self._pending and (not d.is_new or self._same_new_place(view, room_l)):
@@ -247,13 +253,16 @@ class PlaceTracker:
         immediate = self.current is None and (not d.is_new or not places)  # after a start: known places at once; new ones only on empty memory
         if immediate or self._count >= need:
             self._pending, self._count = None, 0
+            detour = bool(self._suspected - {d.place})  # e.g. a dining-room frame on the way from the bedroom to the living room
+            self._suspected = set()
             if d.is_new:
-                return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name)
+                return TrackResult(None, True, True, False, d.confidence, d.reason, d.suggested_name, detour=detour)
             self.current = d.place
-            return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint)
+            return TrackResult(d.place, True, False, False, d.confidence, d.reason, hint=d.hint, detour=detour)
         return TrackResult(self.current, False, False, True, d.confidence,
                            f"{d.reason}; waiting for confirmation ({self._count}/{need})")
 
     def confirm_new(self, name: str) -> None:
         """Brain created the place the last result asked for."""
         self.current, self._pending, self._count = name, None, 0
+        self._suspected = set()

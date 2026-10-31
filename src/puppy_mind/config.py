@@ -57,6 +57,8 @@ class Settings:
     # agreeing frames a place never seen before needs. 2 (like a move): replaying the real tour, 3 lost a short bathroom visit
     # and 2 made no false room once the start-up rule, the same-place check and the moving/vague labels were in
     new_place_confirm_frames: int = int(os.getenv("NEW_PLACE_CONFIRM_FRAMES", "2"))
+    # rooms are learned as neighbours only if the robot got from one to the other this quickly (else it may have passed through others)
+    adjacency_max_gap_s: float = float(os.getenv("ADJACENCY_MAX_GAP_S", "60"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)
     store_images: bool = _bool("STORE_IMAGES", False)

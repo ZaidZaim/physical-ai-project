@@ -10,7 +10,11 @@ The robot answers "where am I?" before "what is here?". The same chair in the ki
   still has to be confirmed (only an empty memory turns its first view into a room). Measured on the real tour: this removed a false
   "Garage" (one frame of the stairs right after a restart); 3 frames instead of 2 lost a short bathroom visit, so the default is 2.
 - New places are created automatically (`Kitchen`, `Living Room`, ...). Rename, merge or pin one in the Places tab (or `/api/places/*`).
-- Moving A to B records an undirected `ADJACENT_TO` edge with a count: a learned topological map.
+- Moving A to B records an undirected `ADJACENT_TO` edge with a count: a learned topological map. Only a **direct, quick** move
+  counts: not when a frame on the way pointed at a third known room (a detour), and not after more than `ADJACENCY_MAX_GAP_S`
+  (60 s) without a frame of the old room (frames skipped as near-duplicates count as "still here"). Seen on the robot: driving
+  Bedroom 2 -> Living Room through the Dining Room taught a link that does not exist. The UI log says when a move is not learned.
+- Routes use links seen at least twice first; a route that needs a one-off link says it may be wrong.
 
 ## Objects and change
 - Object identity is scoped to a place, so look-alikes in different rooms stay separate.

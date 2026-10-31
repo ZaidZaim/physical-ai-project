@@ -198,6 +198,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 | `WATCH_INTERVAL_S` | `5` | seconds between analysed frames |
 | `ROBOT_NAME`, `DEFAULT_LOCATION` | `PuppyPi`, `Demo Area` | |
 | `AUTO_PLACE`, `PLACE_CONFIRM_FRAMES`, `NEW_PLACE_CONFIRM_FRAMES` | `true`, `2`, `2` | recognise rooms automatically; agreeing frames to confirm a move to a known room / a room never seen before |
+| `ADJACENCY_MAX_GAP_S` | `60` | a move between rooms teaches "these are neighbours" only if it took at most this long |
 | `MIN_CONFIDENCE`, `MISS_THRESHOLD`, `MIN_OVERLAP` | `0.5`, `3`, `0.5` | detection floor; misses before `possibly_gone`; view overlap that counts as evidence |
 | `CAMERA_FOV_DEG` | `70` | horizontal field of view, used for bearings |
 | `OBJECT_VOCAB`, `STRICT_VOCAB` | a common list, `false` | the labels to prefer (or allow only) |
@@ -207,7 +208,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 131 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
+uv run pytest                          # 137 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on

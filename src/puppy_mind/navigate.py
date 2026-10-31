@@ -47,7 +47,7 @@ def pick_target(candidates: list[dict], here: str | None) -> dict | None:
 
 
 def plan_go_to(target: dict | None, here: str | None, heading: float | None, bearing: float | None,
-               route: list[str] | None) -> Plan:
+               route: list[str] | None, weak_route: bool = False) -> Plan:
     """Decide what 'go to it' means right now. `bearing` must come from THIS visit to `here` (the heading frame resets on entry)."""
     if target is None:
         return Plan("not_found", "I have no memory of anything like that.")
@@ -59,8 +59,9 @@ def plan_go_to(target: dict | None, here: str | None, heading: float | None, bea
             return Plan("unknown_route", f"The {name} was last seen in {where}{caveat}. I don't know how {here or 'here'} connects to "
                                          f"{where} yet: drive me there and I can look for it.", target)
         hops = " -> ".join(route)
+        doubt = " Part of this route was only seen once, so it may be wrong." if weak_route else ""
         return Plan("route", f"The {name} was last seen in {where}{caveat}. I can't walk between rooms on my own (I have no obstacle "
-                             f"sensing), so please drive me: {hops}. Once I recognise {where}, ask again and I'll turn to it.",
+                             f"sensing), so please drive me: {hops}.{doubt} Once I recognise {where}, ask again and I'll turn to it.",
                     target, route=route)
     if heading is None:
         return Plan("no_heading", f"The {name} is here in {where}{caveat}, but I have no gyro heading right now, so I can't turn to it "
