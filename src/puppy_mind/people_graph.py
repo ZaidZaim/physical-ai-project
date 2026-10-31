@@ -4,9 +4,9 @@ Model (camelCase keys, every MERGE key has a uniqueness constraint; written by p
   (Person {personId,name,nameKey,role,function,company,email,useCase,familiarity,wantsFollowUp,wantsDemo,followedUp,notes,
            leadScore,leadStage,consentAt,firstMet,lastMet,meetCount})
   (Person)-[:WORKS_AT]->(Company {name})
-  (Person)-[:INTERESTED_IN]->(Topic {name})       what they want to learn about / build with
-  (Person)-[:ENJOYED]->(Topic)                    what they liked most at the event
-  (Person)-[:HAD]->(Encounter {id,ts,summary})-[:AT]->(Place)
+  (Person)-[:INTERESTED_IN]->(Theme {name})       what they want to learn about / build with
+  (Person)-[:ENJOYED]->(Theme)                    what they liked most at the event
+  (Person)-[:PARTICIPATED_IN]->(Encounter {id,ts,summary})-[:HELD_AT]->(Place)
 
 `PeopleGraph` is the Aura implementation (mixed into graph.Memory); `FakePeople` is the in-RAM twin for PUPPY_FAKE_MEMORY / tests.
 Both expose the same methods and return the same shapes (snake_case).
@@ -18,12 +18,12 @@ from typing import Any
 PERSON_CONSTRAINTS = [
     "CREATE CONSTRAINT person_person_id IF NOT EXISTS FOR (n:Person) REQUIRE n.personId IS UNIQUE",
     "CREATE CONSTRAINT company_name IF NOT EXISTS FOR (n:Company) REQUIRE n.name IS UNIQUE",
-    "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (n:Topic) REQUIRE n.name IS UNIQUE",
+    "CREATE CONSTRAINT theme_name IF NOT EXISTS FOR (n:Theme) REQUIRE n.name IS UNIQUE",
     "CREATE CONSTRAINT encounter_id IF NOT EXISTS FOR (n:Encounter) REQUIRE n.id IS UNIQUE",
     "CREATE INDEX person_name_key IF NOT EXISTS FOR (n:Person) ON (n.nameKey)",
     "CREATE INDEX person_lead_stage IF NOT EXISTS FOR (n:Person) ON (n.leadStage)",
 ]
-PEOPLE_LABELS = ("Encounter", "Topic", "Company", "Person")  # deletion order for reset()
+PEOPLE_LABELS = ("Encounter", "Theme", "Company", "Person")  # deletion order for reset()
 
 _SCALARS = {  # python key -> graph key
     "name": "name", "name_key": "nameKey", "role": "role", "function": "function", "company": "company", "email": "email",
@@ -37,7 +37,7 @@ _PERSON_RETURN = """
     coalesce(p.wantsDemo, false) AS wants_demo, coalesce(p.followedUp, false) AS followed_up, p.notes AS notes,
     coalesce(p.leadScore, 0) AS lead_score, coalesce(p.leadStage, 'cold') AS lead_stage, toString(p.firstMet) AS first_met,
     toString(p.lastMet) AS last_met, coalesce(p.meetCount, 0) AS meet_count,
-    [(p)-[:INTERESTED_IN]->(t:Topic) | t.name] AS interests, [(p)-[:ENJOYED]->(t:Topic) | t.name] AS enjoyed
+    [(p)-[:INTERESTED_IN]->(t:Theme) | t.name] AS interests, [(p)-[:ENJOYED]->(t:Theme) | t.name] AS enjoyed
 """
 
 
@@ -67,10 +67,10 @@ class PeopleGraph:
             MERGE (e:Encounter {id:$eid})
               ON CREATE SET e.ts = datetime($ts), p.meetCount = p.meetCount + 1
             SET e.summary = $summary
-            MERGE (p)-[:HAD]->(e)
+            MERGE (p)-[:PARTICIPATED_IN]->(e)
             WITH p, e
             OPTIONAL MATCH (pl:Place {name:$place})
-            FOREACH (_ IN CASE WHEN pl IS NULL THEN [] ELSE [1] END | MERGE (e)-[:AT]->(pl))
+            FOREACH (_ IN CASE WHEN pl IS NULL THEN [] ELSE [1] END | MERGE (e)-[:HELD_AT]->(pl))
             """,
             pid=person["person_id"], eid=encounter_id, ts=ts, props=props, summary=(summary or "")[:500], place=place,
         )
@@ -93,7 +93,7 @@ class PeopleGraph:
                     f"""
                     MATCH (p:Person {{personId:$pid}})
                     UNWIND $topics AS t
-                    MERGE (tp:Topic {{name:t}})
+                    MERGE (tp:Theme {{name:t}})
                     MERGE (p)-[r:{rel}]->(tp) ON CREATE SET r.since = datetime($ts)
                     """,
                     pid=person["person_id"], topics=topics, ts=ts,
@@ -107,8 +107,8 @@ class PeopleGraph:
         p = rows[0]
         p["encounters"] = self._read(
             """
-            MATCH (:Person {personId:$pid})-[:HAD]->(e:Encounter)
-            RETURN e.id AS id, toString(e.ts) AS ts, e.summary AS summary, head([(e)-[:AT]->(pl:Place) | pl.name]) AS place
+            MATCH (:Person {personId:$pid})-[:PARTICIPATED_IN]->(e:Encounter)
+            RETURN e.id AS id, toString(e.ts) AS ts, e.summary AS summary, head([(e)-[:HELD_AT]->(pl:Place) | pl.name]) AS place
             ORDER BY e.ts DESC LIMIT 20
             """, pid=person_id)
         return p
@@ -119,23 +119,23 @@ class PeopleGraph:
             MATCH (p:Person)
             WHERE p.personId IS NOT NULL AND ($stage IS NULL OR p.leadStage = $stage)
               AND ($q IS NULL OR toLower(coalesce(p.name,'') + ' ' + coalesce(p.company,'') + ' ' + coalesce(p.role,'')) CONTAINS $q
-                   OR any(t IN [(p)-[:INTERESTED_IN|ENJOYED]->(t:Topic) | t.name] WHERE t CONTAINS $q))
+                   OR any(t IN [(p)-[:INTERESTED_IN|ENJOYED]->(t:Theme) | t.name] WHERE t CONTAINS $q))
             RETURN {_PERSON_RETURN} ORDER BY p.leadScore DESC, p.lastMet DESC LIMIT 500
             """, stage=stage, q=(q or "").strip().lower() or None)
 
     def forget_person(self, person_id: str) -> bool:
-        """Erase a person and their encounters (the right to be forgotten). Topics and companies stay: they are not personal."""
+        """Erase a person and their encounters (the right to be forgotten). Themes and companies stay: they are not personal."""
         rows = self._write(
             """
             MATCH (p:Person {personId:$pid})
-            OPTIONAL MATCH (p)-[:HAD]->(e:Encounter)
+            OPTIONAL MATCH (p)-[:PARTICIPATED_IN]->(e:Encounter)
             WITH p, collect(e) AS es
             FOREACH (e IN es | DETACH DELETE e)
             DETACH DELETE p
             RETURN 1 AS done
             """, pid=person_id)
         self._write("MATCH (c:Company) WHERE NOT (c)<-[:WORKS_AT]-() DELETE c")
-        self._write("MATCH (t:Topic) WHERE NOT (t)<-[:INTERESTED_IN|ENJOYED]-() DELETE t")
+        self._write("MATCH (t:Theme) WHERE NOT (t)<-[:INTERESTED_IN|ENJOYED]-() DELETE t")
         return bool(rows)
 
     def set_followed_up(self, person_id: str, done: bool) -> bool:
@@ -149,7 +149,7 @@ class PeopleGraph:
             MATCH (p:Person) WHERE p.personId IS NOT NULL
             OPTIONAL MATCH (p)-[r:WORKS_AT|INTERESTED_IN|ENJOYED]->(x)
             RETURN p.personId AS pid, p.name AS name, coalesce(p.leadStage,'cold') AS stage, type(r) AS type,
-                   CASE WHEN x:Company THEN 'Company' WHEN x:Topic THEN 'Topic' END AS kind, x.name AS xname LIMIT 1500
+                   CASE WHEN x:Company THEN 'Company' WHEN x:Theme THEN 'Theme' END AS kind, x.name AS xname LIMIT 1500
             """):
             nodes.setdefault(r["pid"], {"id": r["pid"], "kind": "Person", "label": r["name"], "stage": r["stage"]})
             if r["xname"]:
@@ -233,7 +233,7 @@ class FakePeople:
         for p in self._people().values():
             nodes[p["person_id"]] = {"id": p["person_id"], "kind": "Person", "label": p.get("name"), "stage": p["lead_stage"]}
             targets = [("WORKS_AT", "Company", p["company"])] if p.get("company") else []
-            targets += [("INTERESTED_IN", "Topic", t) for t in p["interests"]] + [("ENJOYED", "Topic", t) for t in p["enjoyed"]]
+            targets += [("INTERESTED_IN", "Theme", t) for t in p["interests"]] + [("ENJOYED", "Theme", t) for t in p["enjoyed"]]
             for rel, kind, name in targets:
                 xid = f"{kind}:{name}"
                 nodes.setdefault(xid, {"id": xid, "kind": kind, "label": name})

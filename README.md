@@ -50,7 +50,7 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
-  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place; booth visitors: Person WORKS_AT Company, INTERESTED_IN and ENJOYED Theme, PARTICIPATED_IN Encounter HELD_AT Place" width="900">
 </picture>
 
 
@@ -60,6 +60,9 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `Place` | `placeId`, `name`, `roomType`, `visits` |
 | `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
 | `Session` · `Robot` | `id`, `startedAt` · `name` |
+| `Person` | `personId`, `name`, `role`, `function`, `company`, `email`, `useCase`, `familiarity`, `leadScore`, `leadStage`, `consentAt`, `firstMet`, `lastMet`, `meetCount` (only after a spoken yes) |
+| `Company` · `Theme` | `name` · `name` |
+| `Encounter` | `id`, `ts`, `summary` (one sentence, never a transcript) |
 
 | Relationship | Properties | Meaning |
 |---|---|---|
@@ -70,6 +73,13 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
 | `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
 | `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
+| `WORKS_AT` | | a visitor's company |
+| `INTERESTED_IN` · `ENJOYED` | `since` | what a visitor wants to learn about or build with · what they enjoyed most at the event |
+| `PARTICIPATED_IN` · `HELD_AT` | | a visitor took part in this conversation · where it took place |
+
+The ontology ([`ontology/puppy_pi.json`](ontology/puppy_pi.json)) uses NAMS's POLE+O types, and `puppy-mind nams-setup` sends that
+same file to NAMS. In Aura each type has its own label, so the app never shares nodes with NAMS: Agent is `Robot`, Location `Place`,
+Object `Item`, Organization `Company`, Topic `Theme` and Event `Encounter`. Person stays `Person`; the app's people carry a `personId`.
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
 constraints, no write-only edges and no supernodes ([review](docs/ONTOLOGY_REVIEW.md)). Startup migrates older data automatically.
@@ -209,7 +219,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 173 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, people + consent + API
+uv run pytest                          # 175 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, people + consent + API
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on

@@ -67,20 +67,37 @@ to the dog from about 1 m) and a higher `--threshold` in `puppy_voice.py` help t
 ```
 (Person {personId,name,role,function,company,email,useCase,familiarity,wantsFollowUp,wantsDemo,followedUp,
          leadScore,leadStage,consentAt,firstMet,lastMet,meetCount})
-(Person)-[:WORKS_AT]->(Company)      (Person)-[:INTERESTED_IN]->(Topic)      (Person)-[:ENJOYED]->(Topic)
-(Person)-[:HAD]->(Encounter {id,ts,summary})-[:AT]->(Place)
+(Person)-[:WORKS_AT]->(Company)      (Person)-[:INTERESTED_IN]->(Theme)      (Person)-[:ENJOYED]->(Theme)
+(Person)-[:PARTICIPATED_IN]->(Encounter {id,ts,summary})-[:HELD_AT]->(Place)
 ```
 
-Topics and companies are shared nodes, so you can ask the graph things a CRM cannot: *who else is interested in GraphRAG at fintechs,
+**Same vocabulary as NAMS.** The ontology file ([`ontology/puppy_pi.json`](../ontology/puppy_pi.json)) names these with NAMS's POLE+O
+types, and `puppy-mind nams-setup` sends that file to NAMS:
+
+| Ontology / NAMS type | POLE+O | Aura label | Why a different label |
+|---|---|---|---|
+| Person | PERSON | `Person` | same label; the app's people carry a `personId`, NAMS's never do, and every app query checks it |
+| Organization | ORGANIZATION | `Company` | NAMS writes an entity's type as a label in the same database; sharing a label would mix the two |
+| Topic | OBJECT | `Theme` | as above, and our unique `name` would reject NAMS's `Topic` writes |
+| Event | EVENT | `Encounter` | as above |
+
+That's the same rule the rest of the model follows (Location is `Place`, Object `Item`, Agent `Robot`). The ontology test checks that
+every label and relationship `people_graph.py` writes is declared, and that no Aura label equals a NAMS type name.
+
+To give NAMS the new types, run `uv run puppy-mind nams-setup`. That creates a new ontology version and doesn't switch your workspace
+to it; add `--activate` once you're happy, since the active ontology decides how NAMS extracts entities from every conversation.
+People themselves are **not** copied into NAMS: they stay in one place, which `forget_me` erases completely.
+
+Themes and companies are shared nodes, so you can ask the graph things a CRM can't: *who else is interested in GraphRAG at fintechs,
 and who did the robot meet in the same room as Ana?* The Place link ties people to the spatial memory the robot already keeps.
 
 ```cypher
 // the hot leads and what they care about
-MATCH (p:Person {leadStage:'hot'}) OPTIONAL MATCH (p)-[:WORKS_AT]->(c) OPTIONAL MATCH (p)-[:INTERESTED_IN]->(t)
+MATCH (p:Person {leadStage:'hot'}) OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company) OPTIONAL MATCH (p)-[:INTERESTED_IN]->(t:Theme)
 RETURN p.name, c.name, collect(t.name) AS interests ORDER BY p.leadScore DESC
 
 // people who share an interest (introductions, follow-up clusters)
-MATCH (a:Person)-[:INTERESTED_IN]->(t:Topic)<-[:INTERESTED_IN]-(b:Person) WHERE a.personId < b.personId
+MATCH (a:Person)-[:INTERESTED_IN]->(t:Theme)<-[:INTERESTED_IN]-(b:Person) WHERE a.personId < b.personId
 RETURN t.name, a.name, b.name
 ```
 

@@ -242,7 +242,7 @@ class FakeMemory(FakePeople):
         return {"Item": len(self.objs), "Place": len({o["loc"] for o in self.objs.values()}), "Robot": 1, "Sighting": len(self.obs),
                 "Session": 1, "Dialogue": 1 if self.msgs else 0, "Utterance": len(self.msgs), "ReasoningStep": len(self.steps),
                 "Lookup": sum(len(s["tools"]) for s in self.steps),
-                "Person": len(self._people()), "Topic": len({t for p in self._people().values() for t in p["interests"] + p["enjoyed"]}),
+                "Person": len(self._people()), "Theme": len({t for p in self._people().values() for t in p["interests"] + p["enjoyed"]}),
                 "Company": len({p["company"] for p in self._people().values() if p.get("company")}), "Encounter": self.people_counts()["encounters"]}
 
     def rel_counts(self):

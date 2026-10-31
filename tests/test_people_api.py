@@ -41,7 +41,7 @@ def test_people_endpoints_roundtrip_followup_and_forget(client):
     assert client.get("/api/people", params={"q": "nobody"}).json()["people"] == []
     assert client.get(f"/api/people/{pid}").json()["encounters"][0]["place"] == "Booth"
     g = client.get("/api/people/graph").json()
-    assert {n["kind"] for n in g["nodes"]} == {"Person", "Company", "Topic"}
+    assert {n["kind"] for n in g["nodes"]} == {"Person", "Company", "Theme"}
     assert client.post(f"/api/people/{pid}/followup", json={"done": True}).status_code == 200
     assert client.get(f"/api/people/{pid}").json()["followed_up"] is True
     assert client.delete(f"/api/people/{pid}").status_code == 200

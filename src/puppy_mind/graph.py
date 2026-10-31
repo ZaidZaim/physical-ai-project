@@ -1081,7 +1081,7 @@ class Memory(PeopleGraph):
                    count { (:Sighting) } AS Sighting, count { (s:Session) WHERE NOT s:Entity } AS Session,
                    count { (:Dialogue) } AS Dialogue, count { (:Utterance) } AS Utterance,
                    count { (:ReasoningStep) } AS ReasoningStep, count { (:Lookup) } AS Lookup,
-                   count { (p:Person) WHERE p.personId IS NOT NULL } AS Person, count { (:Topic) } AS Topic, count { (:Company) } AS Company,
+                   count { (p:Person) WHERE p.personId IS NOT NULL } AS Person, count { (:Theme) } AS Theme, count { (:Company) } AS Company,
                    count { (:Encounter) } AS Encounter
             """
         )[0]

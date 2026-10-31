@@ -637,7 +637,7 @@ async function loadPeople() {
     + `<td>${esc(p.interests.slice(0, 3).join(', '))}</td><td>${esc((p.last_met || '').slice(5, 16).replace('T', ' '))}</td></tr>`).join('') + '</table>'
     : '<div style="padding:18px;color:var(--mute);font-size:12px">No one yet. When the robot talks to someone and they say yes to being remembered, they show up here. Try the box below.</div>';
   document.querySelectorAll('#plist tr[data-id]').forEach(r => r.onclick = () => showPerson(r.dataset.id));
-  const g = await papi('/api/people/graph'), C = { Person:css('--accent'), Company:css('--long'), Topic:css('--reasoning') };
+  const g = await papi('/api/people/graph'), C = { Person:css('--accent'), Company:css('--long'), Theme:css('--reasoning') };
   const ST = { hot:css('--bad'), warm:css('--miss'), cold:css('--gone') };
   const data = { nodes:new vis.DataSet(g.nodes.map(n => ({ id:n.id, label:n.label, shape:n.kind === 'Person' ? 'dot' : 'box', size:12, color:{ background: n.kind === 'Person' ? ST[n.stage] : C[n.kind], border: C[n.kind] }, font:{ size:10, color:css('--ink'), face:FONT } }))),
     edges:new vis.DataSet(g.edges.map(e => ({ from:e.source, to:e.target, label:e.type === 'ENJOYED' ? 'enjoyed' : e.type === 'WORKS_AT' ? 'works at' : '', dashes:e.type === 'ENJOYED', arrows:'to', color:{ color:css('--mute') }, font:{ size:8, color:css('--mute'), strokeWidth:0 } }))) };
@@ -695,7 +695,7 @@ async function loadTimeline() {
 
 /* ---------- ontology ---------- */
 let ontoNet = null;
-const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Location', 'Object', 'Person'] },
+const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Object', 'Location', 'Event', 'Person', 'Organization', 'Topic'] },
                 short:{ y:60, label:'SHORT-TERM MEMORY: what is happening', order:['Session', 'Sighting', 'Dialogue', 'Utterance'] },
                 reasoning:{ y:270, label:'REASONING MEMORY: how answers were reached', order:['ReasoningStep', 'Lookup'] } };
 async function loadOntology() {
