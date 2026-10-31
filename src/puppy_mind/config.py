@@ -74,6 +74,11 @@ class Settings:
     # the robot only starts a conversation when it hears this; follow-ups need no wake word for WAKE_WINDOW_S. Empty: no wake word.
     wake_word: str = os.getenv("WAKE_WORD", "Hey PuppyPi")
     wake_window_s: float = float(os.getenv("WAKE_WINDOW_S", "45"))
+    # on "Hey PuppyPi": this trick first, then the robot looks up at the visitor by ENGAGED_LOOK_UP_DEG for the conversation, and back
+    # to IDLE_LOOK_UP_DEG when it goes quiet. Hiwonder's pose node rejects more than 31 deg of pitch, so it is capped at 30.
+    wake_action: str = os.getenv("WAKE_ACTION", "boxing")
+    engaged_look_up_deg: float = float(os.getenv("ENGAGED_LOOK_UP_DEG", "25"))
+    idle_look_up_deg: float = float(os.getenv("IDLE_LOOK_UP_DEG", "0"))
     gesture_cooldown_s: float = float(os.getenv("GESTURE_COOLDOWN_S", "60"))
     max_gestures_per_hour: int = int(os.getenv("MAX_GESTURES_PER_HOUR", "30"))
     encounter_idle_s: float = float(os.getenv("ENCOUNTER_IDLE_S", "300"))

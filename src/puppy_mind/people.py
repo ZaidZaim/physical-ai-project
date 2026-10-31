@@ -369,6 +369,7 @@ class PeopleService:
         self._recent_greeting: tuple[float, str, dict | None] | None = None  # (when, text, badge) for the next conversation to pick up
         self._greet_times: list[float] = []
         self._skip_note = -1e9  # when the UI was last told why a person in view was not greeted
+        self.active_fn: Callable[[], bool] = lambda: True  # set by Brain: greet only while someone has the People tab open
         self.look_fn = look_fn if look_fn is not None else (self._look if client is not None else None)
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
         # after each answer with consent, facts are pulled from what the visitor said (the model alone saved only at the moment of consent)
@@ -509,6 +510,11 @@ class PeopleService:
         return {"error": f"unknown tool {name}"}
 
     # ---- wake word (robot microphone only: Hold to talk and typing are addressed to the robot by definition)
+    def conversation_active(self) -> bool:
+        """Someone talked with the robot less than WAKE_WINDOW_S ago."""
+        now = time.monotonic()
+        return any(now - e.last < self.s.wake_window_s for e in list(self.encounters.values()) if e.messages)
+
     def addressed(self, text: str, encounter_id: str | None) -> tuple[bool, str | None]:
         """Should the robot answer what its microphone heard? Yes if it contains the wake word, or a conversation is open (the
         last exchange or a greeting less than WAKE_WINDOW_S ago). Returns (answer?, encounter id to use): after a closed
@@ -629,7 +635,7 @@ class PeopleService:
         only then one vision call to see WHO is there (look_fn) and the crowd policy (choose_greeting) picks whom to greet.
         Runs in the background. Returns True if a greeting attempt was started."""
         s = self.s
-        if not s.people_greet or not any(o.label == "person" and o.confidence >= s.min_confidence for o in scene.objects):
+        if not s.people_greet or not self.active_fn() or not any(o.label == "person" and o.confidence >= s.min_confidence for o in scene.objects):
             return False
         now = time.monotonic()
         self._greet_times = [t for t in self._greet_times if now - t < 3600]

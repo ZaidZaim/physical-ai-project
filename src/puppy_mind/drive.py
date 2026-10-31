@@ -23,7 +23,7 @@ SETTLE_S = 2.0  # after motion stops, the camera is still settling / viewpoint j
 # Hiwonder's stock action groups (ros2 branch, large_models/action.py), run by /puppy_control/runActionGroup as "<name>.d6ac".
 # Only the friendly, on-the-spot ones: no push-ups, kicks or moonwalk at a crowded booth.
 TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod")
-MAX_LOOK_UP_DEG = 20.0  # Hiwonder's pose node accepts |pitch| <= 31 deg; its own "look down" pose is -15 deg
+MAX_LOOK_UP_DEG = 30.0  # Hiwonder's pose node rejects |pitch| > 31 deg; its own "look down" pose is -15 deg
 
 
 def _clamp(v: float) -> float:

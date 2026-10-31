@@ -436,19 +436,35 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
+    waker = None
     if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)
+        if not brain.listening:
+            return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the People tab)")})
         ok, encounter_id = brain.people.addressed(text, encounter_id)
         if not ok:  # what bystanders said is not echoed anywhere
             return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
+        if encounter_id is None:  # a new conversation: the trick and the look up happen while the reply is being prepared
+            waker = brain.on_wake()
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))
-    return Response(brain.voice.speak(r["reply"]), media_type="audio/wav",
+    reply_audio = brain.voice.speak(r["reply"])
+    if waker:
+        waker.join(timeout=brain.drive.action_busy_s + 5)  # speak once it has finished the trick and looks at the visitor
+    return Response(reply_audio, media_type="audio/wav",
                     headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600])})
+
+
+@app.post("/api/listen")
+def listen(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The People tab pings this while it is open: the robot listens for its wake word (and greets) only then."""
+    _local_auth(request, x_brain_token, token)
+    return brain.listen_ping()
 
 
 @app.get("/api/voice/next")
 def voice_next(x_brain_token: str | None = Header(None)):
     """Polled by the robot: a greeting it should say (WAV), or 204."""
     _robot_auth(x_brain_token)
+    brain.people_tick()  # the robot polls every second: a good clock for levelling the head after a conversation
     it = brain.people.outbox.next()
     if not it:
         return Response(status_code=204)

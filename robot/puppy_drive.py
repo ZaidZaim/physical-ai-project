@@ -35,7 +35,7 @@ GAITS = {  # "stock" = the robot's own default (puppy.py GaitConfigFast + Stand)
 }
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod")  # only these action groups are ever run, whatever the brain sends
-MAX_PITCH = math.radians(20)  # body pitch cap, well inside the 31 deg the pose node accepts
+MAX_PITCH = math.radians(30)  # body pitch cap, inside the 31 deg the pose node accepts
 
 
 def fetch(brain, token, applied, timeout=0.6):

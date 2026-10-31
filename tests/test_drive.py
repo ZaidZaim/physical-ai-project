@@ -80,8 +80,8 @@ def test_tricks_need_booth_mode_never_run_while_moving_block_driving_and_are_rat
     d = DriveState()
     assert d.request_action("boxing") == {"ok": False, "reason": "booth mode is off"}
     assert d.current()["pitch"] == 0.0
-    d.set_booth(True, look_up_deg=45)  # clamped: Hiwonder's pose node accepts at most 31 deg
-    assert math.isclose(d.current()["pitch"], math.radians(20))
+    d.set_booth(True, look_up_deg=45)  # clamped to 30: Hiwonder's pose node rejects more than 31 deg
+    assert math.isclose(d.current()["pitch"], math.radians(30))
     assert d.request_action("push-up01")["reason"] == "unknown trick"
     d.arm(True)
     d.command(1, 0, 0)

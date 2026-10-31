@@ -2,6 +2,7 @@
 from types import SimpleNamespace as NS
 
 import pytest
+from urllib.parse import unquote
 from fastapi.testclient import TestClient
 
 from puppy_mind import server
@@ -28,6 +29,7 @@ def client(monkeypatch):
     with TestClient(server.app, client=("127.0.0.1", 5000)) as c:
         server.brain.people.client = FakeChat([])
         server.brain.voice = FakeVoice()
+        server.brain.drive.action_busy_s = 0.05  # the wake trick finishes at once in tests
         yield c
 
 
@@ -81,6 +83,7 @@ def test_converse_endpoint(client):
 
 
 def test_voice_turn_returns_audio_and_headers_and_204_on_silence(client):
+    client.post("/api/listen")  # the People tab is open
     server.brain.people.client = FakeChat([["Hello there"]])
     r = client.post("/api/voice/turn", files={"file": ("s.wav", b"RIFF" + b"\0" * 60 + b"Hey PuppyPi, hello robot", "audio/wav")})
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content == b"RIFFfake-wav:Hello there"
@@ -186,6 +189,10 @@ def test_recordings_made_while_the_robot_moves_are_dropped_without_transcribing(
 
 
 def test_the_robot_answers_only_after_hey_puppypi_then_follow_ups_need_none(client):
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, wake_action="")  # about the wake word, not the trick
+    client.post("/api/listen")  # the People tab is open
     server.brain.people.client = FakeChat([["Hi! What would you like to know?"], ["GraphRAG uses a graph."]])
     post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
                                               data={"encounter_id": enc} if enc else {})
@@ -200,6 +207,10 @@ def test_the_robot_answers_only_after_hey_puppypi_then_follow_ups_need_none(clie
 
 
 def test_after_the_conversation_went_quiet_the_wake_word_starts_a_fresh_one(client):
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, wake_action="")  # about the wake word, not the trick
+    client.post("/api/listen")  # the People tab is open
     server.brain.people.client = FakeChat([["Hi!"], ["Hello again, who are you?"]])
     post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
                                               data={"encounter_id": enc} if enc else {})
@@ -222,3 +233,33 @@ def test_next_step_endpoint_and_export(client):
     assert client.get(f"/api/people/{pid}").json()["next_step"] == "Book a demo with Ana"
     assert "next_step" in client.get("/api/people/export.csv").text.splitlines()[0]
     assert client.get("/api/people/graph").json()["nodes"][0].get("score") is not None
+
+
+def test_the_robot_listens_only_while_the_people_tab_is_open(client):
+    server.brain.people.client = FakeChat([["Hi!"]])
+    post = lambda said: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")})
+    r = post("Hey PuppyPi")
+    assert r.status_code == 204 and "not listening" in unquote(r.headers["x-heard"])
+    st = client.post("/api/listen").json()
+    assert st["state"] == "listening" and st["wake_word"] == "Hey PuppyPi" and server.brain.drive.booth
+    server.brain._listen_until = 0  # the tab was closed 15 s ago
+    client.get("/api/voice/next")  # the robot's next poll
+    assert not server.brain.drive.booth  # booth mode (tricks, tilt) is off again
+
+
+def test_hey_puppypi_does_the_trick_then_looks_up_then_levels_when_quiet(client):
+    import math
+
+    server.brain.people.client = FakeChat([["Hi! What would you like to know?"]])
+    client.post("/api/listen")
+    assert server.brain.drive.current()["pitch"] == 0.0
+    r = client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + b"Hey PuppyPi!", "audio/wav")})
+    assert r.status_code == 200
+    d = server.brain.drive.current()
+    assert d["action"] == "boxing" and d["action_seq"] == 1  # the trick came first
+    assert math.isclose(d["pitch"], math.radians(25))  # then it looks up at the visitor, before it speaks
+    assert client.post("/api/listen").json()["state"] == "conversation"
+    for e in server.brain.people.encounters.values():
+        e.last -= 999  # the conversation went quiet
+    client.get("/api/voice/next")
+    assert server.brain.drive.current()["pitch"] == 0.0 and client.post("/api/listen").json()["state"] == "listening"
