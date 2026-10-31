@@ -5,10 +5,10 @@ brain, and plays the reply (and any greeting the brain wants to say) through the
 Stdlib only; uses ALSA's `arecord` and `aplay` (present on the Pi image). The Pi does no speech recognition or synthesis: the laptop
 does the understanding (transcription, the Graph Wizard conversation, text-to-speech) and returns a WAV to play.
 
-Usage on the robot:
-  arecord -l ; aplay -l                       # find the WonderEcho Pro card, e.g. "card 1: ... USB Audio"
-  python3 puppy_voice.py --brain http://<laptop-ip>:8000 --mic plughw:1,0 --speaker plughw:1,0
-  python3 puppy_voice.py --brain http://<laptop-ip>:8000 --test-mic       # prints the loudness it hears: tune --threshold
+Usage on the robot (it finds the WonderEcho Pro and measures the room noise by itself):
+  python3 puppy_voice.py --brain http://<laptop-ip>:8000
+  python3 puppy_voice.py --brain http://<laptop-ip>:8000 --test-mic       # prints the loudness it hears
+  Override if needed: --mic plughw:1,0 --speaker plughw:1,0 --threshold 600   (cards: arecord -l ; aplay -l)
 
 The robot only speaks when the brain tells it to (a greeting, or the answer to someone who just spoke) and it never listens while it
 is talking. Audio leaves the robot only when someone speaks: nothing is recorded to disk.
@@ -17,6 +17,7 @@ import argparse
 import array
 import io
 import json
+import re
 import subprocess
 import threading
 import time
@@ -26,6 +27,29 @@ import uuid
 import wave
 
 RATE, CHUNK_S = 16000, 0.03
+PREFER = re.compile(r"wonder|echo|hiwonder|usb|uac", re.I)  # the WonderEcho Pro is a USB sound card
+SKIP = re.compile(r"bcm2835|vc4|hdmi|headphones", re.I)       # the Pi's own outputs (no microphone, not the robot speaker)
+
+
+def pick_card(listing):
+    """'plughw:N,D' for the WonderEcho Pro (or another USB sound card) in `arecord -l` / `aplay -l` output, else None."""
+    cards = re.findall(r"^card (\d+): ([^\n]*?), device (\d+):", listing or "", re.M)
+    good = [c for c in cards if PREFER.search(c[1])] or [c for c in cards if not SKIP.search(c[1])]
+    return "plughw:%s,%s" % (good[0][0], good[0][2]) if good else None
+
+
+def find_device(tool):
+    try:
+        out = subprocess.run([tool, "-l"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    return pick_card(out)
+
+
+def auto_threshold(levels):
+    """Speech threshold from a couple of seconds of room noise: well above the noise, never absurdly low."""
+    quiet = sorted(levels)[int(len(levels) * 0.9)] if levels else 0.0
+    return max(300.0, quiet * 3.0)
 
 
 def rms(buf):
@@ -98,6 +122,16 @@ class Voice:
         n = int(RATE * CHUNK_S) * 2
         floor, speech, quiet, started = 0.0, bytearray(), 0, False
         end_quiet = int(self.a.silence / CHUNK_S)
+        if self.a.threshold is None and not self.a.test_mic:  # measure the room first: stay quiet for two seconds
+            print("Measuring room noise for 2 seconds: please stay quiet...")
+            levels = []
+            for _ in range(int(2.0 / CHUNK_S)):
+                b = mic.stdout.read(n)
+                if not b or len(b) < n:
+                    raise SystemExit("microphone stopped: check --mic (arecord -l)")
+                levels.append(rms(b))
+            self.a.threshold = auto_threshold(levels)
+            print("Speech threshold set to %.0f (room noise ~%.0f). Ready: talk to me!" % (self.a.threshold, max(levels) if levels else 0))
         while True:
             buf = mic.stdout.read(n)
             if not buf or len(buf) < n:
@@ -141,14 +175,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--brain", required=True)
     ap.add_argument("--token", default="")
-    ap.add_argument("--mic", default="default", help="ALSA capture device, e.g. plughw:1,0")
-    ap.add_argument("--speaker", default="default", help="ALSA playback device, e.g. plughw:1,0")
-    ap.add_argument("--threshold", type=float, default=600.0, help="loudness (16-bit RMS) that counts as speech; see --test-mic")
+    ap.add_argument("--mic", default="auto", help="ALSA capture device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
+    ap.add_argument("--speaker", default="auto", help="ALSA playback device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
+    ap.add_argument("--threshold", type=float, default=None, help="loudness (16-bit RMS) that counts as speech (default: measured at start)")
     ap.add_argument("--silence", type=float, default=0.9, help="seconds of quiet that end a sentence")
     ap.add_argument("--max-s", type=float, default=15.0, help="longest single utterance")
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")
     a = ap.parse_args()
+    a.brain = a.brain.rstrip("/")
+    for name, tool in (("mic", "arecord"), ("speaker", "aplay")):
+        if getattr(a, name) == "auto":
+            dev = find_device(tool)
+            setattr(a, name, dev or "default")
+            print("%s: %s" % (name, dev or "default (no USB sound card found: is the WonderEcho Pro plugged in? see `%s -l`)" % tool))
+    try:  # can the robot reach the laptop at all? (Windows Firewall blocks it on a Public network unless a rule allows it)
+        get(a.brain, "/api/booth", a.token).read()
+        print("laptop reachable:", a.brain)
+    except Exception as e:
+        raise SystemExit("cannot reach the laptop at %s (%s): is the app running there, and does the Windows Firewall allow port 8000?" % (a.brain, e))
     v = Voice(a)
     if not a.test_mic:
         threading.Thread(target=v.greetings, daemon=True).start()
