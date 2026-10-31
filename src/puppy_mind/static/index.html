@@ -131,7 +131,7 @@
   .stage.hot { color:var(--bad) } .stage.warm { color:var(--miss) } .stage.cold { color:var(--mute) }
   #ptalk { grid-column:1 / span 2; border-top:1px solid var(--line); padding:8px 14px; display:flex; flex-direction:column; gap:6px }
   #ptalklog { max-height:110px; overflow:auto; font-size:12px } #ptalklog div { padding:2px 0 } #ptalklog .you { color:var(--mute) }
-  #ptalkf { display:flex; gap:6px } #ptalkf input { flex:1 }
+  #ptalkf { display:flex; gap:6px } #ptalkf input { flex:1 } #ptalkmic.rec { background:var(--bad); color:#fff; border-color:var(--bad) }
 
   /* ---- right: ask + activity */
   .askhead { padding:12px 14px 6px } .askhead p { margin:5px 0 0; color:var(--mute); font-size:11px }
@@ -266,7 +266,7 @@
         <div id="ptalk">
           <div class="lbl"><span>Talk to the Graph Wizard (typed; the robot uses the same brain by voice)</span><button class="sm" id="ptalknew">New visitor</button></div>
           <div id="ptalklog"></div>
-          <form id="ptalkf"><input type="text" id="ptalkq" placeholder="Say hello, or ask about Neo4j, GenAI, GraphRAG" autocomplete="off"><button class="pri">Say</button></form>
+          <form id="ptalkf"><button type="button" id="ptalkmic" title="Hold to speak with your computer's microphone, release to send. The reply is spoken (needs Speak here) and works like the robot's own ears.">Hold to talk</button><input type="text" id="ptalkq" placeholder="…or type: say hello, or ask about Neo4j, GenAI, GraphRAG" autocomplete="off"><button class="pri">Say</button></form>
         </div>
       </div>
     </div>
@@ -693,6 +693,44 @@ $('#trickgo').onclick = async () => {
 $('#pstage').onchange = () => loadPeople(); $('#prefresh').onclick = () => loadPeople().catch(() => {});
 let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer = setTimeout(() => loadPeople().catch(() => {}), 250); };
 $('#ptalknew').onclick = () => { encId = null; $('#ptalklog').innerHTML = ''; };
+/* Hold to talk: the computer's microphone stands in for the robot's ears (same transcription and Wizard as /api/voice/turn) */
+let micRec = null, micChunks = [], micStream = null;
+async function micStart(e) {
+  e.preventDefault();
+  if (micRec) return;
+  try { micStream = micStream || await navigator.mediaDevices.getUserMedia({ audio:true }); }
+  catch (err) { log('bad', 'microphone blocked: allow it for this page'); return; }
+  micChunks = [];
+  micRec = new MediaRecorder(micStream);
+  micRec.ondataavailable = ev => ev.data.size && micChunks.push(ev.data);
+  micRec.onstop = micSend;
+  micRec.start();
+  $('#ptalkmic').classList.add('rec'); $('#ptalkmic').textContent = 'Listening… release to send';
+}
+function micStop() { if (micRec && micRec.state === 'recording') micRec.stop(); }
+async function micSend() {
+  const type = micRec.mimeType || 'audio/webm', ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'mp4' : 'webm';
+  micRec = null;
+  $('#ptalkmic').classList.remove('rec'); $('#ptalkmic').textContent = 'Hold to talk';
+  const blob = new Blob(micChunks, { type }), lg = $('#ptalklog');
+  if (blob.size < 2000) { log('miss', 'too short: hold the button while you speak'); return; }
+  const fd = new FormData(); fd.append('file', blob, 'speech.' + ext); if (encId) fd.append('encounter_id', encId);
+  lg.insertAdjacentHTML('beforeend', '<div class="you" id="ptalkwait">You: …</div>'); lg.scrollTop = lg.scrollHeight;
+  try {
+    const r = await fetch('/api/voice/turn', { method:'POST', body:fd, headers: PTOK ? { 'X-Brain-Token': PTOK } : {} });
+    const wait = $('#ptalkwait'); if (wait) wait.removeAttribute('id');
+    if (r.status === 204) { if (wait) wait.textContent = 'You: (nothing understood, try again)'; return; }
+    if (!r.ok) throw new Error(await r.text());
+    encId = r.headers.get('X-Encounter') || encId;
+    if (wait) wait.textContent = 'You: ' + decodeURIComponent(r.headers.get('X-Heard') || '');
+    lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(decodeURIComponent(r.headers.get('X-Reply') || ''))}</div>`); lg.scrollTop = lg.scrollHeight;
+    const url = URL.createObjectURL(await r.blob()), a = new Audio(url);  // you spoke, so the answer is always spoken
+    speakQ = speakQ.then(() => new Promise(res => { a.onended = a.onerror = res; a.play().catch(res); })).then(() => URL.revokeObjectURL(url));
+    loadPeople().catch(() => {});
+  } catch (err) { let m = err.message; try { m = JSON.parse(m).detail || m; } catch (_) {} lg.insertAdjacentHTML('beforeend', `<div style="color:var(--bad)">${esc(m)}</div>`); }
+}
+$('#ptalkmic').addEventListener('pointerdown', micStart);
+['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => $('#ptalkmic').addEventListener(ev, micStop));
 $('#ptalkf').onsubmit = async e => {
   e.preventDefault(); const q = $('#ptalkq').value.trim(); if (!q) return; $('#ptalkq').value = '';
   const lg = $('#ptalklog'); lg.insertAdjacentHTML('beforeend', `<div class="you">You: ${esc(q)}</div>`); lg.scrollTop = lg.scrollHeight;

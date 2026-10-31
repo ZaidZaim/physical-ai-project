@@ -420,10 +420,11 @@ def converse(body: Say, request: Request, x_brain_token: str | None = Header(Non
 
 @app.post("/api/voice/turn")
 def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None), x_brain_token: str | None = Header(None)):
-    """The robot posts what its microphone heard (WAV); the reply comes back as WAV to play. 204 when nothing intelligible was said."""
+    """The robot (WAV) or the UI's Hold to talk (WebM) posts what its microphone heard; the reply comes back as WAV to play.
+    204 when nothing intelligible was said."""
     _robot_auth(x_brain_token)
     _need_voice()
-    text = brain.voice.transcribe(file.file.read())
+    text = brain.voice.transcribe(file.file.read(), file.filename or "speech.wav")  # the extension tells the model the format
     if len(text) < 2:
         return Response(status_code=204)
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))

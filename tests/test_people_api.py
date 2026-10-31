@@ -10,7 +10,11 @@ from tests.test_people import FakeChat, call
 
 
 class FakeVoice:
-    def transcribe(self, audio):
+    def __init__(self):
+        self.filenames = []
+
+    def transcribe(self, audio, filename="speech.wav"):
+        self.filenames.append(filename)
         return audio.decode(errors="ignore")[-40:].strip() if len(audio) > 44 else ""
 
     def speak(self, text):
@@ -151,3 +155,9 @@ def test_speak_here_endpoint_returns_wav_and_is_local_only(client, monkeypatch):
     with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
         server.brain.voice = FakeVoice()
         assert c.post("/api/voice/say", json={"text": "hi"}).status_code == 403
+
+
+def test_hold_to_talk_webm_reaches_transcription_with_its_format(client):
+    server.brain.people.client = FakeChat([["Hi! What's your name?"]])
+    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"hello robot", "audio/webm")})
+    assert r.status_code == 200 and server.brain.voice.filenames[-1] == "speech.webm"
