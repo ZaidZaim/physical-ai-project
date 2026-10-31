@@ -113,3 +113,33 @@ def test_booth_controls_are_local_only(monkeypatch):
     with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
         assert c.post("/api/booth", json={"on": True}).status_code == 403
         assert c.post("/api/gesture", json={"name": "wave"}).status_code == 403
+
+
+def test_aura_people_queries_never_pass_a_parameter_named_like_the_query_helper_argument():
+    """The Aura implementation calls Memory._read(q, **params): a Cypher parameter named `q` crashed /api/people on the real
+    database (the in-RAM twin has no such helper, so the other tests could not see it). Drive every method through the same
+    helper signature."""
+    from puppy_mind.people_graph import PeopleGraph
+
+    class Stub(PeopleGraph):
+        def __init__(self):
+            self.calls = []
+
+        def _read(self, q, **p):
+            self.calls.append(p)
+            return [{"people": 0, "hot": 0, "warm": 0, "encounters": 0}] if "count {" in q else []
+
+        _write = _read
+
+    s = Stub()
+    s.list_people("hot", "graph")
+    s.list_people()
+    s.find_people("ana")
+    s.get_person("psn-1")
+    s.people_graph()
+    s.people_counts()
+    s.set_followed_up("psn-1", True)
+    s.forget_person("psn-1")
+    s.save_person({"person_id": "psn-1", "name": "Ana", "company": "Acme", "interests": ["x"], "enjoyed": ["y"]},
+                  encounter_id="e", place="Booth", summary="", ts="2026-10-31T10:00:00+00:00")
+    assert s.calls and all("q" not in p for p in s.calls)

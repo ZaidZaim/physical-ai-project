@@ -118,10 +118,10 @@ class PeopleGraph:
             f"""
             MATCH (p:Person)
             WHERE p.personId IS NOT NULL AND ($stage IS NULL OR p.leadStage = $stage)
-              AND ($q IS NULL OR toLower(coalesce(p.name,'') + ' ' + coalesce(p.company,'') + ' ' + coalesce(p.role,'')) CONTAINS $q
-                   OR any(t IN [(p)-[:INTERESTED_IN|ENJOYED]->(t:Theme) | t.name] WHERE t CONTAINS $q))
+              AND ($search IS NULL OR toLower(coalesce(p.name,'') + ' ' + coalesce(p.company,'') + ' ' + coalesce(p.role,'')) CONTAINS $search
+                   OR any(t IN [(p)-[:INTERESTED_IN|ENJOYED]->(t:Theme) | t.name] WHERE t CONTAINS $search))
             RETURN {_PERSON_RETURN} ORDER BY p.leadScore DESC, p.lastMet DESC LIMIT 500
-            """, stage=stage, q=(q or "").strip().lower() or None)
+            """, stage=stage, search=(q or "").strip().lower() or None)
 
     def forget_person(self, person_id: str) -> bool:
         """Erase a person and their encounters (the right to be forgotten). Themes and companies stay: they are not personal."""
