@@ -26,6 +26,7 @@ from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
+from .people import PeopleService
 from .sources import FolderSource, FrameSource, ahash, hamming
 from .tour import TourRecorder
 
@@ -120,6 +121,16 @@ class Brain:
             self.agent = Agent(self.s, self.mem, self.nams)
             self.agent.place_fn = self.place_info
             self.agent.go_fn = self.go_to
+        # People at the booth: talk, greet, remember (only after a spoken yes). Works without OpenAI for listing/greeting text only.
+        self.voice = None
+        self.drive.set_booth(self.s.booth_mode, self.s.look_up_deg)
+        self.drive.gesture_cooldown_s, self.drive.max_gestures_per_hour = self.s.gesture_cooldown_s, self.s.max_gestures_per_hour
+        self.people = PeopleService(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
+                                    gesture_fn=self.gesture)
+        if self.agent:
+            from .voice import Voice
+
+            self.voice = Voice(self.s, self.agent.client)
 
     @property
     def fps(self) -> float:
@@ -240,6 +251,10 @@ class Brain:
             "overlap": res.get("overlap"), "misses_counted": res.get("misses_counted"), "room_type": scene.room_type,
             "moved_hypotheses": res.get("moved_hypotheses", []), "place": self.place_info(),
         })
+        try:
+            self.people.on_view(scene, jpeg)  # a person in view: greet them (background; never blocks)
+        except Exception as e:
+            self.bus.publish("error", {"error": f"greeting failed: {e}"[:200]})
         self.nams.submit_observation({  # background: never blocks the robot
             "session": self.session, "ts": res["ts"], "location": loc, "place_id": self._place_id(loc, scene.room_type), "summary": scene.summary,
             "robot": self.s.robot_name, "observation_id": res["observation_id"],
@@ -394,6 +409,15 @@ class Brain:
         elif execute and plan.kind in ("turn", "scan"):
             out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
+
+    def gesture(self, name: str) -> dict:
+        """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""
+        if self.nav.state.get("active"):
+            r = {"ok": False, "reason": "the robot is turning toward something"}
+        else:
+            r = self.drive.request_action(name)
+        self.bus.publish("gesture", {"name": name, **r})
+        return r
 
     def _seen_now(self, target: dict, seq: int) -> dict | None:
         """Did the latest stored observation detect the target? Same label; colour must agree when both are known."""

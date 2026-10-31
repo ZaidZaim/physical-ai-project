@@ -25,6 +25,9 @@ MEMORY_TYPES = [
     ("Utterance", "short", "One question or answer, chained in order with FOLLOWED_BY.", ["id", "role", "content", "ts"]),
     ("ReasoningStep", "reasoning", "One reasoning step: the action taken and why, with its result.", ["id", "action", "reasoning", "result", "ts"]),
     ("Lookup", "reasoning", "One memory lookup made during a step: tool name, input, output.", ["id", "name", "input", "output", "seq"]),
+    ("Company", "long", "Where a remembered visitor works.", ["name"]),
+    ("Topic", "long", "Something a visitor is interested in or enjoyed at the event (Neo4j, GraphRAG, ...).", ["name"]),
+    ("Encounter", "short", "One conversation with a visitor who agreed to be remembered (a summary, never a transcript).", ["id", "ts", "summary"]),
 ]
 MEMORY_EDGES = [
     ("ADJACENT_TO", "Location", "Location", "long", "the robot went from one place to the other (learned, with a count)"),
@@ -43,6 +46,11 @@ MEMORY_EDGES = [
     ("PRODUCED", "ReasoningStep", "Utterance", "reasoning", "the step that produced this answer"),
     ("MADE_LOOKUP", "ReasoningStep", "Lookup", "reasoning", "a lookup made while reasoning"),
     ("RELIED_ON", "ReasoningStep", "Object", "reasoning", "this object informed the answer (provenance)"),
+    ("WORKS_AT", "Person", "Company", "long", "where the visitor works"),
+    ("INTERESTED_IN", "Person", "Topic", "long", "what the visitor wants to learn about or build with"),
+    ("ENJOYED", "Person", "Topic", "long", "what the visitor enjoyed most at the event"),
+    ("HAD", "Person", "Encounter", "short", "a conversation with this visitor"),
+    ("AT", "Encounter", "Location", "short", "where the conversation took place"),
 ]
 SPATIAL = ("ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND")
 

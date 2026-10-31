@@ -8,14 +8,22 @@ Safety model (every layer fails toward stopping):
   * Absolute speed limits live on the robot, not here.
   * Automatic motion (navigate.py) only ever happens while the UI has armed, and the person always wins: any key they press or a
     stop hands control straight back to them. Their 10 Hz zero heartbeat does not count as a key, so it cannot clobber the turn.
+  * Booth mode (opt-in, separate from arming) lets the robot look slightly up at people and play a short trick when it greets
+    someone. A trick never starts while the robot is moving or navigating, is rate-limited (servo heat, battery), and blocks all
+    velocity commands while it runs, so a key press cannot make a dog that is up on its hind legs walk.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 
 DEADMAN_S = 0.4
 SETTLE_S = 2.0  # after motion stops, the camera is still settling / viewpoint just changed
+# Hiwonder's stock action groups (ros2 branch, large_models/action.py), run by /puppy_control/runActionGroup as "<name>.d6ac".
+# Only the friendly, on-the-spot ones: no push-ups, kicks or moonwalk at a crowded booth.
+TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod")
+MAX_LOOK_UP_DEG = 20.0  # Hiwonder's pose node accepts |pitch| <= 31 deg; its own "look down" pose is -15 deg
 
 
 def _clamp(v: float) -> float:
@@ -41,6 +49,63 @@ class DriveState:
         self.translations = 0  # commands that moved it forward/back/sideways
         self.rotations = 0     # commands that turned it
         self.last_rotation = 0.0
+        # booth mode: look up at people, greet with a trick
+        self.booth = False
+        self.look_up_deg = 10.0
+        self.action = ""
+        self.action_seq = 0
+        self._action_until = 0.0
+        self._action_times: list[float] = []
+        self.action_busy_s = 8.0  # how long a trick keeps the robot (and the camera) busy; no completion signal on every path
+        self.gesture_cooldown_s = 60.0
+        self.max_gestures_per_hour = 30
+
+    # ---- booth mode
+    def set_booth(self, on: bool, look_up_deg: float | None = None) -> None:
+        with self._lock:
+            self.booth = bool(on)
+            if look_up_deg is not None:
+                self.look_up_deg = max(0.0, min(MAX_LOOK_UP_DEG, float(look_up_deg)))
+
+    @property
+    def pitch_rad(self) -> float:
+        """Body pitch the robot should hold: slightly nose-up in booth mode (to see faces and badges), level otherwise."""
+        return math.radians(self.look_up_deg) if self.booth else 0.0
+
+    def request_action(self, name: str) -> dict:
+        """Ask the robot to play a trick. Returns {ok, reason}. Never while moving, navigating or within the rate limits."""
+        with self._lock:
+            now = time.monotonic()
+            self._action_times = [t for t in self._action_times if now - t < 3600]
+            reason = (
+                "unknown trick" if name not in TRICKS else
+                "booth mode is off" if not self.booth else
+                "a trick is already running" if now < self._action_until else
+                "the robot is moving" if now < self._moving_until or self._auto else
+                "tricks are rate-limited" if self._action_times and now - self._action_times[-1] < self.gesture_cooldown_s else
+                "hourly trick limit reached" if len(self._action_times) >= self.max_gestures_per_hour else ""
+            )
+            if reason:
+                return {"ok": False, "reason": reason}
+            self.action, self.action_seq = name, self.action_seq + 1
+            self._action_until = now + self.action_busy_s
+            self._moving_until = self._action_until + SETTLE_S  # perception waits: the view is bouncing
+            self._x = self._y = self._yaw = 0.0
+            self._action_times.append(now)
+            return {"ok": True, "reason": "", "action": name}
+
+    def action_done(self) -> None:
+        """The robot reported the trick finished (rosbridge waits for the service reply)."""
+        with self._lock:
+            now = time.monotonic()
+            if now < self._action_until:
+                self._action_until = now
+                self._moving_until = now + SETTLE_S
+
+    @property
+    def in_action(self) -> bool:
+        with self._lock:
+            return time.monotonic() < self._action_until
 
     # ---- controller side
     def arm(self, on: bool) -> None:
@@ -57,6 +122,8 @@ class DriveState:
     def command(self, x: float, y: float, yaw: float, source: str = "user") -> None:
         with self._lock:
             if not self.armed:
+                return
+            if time.monotonic() < self._action_until:  # mid-trick (maybe up on its hind legs): no walking
                 return
             if source == "auto" and not self._auto:  # the navigator was cancelled: its late commands must not move the robot
                 return
@@ -109,12 +176,14 @@ class DriveState:
     # ---- robot side
     def current(self) -> dict:
         with self._lock:
-            fresh = self.armed and (time.monotonic() - self._stamp) <= DEADMAN_S
+            busy = time.monotonic() < self._action_until
+            fresh = self.armed and not busy and (time.monotonic() - self._stamp) <= DEADMAN_S
             x, y, yaw = (self._x, self._y, self._yaw) if fresh else (0.0, 0.0, 0.0)
             if not self.allow_combine and x and yaw:
                 x = 0.0
             return {"x": x, "y": y, "yaw": yaw, "speed": self.speed, "armed": self.armed,
-                    "home_seq": self.home_seq}
+                    "home_seq": self.home_seq, "action": self.action, "action_seq": self.action_seq,
+                    "pitch": math.radians(self.look_up_deg) if self.booth else 0.0, "busy": busy}
 
     def robot_report(self, applied: dict[str, float]) -> None:
         with self._lock:
@@ -146,4 +215,5 @@ class DriveState:
             online = (time.monotonic() - self.robot_seen) < 2.0 if self.robot_seen else False
             return {"armed": c["armed"], "auto": self._auto, "speed": self.speed, "cmd": {k: c[k] for k in ("x", "y", "yaw")},
                     "moving": time.monotonic() < self._moving_until, "robot_online": online,
-                    "robot_applied": self.robot_applied}
+                    "robot_applied": self.robot_applied, "booth": self.booth, "look_up_deg": self.look_up_deg,
+                    "in_action": time.monotonic() < self._action_until, "action": self.action}

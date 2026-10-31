@@ -11,9 +11,10 @@ from .graph import now_iso
 from .matching import Known, Seen, assign
 from .pose import bearing_of, in_view
 from .models import Scene
+from .people_graph import FakePeople
 
 
-class FakeMemory:
+class FakeMemory(FakePeople):
     def __init__(self, s):
         self.s = s
         self.objs: dict[str, dict] = {}
@@ -240,7 +241,9 @@ class FakeMemory:
     def label_counts(self):
         return {"Item": len(self.objs), "Place": len({o["loc"] for o in self.objs.values()}), "Robot": 1, "Sighting": len(self.obs),
                 "Session": 1, "Dialogue": 1 if self.msgs else 0, "Utterance": len(self.msgs), "ReasoningStep": len(self.steps),
-                "Lookup": sum(len(s["tools"]) for s in self.steps)}
+                "Lookup": sum(len(s["tools"]) for s in self.steps),
+                "Person": len(self._people()), "Topic": len({t for p in self._people().values() for t in p["interests"] + p["enjoyed"]}),
+                "Company": len({p["company"] for p in self._people().values() if p.get("company")}), "Encounter": self.people_counts()["encounters"]}
 
     def rel_counts(self):
         out = {}

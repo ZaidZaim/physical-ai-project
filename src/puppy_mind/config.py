@@ -61,6 +61,23 @@ class Settings:
     adjacency_max_gap_s: float = float(os.getenv("ADJACENCY_MAX_GAP_S", "60"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)
+    # booth conversation: greet people the camera sees, talk, and (only with a spoken yes) remember them as leads
+    people_greet: bool = _bool("PEOPLE_GREET", True)
+    greet_cooldown_s: float = float(os.getenv("GREET_COOLDOWN_S", "60"))  # at most one greeting per this many seconds, whoever it is for
+    max_greetings_per_hour: int = int(os.getenv("MAX_GREETINGS_PER_HOUR", "40"))
+    person_regreet_s: float = float(os.getenv("PERSON_REGREET_S", "1800"))  # the same badge name is not greeted again within this
+    group_min: int = int(os.getenv("GROUP_MIN", "3"))  # this many engaged people get one group hello instead of one each
+    # booth mode: look slightly up at people and greet with a trick (Hiwonder action group; '' for none)
+    booth_mode: bool = _bool("BOOTH_MODE", False)
+    look_up_deg: float = float(os.getenv("LOOK_UP_DEG", "10"))
+    greet_action: str = os.getenv("GREET_ACTION", "boxing")
+    gesture_cooldown_s: float = float(os.getenv("GESTURE_COOLDOWN_S", "60"))
+    max_gestures_per_hour: int = int(os.getenv("MAX_GESTURES_PER_HOUR", "30"))
+    encounter_idle_s: float = float(os.getenv("ENCOUNTER_IDLE_S", "300"))
+    stt_model: str = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+    tts_model: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    tts_voice: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    event_name: str = os.getenv("EVENT_NAME", "the conference")
     store_images: bool = _bool("STORE_IMAGES", False)
 
 

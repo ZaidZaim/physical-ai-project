@@ -79,7 +79,43 @@
         "color": "#D29922",
         "icon": "user",
         "pii_sensitive": true,
-        "properties": []
+        "properties": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "role",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "function",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "company",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "use_case",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "lead_stage",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "consent_at",
+            "type": "string",
+            "required": false
+          }
+        ]
       }
     ],
     "extraction_aliases": {},

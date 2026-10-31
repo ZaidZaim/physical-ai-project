@@ -115,6 +115,24 @@
   #timelineview { overflow:auto !important; background:var(--panel) } .tl { display:grid; grid-template-columns:90px 160px 80px 1fr; gap:0 14px; padding:9px 18px; border-bottom:1px solid var(--line); font:11.5px/1.5 var(--mono) }
   .tl .t { color:var(--mute) } .tl .s { font-family:var(--sans); color:var(--ink) }
 
+  /* ---- people (booth leads) */
+  #peopleview { display:flex; flex-direction:column; background:var(--panel) }
+  #pbar { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  #pbar input[type=text] { width:200px } #pbar select { font:11px var(--mono); background:var(--card); color:var(--ink); border:1px solid var(--line); padding:5px }
+  #pbar a { font:10.5px var(--mono); color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase }
+  #pbooth { display:flex; gap:10px; align-items:center; padding:6px 14px; border-bottom:1px solid var(--line); font:10.5px var(--mono); color:var(--mute); flex-wrap:wrap }
+  #pbooth select, #pbooth input[type=number] { font:11px var(--mono); background:var(--card); color:var(--ink); border:1px solid var(--line); padding:3px 5px }
+  #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto }
+  #plist { overflow:auto; border-right:1px solid var(--line) } #plist tr { cursor:pointer } #plist tr:hover td, #plist tr.sel td { background:var(--card) }
+  #pside { overflow:auto; display:flex; flex-direction:column; min-height:0 } #pnet { height:200px; flex:none; border-bottom:1px solid var(--line) }
+  #pdetail { padding:12px 16px; font-size:12px; line-height:1.55 } #pdetail dl { display:grid; grid-template-columns:96px 1fr; gap:3px 10px; margin:8px 0 }
+  #pdetail dt { color:var(--mute); font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding-top:2px } #pdetail dd { margin:0 }
+  .stage { font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding:1px 6px; border:1px solid currentColor; border-radius:2px }
+  .stage.hot { color:var(--bad) } .stage.warm { color:var(--miss) } .stage.cold { color:var(--mute) }
+  #ptalk { grid-column:1 / span 2; border-top:1px solid var(--line); padding:8px 14px; display:flex; flex-direction:column; gap:6px }
+  #ptalklog { max-height:110px; overflow:auto; font-size:12px } #ptalklog div { padding:2px 0 } #ptalklog .you { color:var(--mute) }
+  #ptalkf { display:flex; gap:6px } #ptalkf input { flex:1 }
+
   /* ---- right: ask + activity */
   .askhead { padding:12px 14px 6px } .askhead p { margin:5px 0 0; color:var(--mute); font-size:11px }
   #chat { flex:1; min-height:80px; overflow:auto; padding:0 14px; display:flex; flex-direction:column; gap:10px }
@@ -143,7 +161,7 @@
     <div><b>Puppy Mind</b><span>Spatial memory · Physical AI</span></div>
   </div>
   <nav id="nav">
-    <button class="on" data-tab="graph">Graph</button><button data-tab="places">Places</button><button data-tab="onto">Ontology</button><button data-tab="timeline">Timeline</button>
+    <button class="on" data-tab="graph">Graph</button><button data-tab="places">Places</button><button data-tab="onto">Ontology</button><button data-tab="timeline">Timeline</button><button data-tab="people">People</button>
   </nav>
   <div class="theme" id="theme" title="Switch theme">DARK <i></i> LIGHT</div>
   <span class="spacer"></span>
@@ -228,6 +246,29 @@
     <div class="view" id="placesview" hidden><div class="cv" id="placesmap" style="position:relative;flex:1"></div><div id="placeslist"></div></div>
     <div class="view" id="schemaview" hidden><div id="onto"></div><div id="ontodetail"><span class="lbl">Ontology</span><div style="color:var(--mute);margin-top:4px">Click a type or a relationship. Circle size is how many exist in your graph right now.</div></div><div id="ontolegend"></div></div>
     <div class="view" id="timelineview" hidden><div id="timeline"></div></div>
+    <div class="view" id="peopleview" hidden>
+      <div id="pbar">
+        <span class="lbl">Booth leads</span><span id="pcounts" class="tag"></span>
+        <select id="pstage"><option value="">all stages</option><option value="hot">hot</option><option value="warm">warm</option><option value="cold">cold</option></select>
+        <input type="text" id="psearch" placeholder="Search name, company, topic" autocomplete="off">
+        <button class="sm" id="prefresh">Refresh</button><span class="spacer"></span><a id="pexport" href="/api/people/export.csv" download>Export CSV</a>
+      </div>
+      <div id="pbooth" title="Booth mode: the robot tilts nose-up to see faces and badges, and greets people at the booth with a trick">
+        <label class="chk"><input type="checkbox" id="boothon"> Booth mode</label>
+        <span>look up <input type="number" id="boothdeg" min="0" max="20" step="1" style="width:52px"> °</span>
+        <select id="trick"></select><button class="sm" id="trickgo">Try trick</button>
+        <span id="boothmsg"></span>
+      </div>
+      <div id="pbody">
+        <div id="plist"></div>
+        <div id="pside"><div id="pnet"></div><div id="pdetail"><span style="color:var(--mute)">Select a person. Only people who said yes to being remembered appear here.</span></div></div>
+        <div id="ptalk">
+          <div class="lbl"><span>Talk to the Graph Wizard (typed; the robot uses the same brain by voice)</span><button class="sm" id="ptalknew">New visitor</button></div>
+          <div id="ptalklog"></div>
+          <form id="ptalkf"><input type="text" id="ptalkq" placeholder="Say hello, or ask about Neo4j, GenAI, GraphRAG" autocomplete="off"><button class="pri">Say</button></form>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- right: ask + activity -->
@@ -467,6 +508,12 @@ function connect() {
     log('ask', `agent used ${esc(d.tools.join(' → ') || 'no tools')} for “${esc(d.question)}”`);
     d.ids.forEach(id => glow(id, css('--ask'), 3500));
   });
+  es.addEventListener('greeting', e => { const d = JSON.parse(e.data);
+    if (d.skipped) { log('miss', `${d.people} in view, ${d.engaged} at the booth: nobody to greet`); return; }
+    log('new', `greeted ${d.kind === 'group' ? 'a group' : d.returning ? 'a returning visitor' : d.name || 'someone'} (${d.people} in view): “${esc(d.text)}”${d.trick ? (d.trick.ok ? ' + ' + esc(d.trick.action) : ' (no trick: ' + esc(d.trick.reason) + ')') : ''}`); });
+  es.addEventListener('gesture', e => { const d = JSON.parse(e.data); log(d.ok ? 'ask' : 'miss', d.ok ? `trick: ${esc(d.name)}` : `trick ${esc(d.name)} skipped: ${esc(d.reason)}`); });
+  es.addEventListener('converse', e => { const d = JSON.parse(e.data); log('ask', `booth chat (${esc(d.tools.join(' → ') || 'no tools')}): “${esc(d.reply)}”`); });
+  es.addEventListener('people', e => { const d = JSON.parse(e.data); log(d.event === 'saved' ? 'new' : 'miss', `people: ${esc(d.event)} ${esc(d.name || '')} ${d.stage ? '(' + esc(d.stage) + ')' : ''}`); if (!$('#peopleview').hidden) loadPeople().catch(() => {}); });
 }
 
 /* ---------- controls / state ---------- */
@@ -539,14 +586,14 @@ async function refreshSummary() {
     $('#c-reasoning').textContent = `${m.reasoning.steps} steps · ${m.reasoning.tool_calls} lookups`;
   } catch (e) {}
 }
-const VIEWS = { graph:'#graphview', places:'#placesview', onto:'#schemaview', timeline:'#timelineview' };
+const VIEWS = { graph:'#graphview', places:'#placesview', onto:'#schemaview', timeline:'#timelineview', people:'#peopleview' };
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
   const t = b.dataset.tab;
   for (const [k, sel] of Object.entries(VIEWS)) $(sel).hidden = k !== t;
   $('#lenses').style.visibility = t === 'graph' ? 'visible' : 'hidden';
   const fail = e => { $(VIEWS[t]).insertAdjacentHTML('afterbegin', '<div style="padding:14px;color:var(--bad);font:12px var(--mono)">Could not load this view: ' + esc(e.message || e) + '</div>'); };
-  try { if (t === 'onto') loadOntology().catch(fail); else if (t === 'places') loadPlaces().catch(fail); else if (t === 'timeline') loadTimeline().catch(fail); else setTimeout(() => { net.redraw(); net.fit(); }, 100); } catch (e) { fail(e); }
+  try { if (t === 'onto') loadOntology().catch(fail); else if (t === 'places') loadPlaces().catch(fail); else if (t === 'timeline') loadTimeline().catch(fail); else if (t === 'people') { loadPeople().catch(fail); loadBooth().catch(fail); } else setTimeout(() => { net.redraw(); net.fit(); }, 100); } catch (e) { fail(e); }
 });
 
 /* ---------- places: where the robot is and how rooms connect ---------- */
@@ -574,6 +621,70 @@ async function loadPlaces() {
     loadPlaces(); refreshStats();
   });
 }
+
+/* ---------- people: who the robot talked to (only those who said yes) ---------- */
+const PTOK = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('brain_token') || '';
+const papi = (p, o = {}) => api(p, { ...o, headers:{ ...(o.headers || {}), ...(PTOK ? { 'X-Brain-Token': PTOK } : {}) } });
+if (PTOK) $('#pexport').href += '?token=' + encodeURIComponent(PTOK);
+let peopleNet = null, peopleSel = null, encId = null;
+async function loadPeople() {
+  const stage = $('#pstage').value, q = $('#psearch').value.trim();
+  const d = await papi('/api/people?' + new URLSearchParams({ ...(stage ? { stage } : {}), ...(q ? { q } : {}) }));
+  $('#pcounts').textContent = `${d.counts.people} people · ${d.counts.hot} hot · ${d.counts.warm} warm`;
+  $('#plist').innerHTML = d.people.length ? '<table><tr><th>Name</th><th>Company · role</th><th>Stage</th><th>Interests</th><th>Met</th></tr>' + d.people.map(p =>
+    `<tr data-id="${esc(p.person_id)}"${p.person_id === peopleSel ? ' class="sel"' : ''}><td>${esc(p.name)}${p.followed_up ? ' <span class="tag ok">followed up</span>' : ''}</td>`
+    + `<td>${esc([p.company, p.role].filter(Boolean).join(' · '))}</td><td><span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></td>`
+    + `<td>${esc(p.interests.slice(0, 3).join(', '))}</td><td>${esc((p.last_met || '').slice(5, 16).replace('T', ' '))}</td></tr>`).join('') + '</table>'
+    : '<div style="padding:18px;color:var(--mute);font-size:12px">No one yet. When the robot talks to someone and they say yes to being remembered, they show up here. Try the box below.</div>';
+  document.querySelectorAll('#plist tr[data-id]').forEach(r => r.onclick = () => showPerson(r.dataset.id));
+  const g = await papi('/api/people/graph'), C = { Person:css('--accent'), Company:css('--long'), Topic:css('--reasoning') };
+  const ST = { hot:css('--bad'), warm:css('--miss'), cold:css('--gone') };
+  const data = { nodes:new vis.DataSet(g.nodes.map(n => ({ id:n.id, label:n.label, shape:n.kind === 'Person' ? 'dot' : 'box', size:12, color:{ background: n.kind === 'Person' ? ST[n.stage] : C[n.kind], border: C[n.kind] }, font:{ size:10, color:css('--ink'), face:FONT } }))),
+    edges:new vis.DataSet(g.edges.map(e => ({ from:e.source, to:e.target, label:e.type === 'ENJOYED' ? 'enjoyed' : e.type === 'WORKS_AT' ? 'works at' : '', dashes:e.type === 'ENJOYED', arrows:'to', color:{ color:css('--mute') }, font:{ size:8, color:css('--mute'), strokeWidth:0 } }))) };
+  if (peopleNet) peopleNet.destroy();
+  peopleNet = new vis.Network($('#pnet'), data, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-40, springLength:70 }, stabilization:{ iterations:120 } }, interaction:{ hover:true } });
+  peopleNet.on('click', p => { const id = p.nodes[0]; if (id && id.startsWith('psn-')) showPerson(id); });
+  if (peopleSel) showPerson(peopleSel, true);
+}
+async function showPerson(id, quiet) {
+  peopleSel = id;
+  if (!quiet) document.querySelectorAll('#plist tr[data-id]').forEach(r => r.classList.toggle('sel', r.dataset.id === id));
+  let p; try { p = await papi('/api/people/' + encodeURIComponent(id)); } catch (e) { peopleSel = null; return; }
+  const yn = v => v ? 'yes' : 'no', row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '';
+  $('#pdetail').innerHTML = `<b style="font-size:14px">${esc(p.name)}</b> <span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span><dl>`
+    + row('Company', p.company) + row('Role', p.role) + row('Function', p.function) + row('Email', p.email) + row('Building', p.use_case) + row('Knows Neo4j', p.familiarity)
+    + row('Interested in', p.interests.join(', ')) + row('Enjoyed', p.enjoyed.join(', ')) + `<dt>Wants</dt><dd>follow-up: ${yn(p.wants_follow_up)} · demo: ${yn(p.wants_demo)}</dd>` + row('Notes', p.notes)
+    + `<dt>Met</dt><dd>${p.meet_count}× · first ${esc((p.first_met || '').slice(0, 16).replace('T', ' '))}</dd></dl>`
+    + (p.encounters.length ? '<div class="lbl" style="margin:6px 0 2px">Conversations</div>' + p.encounters.map(e => `<div style="color:var(--mute)">${esc((e.ts || '').slice(5, 16).replace('T', ' '))}${e.place ? ' · ' + esc(e.place) : ''}: <span style="color:var(--ink)">${esc(e.summary || '')}</span></div>`).join('') : '')
+    + `<div style="margin-top:10px;display:flex;gap:6px"><button class="sm" id="pfu">${p.followed_up ? 'Mark not followed up' : 'Mark followed up'}</button><button class="sm" id="pforget" style="color:var(--bad)">Forget this person</button></div>`;
+  $('#pfu').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/followup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ done:!p.followed_up }) }); loadPeople(); };
+  $('#pforget').onclick = async () => { if (confirm(`Erase ${p.name} and their conversations? This cannot be undone.`)) { await papi('/api/people/' + encodeURIComponent(id), { method:'DELETE' }); peopleSel = null; $('#pdetail').textContent = 'Erased.'; loadPeople(); } };
+}
+async function loadBooth() {
+  const b = await api('/api/booth');
+  $('#boothon').checked = b.on; $('#boothdeg').value = b.look_up_deg;
+  if (!$('#trick').options.length) $('#trick').innerHTML = b.tricks.map(t => `<option${t === b.greet_action ? ' selected' : ''}>${esc(t)}</option>`).join('');
+  $('#boothmsg').textContent = b.on ? `greets with: ${b.greet_action || 'no trick'}` : 'off: no tricks, level camera';
+}
+const boothSet = async () => { try { await papi('/api/booth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ on:$('#boothon').checked, look_up_deg:+$('#boothdeg').value }) }); } catch (e) { $('#boothmsg').textContent = e.message; } loadBooth(); };
+$('#boothon').onchange = boothSet; $('#boothdeg').onchange = boothSet;
+$('#trickgo').onclick = async () => {
+  try { const r = await papi('/api/gesture', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name:$('#trick').value }) });
+    $('#boothmsg').textContent = r.ok ? `doing ${r.action}` : `not now: ${r.reason}`; } catch (e) { $('#boothmsg').textContent = e.message; }
+};
+$('#pstage').onchange = () => loadPeople(); $('#prefresh').onclick = () => loadPeople().catch(() => {});
+let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer = setTimeout(() => loadPeople().catch(() => {}), 250); };
+$('#ptalknew').onclick = () => { encId = null; $('#ptalklog').innerHTML = ''; };
+$('#ptalkf').onsubmit = async e => {
+  e.preventDefault(); const q = $('#ptalkq').value.trim(); if (!q) return; $('#ptalkq').value = '';
+  const lg = $('#ptalklog'); lg.insertAdjacentHTML('beforeend', `<div class="you">You: ${esc(q)}</div>`); lg.scrollTop = lg.scrollHeight;
+  try {
+    const r = await papi('/api/converse', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text:q, encounter_id:encId }) });
+    encId = r.encounter_id; lg.insertAdjacentHTML('beforeend', `<div><b>Wizard:</b> ${esc(r.reply)}</div>`);
+    if (r.evidence.some(t => ['save_person_facts', 'forget_me'].includes(t.tool))) loadPeople().catch(() => {});
+  } catch (err) { let m = err.message; try { m = JSON.parse(m).detail || m; } catch (_) {} lg.insertAdjacentHTML('beforeend', `<div style="color:var(--bad)">${esc(m)}</div>`); }
+  lg.scrollTop = lg.scrollHeight;
+};
 
 /* ---------- timeline ---------- */
 async function loadTimeline() {
