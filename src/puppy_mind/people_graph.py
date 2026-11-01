@@ -60,8 +60,10 @@ class PeopleGraph:
         return self._read(f"MATCH (p:Person {{nameKey:$k}}) RETURN {_PERSON_RETURN}", k=name_key)
 
     def save_person(self, person: dict[str, Any], *, encounter_id: str, place: str | None, summary: str, ts: str) -> dict[str, Any]:
+        """One statement, one round trip (from the booth each Aura round trip took ~1 s, and a save used to be 4-5 of them plus
+        two reads back). Returns the record as given, with the counters the database keeps."""
         props = {_SCALARS[k]: v for k, v in person.items() if k in _SCALARS and v is not None}
-        self._write(
+        rows = self._write(
             """
             MERGE (p:Person {personId:$pid})
               ON CREATE SET p.firstMet = datetime($ts), p.meetCount = 0, p.followedUp = false
@@ -71,36 +73,37 @@ class PeopleGraph:
             SET e.summary = $summary
             MERGE (p)-[:PARTICIPATED_IN]->(e)
             WITH p, e
-            OPTIONAL MATCH (pl:Place {name:$place})
-            FOREACH (_ IN CASE WHEN pl IS NULL THEN [] ELSE [1] END | MERGE (e)-[:HELD_AT]->(pl))
+            CALL (e) {
+              OPTIONAL MATCH (pl:Place {name:$place})
+              WITH e, pl WHERE pl IS NOT NULL
+              MERGE (e)-[:HELD_AT]->(pl)
+            }
+            CALL (p) {
+              WITH p WHERE $company <> ''
+              MERGE (c:Company {name:$company})
+              MERGE (p)-[:WORKS_AT]->(c)
+              WITH p, c
+              OPTIONAL MATCH (p)-[w:WORKS_AT]->(old:Company) WHERE old <> c
+              DELETE w
+            }
+            CALL (p) {
+              UNWIND $interests AS t
+              MERGE (tp:Theme {name:t})
+              MERGE (p)-[r:INTERESTED_IN]->(tp) ON CREATE SET r.since = datetime($ts)
+            }
+            CALL (p) {
+              UNWIND $enjoyed AS t
+              MERGE (tp:Theme {name:t})
+              MERGE (p)-[r:ENJOYED]->(tp) ON CREATE SET r.since = datetime($ts)
+            }
+            RETURN p.meetCount AS meet_count, toString(p.firstMet) AS first_met, toString(p.lastMet) AS last_met,
+                   coalesce(p.followedUp, false) AS followed_up
             """,
             pid=person["person_id"], eid=encounter_id, ts=ts, props=props, summary=(summary or "")[:500], place=place,
+            company=(person.get("company") or "").strip(), interests=[t for t in person.get("interests", []) if t],
+            enjoyed=[t for t in person.get("enjoyed", []) if t],
         )
-        company = (person.get("company") or "").strip()
-        if company:
-            self._write(
-                """
-                MATCH (p:Person {personId:$pid})
-                MERGE (c:Company {name:$company})
-                MERGE (p)-[:WORKS_AT]->(c)
-                WITH p, c
-                MATCH (p)-[w:WORKS_AT]->(old:Company) WHERE old <> c DELETE w
-                """,
-                pid=person["person_id"], company=company,
-            )
-        for rel, key in (("INTERESTED_IN", "interests"), ("ENJOYED", "enjoyed")):
-            topics = [t for t in person.get(key, []) if t]
-            if topics:
-                self._write(
-                    f"""
-                    MATCH (p:Person {{personId:$pid}})
-                    UNWIND $topics AS t
-                    MERGE (tp:Theme {{name:t}})
-                    MERGE (p)-[r:{rel}]->(tp) ON CREATE SET r.since = datetime($ts)
-                    """,
-                    pid=person["person_id"], topics=topics, ts=ts,
-                )
-        return self.get_person(person["person_id"]) or person
+        return {**person, **(rows[0] if rows else {})}
 
     def get_person(self, person_id: str) -> dict[str, Any] | None:
         rows = self._read(f"MATCH (p:Person {{personId:$pid}}) RETURN {_PERSON_RETURN}", pid=person_id)

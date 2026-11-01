@@ -46,7 +46,7 @@ def svc(script, **kw):
     mem = FakeMemory(S)
     kw.setdefault("extract_fn", lambda transcript: {})  # no automatic fact extraction unless a test scripts it
     s = PeopleService(S, mem, client=FakeChat(script), **kw)
-    s.learn_in_background = False
+    s.learn_in_background = s.write_in_background = False
     return s, mem
 
 
@@ -465,7 +465,18 @@ def test_each_lead_gets_a_next_step_the_team_can_take_over():
     s.turn("We evaluate knowledge graphs for aircraft manufacturing.", r["encounter_id"])
     p = mem.list_people()[0]
     assert p["next_step"] == "Send the aerospace case study" and p["next_step_by"] == "ai"
-    assert mem.set_next_step(p["person_id"], "Call him Tuesday, Anna owns it")
+    assert s.set_next_step(p["person_id"], "Call him Tuesday, Anna owns it")  # edited in the People tab mid-conversation
     s.turn("Anything else?", r["encounter_id"])  # the AI keeps suggesting, but the team's words win
     p = mem.get_person(p["person_id"])
     assert p["next_step"] == "Call him Tuesday, Anna owns it" and p["next_step_by"] == "team"
+
+
+
+def test_forgetting_someone_mid_conversation_is_not_undone_by_a_later_save():
+    s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Ana", company="Acme"), "Thanks!"],
+                  ["Sure."]], extract_fn=lambda t: {"role": "CTO"})
+    r = s.turn("Yes")
+    pid = mem.list_people()[0]["person_id"]
+    assert s.forget(pid)  # "Forget this person" clicked while she is still at the robot
+    s.turn("I'm the CTO, by the way", r["encounter_id"])
+    assert mem.list_people() == []

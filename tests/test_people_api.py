@@ -30,6 +30,7 @@ def client(monkeypatch):
         server.brain.people.client = FakeChat([])
         server.brain.voice = FakeVoice()
         server.brain.drive.action_busy_s = 0.05  # the wake trick finishes at once in tests
+        server.brain.people.write_in_background = False
         yield c
 
 

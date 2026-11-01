@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import queue
 import threading
 import time
 import unicodedata
@@ -263,6 +264,7 @@ class Encounter:
     consent_asked: bool = False  # the robot has asked the permission question (so it does not ask on every turn)
     asked_about: list[str] = field(default_factory=list)  # unknown fields the robot already asked about: never the same question twice
     pending_email: str = ""  # an email the robot heard but the visitor has not confirmed yet
+    record: dict | None = None  # the visitor's lead record during the conversation (saved to the graph in the background)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -400,6 +402,11 @@ class PeopleService:
         # after each answer with consent, facts are pulled from what the visitor said (the model alone saved only at the moment of consent)
         self.extract_fn = extract_fn if extract_fn is not None else (self._extract if client is not None else None)
         self.learn_in_background = True  # tests set False to learn synchronously
+        # Saves go to the graph in the background, in order: the visitor never waits for the database (at the booth each Aura round
+        # trip took ~1 s and a 'yes' turn made 17 of them: 22 s, past the robot's 60 s once the camera was busy too)
+        self.write_in_background = True
+        self._writes: queue.Queue = queue.Queue()
+        self._writer: threading.Thread | None = None
 
     # ---- plumbing
     def _publish(self, kind: str, data: dict) -> None:
@@ -443,10 +450,78 @@ class PeopleService:
             lines.append(f"- Their name badge seemed to read \"{enc.badge['name']}\"" + (f", {enc.badge['company']}" if enc.badge.get("company") else "")
                          + " (unverified). Confirm it with them before using it.")
         if enc.person_id:
-            p = self.mem.get_person(enc.person_id)
+            p = self._record(enc)
             if p:
                 lines.append(f"- A returning visitor you remember: {json.dumps(safe_view(p))}")
         return "\n".join(lines)
+
+    # ---- the visitor's record: read once, kept in memory, written behind
+    def _record(self, enc: Encounter) -> dict:
+        if enc.record is None and enc.person_id:
+            enc.record = self.mem.get_person(enc.person_id) or None
+        return enc.record or {}
+
+    def _store(self, enc: Encounter, person: dict) -> dict:
+        """Keep the record for the conversation and save it to the graph (in the background unless write_in_background is off)."""
+        enc.record = person
+        job = (person, enc.id, enc.place, enc.summary, datetime.now(timezone.utc).isoformat())
+        if not self.write_in_background:
+            self._write_one(enc, *job)
+            return enc.record
+        self._writes.put((enc, job))
+        if self._writer is None or not self._writer.is_alive():
+            self._writer = threading.Thread(target=self._write_loop, daemon=True, name="people-writer")
+            self._writer.start()
+        return person
+
+    def _write_loop(self) -> None:
+        while True:
+            enc, job = self._writes.get()
+            self._write_one(enc, *job)
+
+    def _write_one(self, enc: Encounter, person: dict, encounter_id: str, place: str | None, summary: str, ts: str) -> None:
+        try:
+            saved = self.mem.save_person(person, encounter_id=encounter_id, place=place, summary=summary, ts=ts)
+            if enc.record is not None and enc.record.get("person_id") == person["person_id"]:
+                for k in ("meet_count", "first_met", "last_met", "followed_up"):
+                    if saved.get(k) is not None:
+                        enc.record[k] = saved[k]
+        except Exception as e:
+            self._publish("error", {"error": f"could not save {person.get('name')} to the graph: {e}"[:200]})
+
+    # ---- edits made in the People tab while the visitor may still be talking: open conversations must see them at once
+    def _open_records(self, person_id: str) -> list[Encounter]:
+        return [e for e in list(self.encounters.values()) if e.person_id == person_id]
+
+    def set_next_step(self, person_id: str, text: str) -> bool:
+        """The team's next step: saved, and put into any open conversation's record, so the next save cannot undo it."""
+        self.flush()
+        ok = self.mem.set_next_step(person_id, text)
+        for e in self._open_records(person_id):
+            if e.record is not None:
+                e.record["next_step"], e.record["next_step_by"] = text.strip()[:500], "team"
+        return ok
+
+    def set_followed_up(self, person_id: str, done: bool) -> bool:
+        self.flush()
+        ok = self.mem.set_followed_up(person_id, done)
+        for e in self._open_records(person_id):
+            if e.record is not None:
+                e.record["followed_up"] = done
+        return ok
+
+    def forget(self, person_id: str) -> bool:
+        """Erase a person; an open conversation forgets them too, so a later save cannot bring them back."""
+        for e in self._open_records(person_id):
+            e.person_id, e.record, e.consent, e.name = None, None, False, ""
+        self.flush()
+        return self.mem.forget_person(person_id)
+
+    def flush(self, timeout: float = 10.0) -> None:
+        """Wait until queued saves reached the graph (tests, shutdown)."""
+        end = time.monotonic() + timeout
+        while not self._writes.empty() and time.monotonic() < end:
+            time.sleep(0.05)
 
     # ---- tools
     def _tool(self, enc: Encounter, name: str, a: dict, last_user: str) -> Any:
@@ -462,6 +537,7 @@ class PeopleService:
             if not p:
                 return {"known": False}
             enc.person_id, enc.name, enc.consent = p["person_id"], p["name"], True  # they said yes when we first met
+            enc.record = p
             return {"known": True, **safe_view(p)}
         if name == "forget_me":
             key = name_key(a.get("name") or enc.name)
@@ -472,7 +548,7 @@ class PeopleService:
             if not pid:
                 return {"forgotten": False, "reason": "no one by that name is remembered"}
             ok = self.mem.forget_person(pid)
-            enc.person_id, enc.consent = None, False
+            enc.person_id, enc.consent, enc.record = None, False, None
             self._publish("people", {"event": "forgotten", "person_id": pid})
             return {"forgotten": ok}
         if name == "save_person_facts":
@@ -492,14 +568,13 @@ class PeopleService:
             who = (a.get("name") or enc.name or "").strip()
             if not name_key(who):
                 return {"error": "Not saved: I need their name first."}
-            existing = self.mem.get_person(enc.person_id) if enc.person_id else None
+            existing = self._record(enc) or None
             if existing is None:
                 existing = match_person(self.mem.find_people(name_key(who)), a.get("company"))
             person = merge_person(existing, a, who)
             enc.person_id, enc.name = person["person_id"], person["name"]
             enc.summary = (a.get("encounter_summary") or enc.summary or "")[:500]
-            saved = self.mem.save_person(person, encounter_id=enc.id, place=enc.place, summary=enc.summary,
-                                         ts=datetime.now(timezone.utc).isoformat())
+            saved = self._store(enc, person)
             self._publish("people", {"event": "saved", "person_id": saved["person_id"], "name": saved["name"], "stage": saved["lead_stage"]})
             out = {"saved": True, "name": saved["name"], "remembered": [k for k in a if k != "encounter_summary" and a[k] not in (None, "", [])]}
             if held:
@@ -517,7 +592,7 @@ class PeopleService:
                 self.encounters[enc.id] = enc
             enc.consent, enc.person_id, enc.name, enc.summary, enc.badge, enc.greeted = None, None, "", "", None, ""
             enc.consent_asked = False
-            enc.asked_about, enc.pending_email = [], ""
+            enc.asked_about, enc.pending_email, enc.record = [], "", None
             enc.messages.clear()
             return {"new_conversation": True, "note": "Treat them as someone new: ask their name, and ask for consent before saving anything."}
         if name == "ask_world":
@@ -605,7 +680,7 @@ class PeopleService:
             if question:
                 reply = end_with_question(reply, question)
                 enc.messages[-1]["content"] = reply
-        person = self.mem.get_person(enc.person_id) if enc.person_id else None
+        person = dict(self._record(enc)) if enc.person_id else None
         out = {"encounter_id": enc.id, "reply": reply, "consent": enc.consent, "person": person, "evidence": trace}
         self._publish("converse", {"encounter_id": enc.id, "heard": text if enc.consent is not False else "", "reply": reply,
                                    "tools": [t["tool"] for t in trace], "consent": enc.consent})
@@ -615,7 +690,7 @@ class PeopleService:
         """The one question that ends this reply: the first fact still unknown, never one already asked, nothing on a goodbye."""
         if says_goodbye(text):
             return None
-        p = self.mem.get_person(enc.person_id) or {}
+        p = self._record(enc)
         for key, _label in UNKNOWN_FIELDS:
             if (not p.get(key) and p.get(key) is not False) and key not in enc.asked_about:
                 enc.asked_about.append(key)
@@ -636,7 +711,7 @@ class PeopleService:
                 update["email"], enc.pending_email = enc.pending_email, ""
             heard_email = (f.get("email") or "").strip().lower()
             if "@" in heard_email and not update.get("email") and not enc.pending_email:
-                current = (self.mem.get_person(enc.person_id) or {}).get("email") if enc.person_id else None
+                current = self._record(enc).get("email") if enc.person_id else None
                 if heard_email != (current or "").lower():
                     enc.pending_email = heard_email  # held: saved only when they confirm it read back, in a later answer
             new_name = (f.get("corrected_name") or "").strip()
@@ -646,15 +721,14 @@ class PeopleService:
             if not update and not new_name and not summary:
                 return
             with enc.lock:
-                existing = self.mem.get_person(enc.person_id) if enc.person_id else None
+                existing = self._record(enc) or None
                 if existing is None:
                     return
                 person = merge_person(existing, update, new_name or existing["name"])
                 enc.name = person["name"]
                 if summary:
                     enc.summary = summary[:500]
-                saved = self.mem.save_person(person, encounter_id=enc.id, place=enc.place, summary=enc.summary,
-                                             ts=datetime.now(timezone.utc).isoformat())
+                saved = self._store(enc, person)
             self._publish("people", {"event": "learned", "person_id": saved["person_id"], "name": saved["name"],
                                      "stage": saved["lead_stage"], "fields": sorted(update) + (["name"] if new_name else [])})
         except Exception as e:

@@ -521,7 +521,7 @@ def people_get(person_id: str, request: Request, x_brain_token: str | None = Hea
 def people_next_step(person_id: str, body: NextStep, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     """The Neo4j team's own next step for this lead (replaces the AI suggestion for good)."""
     _local_auth(request, x_brain_token, token)
-    if not brain.mem.set_next_step(person_id, body.text):
+    if not brain.people.set_next_step(person_id, body.text):
         raise HTTPException(404, "unknown person")
     brain.bus.publish("people", {"event": "next_step", "person_id": person_id})
     return {"ok": True}
@@ -530,7 +530,7 @@ def people_next_step(person_id: str, body: NextStep, request: Request, x_brain_t
 @app.post("/api/people/{person_id}/followup")
 def people_followup(person_id: str, body: FollowUp, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     _local_auth(request, x_brain_token, token)
-    if not brain.mem.set_followed_up(person_id, body.done):
+    if not brain.people.set_followed_up(person_id, body.done):
         raise HTTPException(404, "unknown person")
     return {"ok": True}
 
@@ -539,7 +539,7 @@ def people_followup(person_id: str, body: FollowUp, request: Request, x_brain_to
 def people_forget(person_id: str, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     """Erase a person and their encounters."""
     _local_auth(request, x_brain_token, token)
-    if not brain.mem.forget_person(person_id):
+    if not brain.people.forget(person_id):
         raise HTTPException(404, "unknown person")
     brain.bus.publish("people", {"event": "forgotten", "person_id": person_id})
     return {"ok": True}
