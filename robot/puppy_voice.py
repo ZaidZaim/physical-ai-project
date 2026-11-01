@@ -28,6 +28,13 @@ import wave
 
 RATE, CHUNK_S = 16000, 0.03
 MIN_VOICE_S = 0.35  # at least this much actual loud sound before a recording is sent: a click plus silence is not speech
+KEEP_TAIL_S = 0.3   # trailing silence kept: the rest is cut before sending (less to upload and transcribe, fewer invented words)
+
+
+def trim_tail(pcm, quiet_chunks):
+    """Drop the trailing silence that ended the sentence, keeping KEEP_TAIL_S of it."""
+    drop = max(0, quiet_chunks - int(KEEP_TAIL_S / CHUNK_S)) * int(RATE * CHUNK_S) * 2
+    return pcm[:len(pcm) - drop] if drop else pcm
 DEFAULT_THRESHOLD = 800.0  # used when the start-up room measurement was not quiet
 PREFER = re.compile(r"wonder|echo|hiwonder|usb|uac", re.I)  # the WonderEcho Pro is a USB sound card
 SKIP = re.compile(r"bcm2835|vc4|hdmi|headphones", re.I)       # the Pi's own outputs (no microphone, not the robot speaker)
@@ -169,7 +176,7 @@ class Voice:
             if started:
                 speech += buf
                 if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
-                    pcm, speech, quiet, started, loud_s, voiced = bytes(speech), bytearray(), 0, False, voiced * CHUNK_S, 0
+                    pcm, speech, quiet, started, loud_s, voiced = trim_tail(bytes(speech), quiet), bytearray(), 0, False, voiced * CHUNK_S, 0
                     if loud_s >= MIN_VOICE_S:  # footsteps, clicks, a cough: not sent (each became a "Thanks for watching!" phantom)
                         self.talking.set()  # stop listening until the answer has been played
                         print("thinking...")
@@ -203,7 +210,7 @@ def main():
     ap.add_argument("--mic", default="auto", help="ALSA capture device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
     ap.add_argument("--speaker", default="auto", help="ALSA playback device, e.g. plughw:1,0 (auto: the WonderEcho Pro / USB card)")
     ap.add_argument("--threshold", type=float, default=None, help="loudness (16-bit RMS) that counts as speech (default: measured at start)")
-    ap.add_argument("--silence", type=float, default=1.8, help="seconds of quiet that end a sentence (people pause to think)")
+    ap.add_argument("--silence", type=float, default=1.5, help="seconds of quiet that end a sentence (people pause to think)")
     ap.add_argument("--max-s", type=float, default=15.0, help="longest single utterance")
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")

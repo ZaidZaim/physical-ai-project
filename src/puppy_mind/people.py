@@ -280,6 +280,7 @@ class Encounter:
     turns: int = 0          # answers in this conversation
     closing: bool = False   # the consent question came with their goodbye: no more questions after it
     reasked: bool = False   # asked mid-way, unanswered: asked once more when they say goodbye
+    unclear_at: float = 0.0  # when the robot last said it did not catch something (at most every UNCLEAR_EVERY_S)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -621,6 +622,21 @@ class PeopleService:
             r = self.agent.ask(a["question"], session_id=f"booth-{enc.id}")
             return {"answer": r["answer"]}
         return {"error": f"unknown tool {name}"}
+
+    UNCLEAR_EVERY_S = 12.0
+
+    def unclear_reply(self, encounter_id: str | None) -> str | None:
+        """Something in an OPEN conversation was not understood (seen at the booth: a quiet 'yes' to the consent question came out
+        as 'Thanks for watching!', was dropped, the robot said nothing and the conversation lapsed). Say so instead, at most every
+        UNCLEAR_EVERY_S, and keep the conversation open. Outside a conversation, hall noise stays unanswered (None)."""
+        enc = self.encounters.get(encounter_id or "")
+        now = time.monotonic()
+        if not enc or not enc.messages or now - enc.last >= self.s.wake_window_s or now - enc.unclear_at < self.UNCLEAR_EVERY_S:
+            return None
+        enc.unclear_at = enc.last = now
+        if enc.consent is None and enc.consent_asked:
+            return "Sorry, I didn't catch that. Was that a yes or a no?"
+        return "Sorry, I didn't catch that. Could you say it again?"
 
     # ---- wake word (robot microphone only: Hold to talk and typing are addressed to the robot by definition)
     def conversation_active(self) -> bool:

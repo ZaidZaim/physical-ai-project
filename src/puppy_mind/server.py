@@ -437,6 +437,10 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
     t_heard = time.monotonic()
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
+        ask_again = brain.people.unclear_reply(encounter_id) if (not require_wake or brain.listening) else None
+        if ask_again:  # in the middle of a conversation: never just go silent (the visitor would think it hung up)
+            return Response(brain.voice.speak(ask_again), media_type="audio/wav",
+                            headers={"X-Encounter": encounter_id, "X-Heard": quote("(unclear: %s)" % text[:100]), "X-Reply": quote(ask_again)})
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
     waker = None
     if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)

@@ -265,3 +265,22 @@ def test_hey_puppypi_does_the_trick_then_looks_up_then_levels_when_quiet(client)
         e.last -= 999  # the conversation went quiet
     client.get("/api/voice/next")
     assert server.brain.drive.current()["pitch"] == 0.0 and client.post("/api/listen").json()["state"] == "listening"
+
+
+
+def test_unclear_audio_inside_a_conversation_gets_a_question_back_outside_silence(client):
+    # seen at the booth: a quiet "yes" came out as "Thanks for watching!", was dropped, and the conversation lapsed
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, wake_action="")
+    server.brain.people.client = FakeChat([["Hi! What's your name?"]])
+    client.post("/api/listen")
+    post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
+                                              data={"encounter_id": enc} if enc else {})
+    assert post("Thanks for watching!").status_code == 204  # no conversation: hall noise stays unanswered
+    enc = post("Hey PuppyPi").headers["x-encounter"]
+    server.brain.people.encounters[enc].consent_asked = True  # the robot asked "may I remember you?"
+    r = post("Thanks for watching!", enc)
+    assert r.status_code == 200 and unquote(r.headers["x-reply"]) == "Sorry, I didn't catch that. Was that a yes or a no?"
+    assert r.headers["x-encounter"] == enc
+    assert post("Thanks for watching!", enc).status_code == 204  # not every few seconds

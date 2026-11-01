@@ -65,4 +65,13 @@ def test_a_click_is_not_speech_and_thinking_pauses_are_allowed():
 
     assert pv.MIN_VOICE_S >= 0.3
     src = inspect.getsource(pv.main)
-    assert 'default=1.8' in src
+    assert 'default=1.5' in src
+
+
+
+def test_trailing_silence_is_cut_before_sending():
+    chunk = int(pv.RATE * pv.CHUNK_S) * 2
+    speech = b"\x10" * chunk * 20 + b"\x00" * chunk * 50  # 0.6 s of voice, 1.5 s of quiet that ended the sentence
+    out = pv.trim_tail(speech, 50)
+    assert len(out) == chunk * (20 + 10)  # the voice plus 0.3 s
+    assert pv.trim_tail(speech, 5) == speech  # nothing to cut
