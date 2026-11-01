@@ -26,6 +26,7 @@ from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
+from .people import PeopleService
 from .sources import FolderSource, FrameSource, ahash, hamming
 from .tour import TourRecorder
 
@@ -120,6 +121,19 @@ class Brain:
             self.agent = Agent(self.s, self.mem, self.nams)
             self.agent.place_fn = self.place_info
             self.agent.go_fn = self.go_to
+        # People at the booth: talk, greet, remember (only after a spoken yes). Works without OpenAI for listing/greeting text only.
+        self.voice = None
+        self.drive.set_booth(self.s.booth_mode, self.s.look_up_deg)
+        self.drive.gesture_cooldown_s, self.drive.max_gestures_per_hour = self.s.gesture_cooldown_s, self.s.max_gestures_per_hour
+        self.people = PeopleService(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
+                                    gesture_fn=self.gesture)
+        if self.agent:
+            from .voice import Voice
+
+            self.voice = Voice(self.s, self.agent.client)
+        self._listen_until = 0.0  # the People tab pings while it is open: only then does the robot listen and greet
+        self._engaged = False     # looking up at a visitor (after the wake word), until the conversation goes quiet
+        self.people.active_fn = lambda: self.listening
 
     @property
     def fps(self) -> float:
@@ -240,6 +254,10 @@ class Brain:
             "overlap": res.get("overlap"), "misses_counted": res.get("misses_counted"), "room_type": scene.room_type,
             "moved_hypotheses": res.get("moved_hypotheses", []), "place": self.place_info(),
         })
+        try:
+            self.people.on_view(scene, jpeg)  # a person in view: greet them (background; never blocks)
+        except Exception as e:
+            self.bus.publish("error", {"error": f"greeting failed: {e}"[:200]})
         self.nams.submit_observation({  # background: never blocks the robot
             "session": self.session, "ts": res["ts"], "location": loc, "place_id": self._place_id(loc, scene.room_type), "summary": scene.summary,
             "robot": self.s.robot_name, "observation_id": res["observation_id"],
@@ -394,6 +412,58 @@ class Brain:
         elif execute and plan.kind in ("turn", "scan"):
             out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
+
+    # ---- people mode: the People tab is open, so the robot listens for its wake word
+    LISTEN_TTL_S = 15.0
+
+    def listen_ping(self) -> dict:
+        """The People tab is open (it pings every few seconds). Listening stops LISTEN_TTL_S after the last ping."""
+        self._listen_until = time.monotonic() + self.LISTEN_TTL_S
+        if not self.drive.booth:  # tricks and the head tilt need booth mode
+            self.drive.set_booth(True, self.s.idle_look_up_deg)
+        return self.listen_state()
+
+    @property
+    def listening(self) -> bool:
+        return time.monotonic() < self._listen_until
+
+    def listen_state(self) -> dict:
+        state = "conversation" if self._engaged or self.people.conversation_active() else "listening" if self.listening else "off"
+        return {"state": state, "wake_word": self.s.wake_word}
+
+    def on_wake(self) -> threading.Thread:
+        """'Hey PuppyPi': the trick, then look up at the visitor. Runs beside the reply being prepared; join it before speaking."""
+        def run() -> None:
+            r = self.gesture(self.s.wake_action) if self.s.wake_action else {"ok": False}
+            if r.get("ok"):
+                end = time.monotonic() + self.drive.action_busy_s + 3
+                while self.drive.in_action and time.monotonic() < end:
+                    time.sleep(0.1)
+            self._engaged = True
+            self.drive.set_booth(True, self.s.engaged_look_up_deg)
+            self.bus.publish("listen", self.listen_state())
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        return t
+
+    def people_tick(self) -> None:
+        """On every robot poll: level the head once the conversation went quiet; leave booth mode when nobody watches."""
+        if self._engaged and not self.people.conversation_active():
+            self._engaged = False
+            self.drive.set_booth(self.listening or self.s.booth_mode, self.s.idle_look_up_deg)
+            self.bus.publish("listen", self.listen_state())
+        if not self.listening and not self._engaged and self.drive.booth and not self.s.booth_mode:
+            self.drive.set_booth(False, self.s.idle_look_up_deg)
+
+    def gesture(self, name: str) -> dict:
+        """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""
+        if self.nav.state.get("active"):
+            r = {"ok": False, "reason": "the robot is turning toward something"}
+        else:
+            r = self.drive.request_action(name)
+        self.bus.publish("gesture", {"name": name, **r})
+        return r
 
     def _seen_now(self, target: dict, seq: int) -> dict | None:
         """Did the latest stored observation detect the target? Same label; colour must agree when both are known."""

@@ -25,6 +25,9 @@ class FakeBridge:
                     ws.send(json.dumps({"op": "publish", "topic": m["topic"], "msg": {"angular_velocity": {"x": 0.0, "y": 0.0, "z": 0.5}, "linear_acceleration": {"z": 9.8}}}))
             if m["op"] == "subscribe" and m["topic"] == "/ros_robot_controller/battery":
                 ws.send(json.dumps({"op": "publish", "topic": m["topic"], "msg": {"data": 7800}}))
+            if m["op"] == "call_service" and m["service"] == "/puppy_control/runActionGroup":  # replies when the action is done
+                time.sleep(0.2)
+                ws.send(json.dumps({"op": "service_response", "id": m["id"], "result": True, "values": {"success": True}}))
             if m["op"] == "call_service" and m["service"] == "/rosapi/topic_type":
                 ws.send(json.dumps({"op": "service_response", "id": m["id"], "result": True,
                                     "values": {"type": self.vel_type}}))
@@ -184,3 +187,28 @@ def test_battery_voltage_is_reported_with_a_rough_percentage():
     assert battery_status(6700, time.monotonic())["battery_level"] == "low"
     assert battery_status(None, 0.0)["battery_v"] is None
     assert battery_status(7800, time.monotonic() - 60)["battery_v"] is None  # stale reading is not shown
+
+
+def test_booth_mode_tilts_up_and_a_trick_runs_the_action_group_then_stands_back_in_pose():
+    import math
+
+    fb, drive = FakeBridge("puppy_control_msgs/msg/Velocity"), DriveState()
+    assert drive.request_action("boxing")["reason"] == "booth mode is off"
+    d = run(drive, fb)
+    try:
+        poses = lambda: [m["msg"] for m in fb.msgs if m["op"] == "publish" and m["topic"] == "/puppy_control/pose"]
+        calls = lambda: [m for m in fb.msgs if m["op"] == "call_service" and m["service"] == "/puppy_control/runActionGroup"]
+        assert poses()[-1]["pitch"] == 0.0
+        drive.set_booth(True, 10)
+        time.sleep(0.4)
+        assert math.isclose(poses()[-1]["pitch"], math.radians(10), rel_tol=1e-6)
+        assert drive.request_action("boxing")["ok"]
+        t0 = time.time()
+        while drive.in_action and time.time() - t0 < 3:
+            time.sleep(0.05)
+        assert [c["args"] for c in calls()] == [{"name": "boxing.d6ac", "wait": True}]
+        assert not drive.in_action  # the service reply ended the trick early
+        assert math.isclose(poses()[-1]["pitch"], math.radians(10), rel_tol=1e-6)  # stood back up, still looking up
+        assert fb.vels()[-1] == {"x": 0.0, "y": 0.0, "yaw_rate": 0.0}
+    finally:
+        d.close(); fb.close()

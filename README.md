@@ -24,6 +24,7 @@ things it remembers.
 | **Know where** | "Which rooms do you know?" | Rooms are recognised from what is in them; a room map is learned as the robot moves |
 | **Explain** | "Where did you last see it?" | Every answer comes with the tool calls and graph facts it used |
 | **Act** | "Turn to the door." | Turns in place to face a remembered object, or looks around for it. Between rooms it gives you the route. It never walks on its own |
+| **Host** | "Hi, I'm Ana from Acme" | At a booth it greets people, talks through the WonderEcho Pro as the **Graph Wizard** (Neo4j, GenAI, GraphRAG), and with a spoken yes remembers who they are as leads in the **People** tab: [docs/PEOPLE.md](docs/PEOPLE.md) |
 
 ## How it works
 
@@ -49,7 +50,7 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
-  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place" width="900">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place; booth visitors: Person WORKS_AT Company, INTERESTED_IN and ENJOYED Theme, PARTICIPATED_IN Encounter HELD_AT Place" width="900">
 </picture>
 
 
@@ -59,6 +60,9 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `Place` | `placeId`, `name`, `roomType`, `visits` |
 | `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
 | `Session` · `Robot` | `id`, `startedAt` · `name` |
+| `Person` | `personId`, `name`, `role`, `function`, `company`, `email`, `useCase`, `familiarity`, `leadScore`, `leadStage`, `consentAt`, `firstMet`, `lastMet`, `meetCount` (only after a spoken yes) |
+| `Company` · `Theme` | `name` · `name` |
+| `Encounter` | `id`, `ts`, `summary` (one sentence, never a transcript) |
 
 | Relationship | Properties | Meaning |
 |---|---|---|
@@ -69,6 +73,13 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
 | `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
 | `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
+| `WORKS_AT` | | a visitor's company |
+| `INTERESTED_IN` · `ENJOYED` | `since` | what a visitor wants to learn about or build with · what they enjoyed most at the event |
+| `PARTICIPATED_IN` · `HELD_AT` | | a visitor took part in this conversation · where it took place |
+
+The ontology ([`ontology/puppy_pi.json`](ontology/puppy_pi.json)) uses NAMS's POLE+O types, and `puppy-mind nams-setup` sends that
+same file to NAMS. In Aura each type has its own label, so the app never shares nodes with NAMS: Agent is `Robot`, Location `Place`,
+Object `Item`, Organization `Company`, Topic `Theme` and Event `Encounter`. Person stays `Person`; the app's people carry a `personId`.
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
 constraints, no write-only edges and no supernodes ([review](docs/ONTOLOGY_REVIEW.md)). Startup migrates older data automatically.
@@ -208,7 +219,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 143 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours
+uv run pytest                          # 175 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, people + consent + API
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on
@@ -231,9 +242,9 @@ on real hardware, and when: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ```
 src/puppy_mind/   brain.py (orchestration) · perception.py · graph.py (Aura) · matching.py · spatial.py (rooms) · pose.py (heading)
-                  navigate.py (phase 5) · agent.py · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
+                  navigate.py (phase 5) · agent.py · people.py / people_graph.py / wizard.py / voice.py (booth conversation, leads) · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
                   static/index.html (the UI)
-robot/            puppy_drive.py, puppy_streamer.py: optional scripts for running on the robot
+robot/            puppy_drive.py, puppy_streamer.py, puppy_voice.py: optional scripts for running on the robot
 ontology/         puppy_pi.json: the domain ontology (also installed into NAMS)
 eval/             scenarios, the 20 questions, live checks
 tests/            unit tests
@@ -247,6 +258,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | ingestion pipeline, schema, known weak points |
 | [SPATIAL.md](docs/SPATIAL.md) | room recognition, room map, view-aware misses, gyro heading |
+| [PEOPLE.md](docs/PEOPLE.md) | greeting, the Graph Wizard, consent, leads, the People tab, WonderEcho Pro setup |
 | [MEMORY.md](docs/MEMORY.md) | Aura + NAMS together, measured NAMS behaviour, setup |
 | [ONTOLOGY_REVIEW.md](docs/ONTOLOGY_REVIEW.md) | the model checked against Neo4j modeling practice |
 | [AURA_VIEWS.md](docs/AURA_VIEWS.md) | clean, one-question queries for Aura |

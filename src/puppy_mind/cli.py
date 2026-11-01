@@ -41,13 +41,17 @@ def _nams_cmd(args, s) -> int:
             spec = json.loads(Path("ontology/puppy_pi.json").read_text(encoding="utf-8"))
             for obj in s.vocab:  # let NAMS extraction map common nouns in observation text to PhysicalObject
                 spec["ontology"]["extraction_aliases"].setdefault(obj, "Object")
-            spec["ontology"]["extraction_aliases"].update({"puppypi": "Agent", "robot": "Agent", "visitor": "Person"})
+            spec["ontology"]["extraction_aliases"].update({
+                "puppypi": "Agent", "robot": "Agent", "visitor": "Person", "attendee": "Person",
+                "company": "Organization", "employer": "Organization",
+                "topic": "Topic", "interest": "Topic", "talk": "Topic", "conversation at the booth": "Event"})
             r = n._req("POST", "/v1/ontologies", spec)
             if r is None:
                 print("create failed:", n.stats["last_error"])
                 if "403" in n.stats["last_error"]:
                     print("This API key can read and write memory but is not allowed to manage ontologies.")
                     print("Memory sync works without it: the app already uses the types of your active ontology (Agent, Location, Object, Person).")
+                    print("The booth types (Organization, Topic, Event) reach NAMS once this version is created and activated.")
                 return 1
             print("created ontology version:", json.dumps({k: r.get(k) for k in ("id", "ontology_id", "revision", "semver_tag", "validation_mode")}))
             if args.activate:

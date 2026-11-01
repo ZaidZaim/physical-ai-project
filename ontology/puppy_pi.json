@@ -1,11 +1,11 @@
 {
-  "message": "puppy-mind: physical-world vocabulary (Agent=robot, Location, Object, Person) with spatial relationships; extends the agent-memory ontology",
+  "message": "puppy-mind: physical-world vocabulary (Agent=robot, Location, Object) with spatial relationships, plus booth visitors in POLE+O terms (Person, Organization, Topic, Event); extends the agent-memory ontology",
   "validation_mode": "permissive",
   "ontology": {
     "domain": {
       "id": "puppy-pi",
       "name": "PuppyPi Physical World",
-      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places, consenting people, and the spatial relationships between them",
+      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places and the spatial relationships between them, and, at a conference booth, the consenting visitors it talks to, their organizations, the topics they care about and the conversations it had with them",
       "tagline": "Talk with your environment"
     },
     "entity_types": [
@@ -73,13 +73,147 @@
       },
       {
         "label": "Person",
-        "description": "A visitor. Stored ONLY with explicit consent; never identified from camera frames.",
+        "description": "A visitor the robot talked to. Stored ONLY after the visitor said yes out loud; never identified from camera frames. Carries what they told the robot and a lead score for follow-up.",
         "pole_type": "PERSON",
         "subtype": "visitor",
         "color": "#D29922",
         "icon": "user",
         "pii_sensitive": true,
-        "properties": []
+        "properties": [
+          {
+            "name": "person_id",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "role",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "function",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "company",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "use_case",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "familiarity",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "lead_score",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "lead_stage",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "wants_follow_up",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "wants_demo",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "consent_at",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "first_met",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "last_met",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "label": "Organization",
+        "description": "The company or institution a visitor works for.",
+        "pole_type": "ORGANIZATION",
+        "subtype": "company",
+        "color": "#8B5CF6",
+        "icon": "building",
+        "pii_sensitive": false,
+        "properties": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "label": "Topic",
+        "description": "Something visitors care about: a technology or theme they want to learn about or build with (GraphRAG, Aura, knowledge graphs) or something they enjoyed at the event (a talk, the robot demo).",
+        "pole_type": "OBJECT",
+        "subtype": "topic",
+        "color": "#14B8A6",
+        "icon": "tag",
+        "pii_sensitive": false,
+        "properties": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "label": "Event",
+        "description": "One conversation the robot had with a consenting visitor at the booth: when, where, and a one-sentence summary (never a transcript).",
+        "pole_type": "EVENT",
+        "subtype": "encounter",
+        "color": "#F97316",
+        "icon": "message-circle",
+        "pii_sensitive": true,
+        "properties": [
+          {
+            "name": "event_id",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "ts",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "summary",
+            "type": "string",
+            "required": false
+          }
+        ]
       }
     ],
     "extraction_aliases": {},
@@ -143,6 +277,36 @@
         "source": "Agent",
         "target": "Person",
         "description": "Consented interaction"
+      },
+      {
+        "type": "WORKS_AT",
+        "source": "Person",
+        "target": "Organization",
+        "description": "The visitor's employer, as they said it"
+      },
+      {
+        "type": "INTERESTED_IN",
+        "source": "Person",
+        "target": "Topic",
+        "description": "What the visitor wants to learn about or build with"
+      },
+      {
+        "type": "ENJOYED",
+        "source": "Person",
+        "target": "Topic",
+        "description": "What the visitor enjoyed most at the event"
+      },
+      {
+        "type": "PARTICIPATED_IN",
+        "source": "Person",
+        "target": "Event",
+        "description": "The visitor took part in this conversation"
+      },
+      {
+        "type": "HELD_AT",
+        "source": "Event",
+        "target": "Location",
+        "description": "Where the conversation took place"
       }
     ]
   }

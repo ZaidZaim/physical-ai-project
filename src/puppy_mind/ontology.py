@@ -2,11 +2,14 @@
 
 Memory layers (context-graph model, as in the Neo4j agent-memory design):
   short-term  what is happening now: the observation stream and the conversation (Session, Sighting, Dialogue, Utterance)
-  long-term   what is known: entities and facts (Robot, Place, PhysicalObject, Person) and the spatial relationships between them
+  long-term   what is known: entities and facts (Robot, Place, PhysicalObject; at a booth Person, Organization, Topic, Event) and the
+              relationships between them
   reasoning   how answers were reached: ReasoningStep -> Lookup, with RELIED_ON links to the entities that mattered
 
-The domain part comes from ontology/puppy_pi.json (the same file `nams-setup` sends to NAMS). Aura stores the ontology's Object as :Item,
-Location as :Place and Agent as :Robot (see AURA_LABEL); counts below are live from Aura.
+The domain part comes from ontology/puppy_pi.json (the same file `nams-setup` sends to NAMS), so NAMS and Aura share one vocabulary: the
+POLE+O types. NAMS writes an extracted entity's type as a label into the same database, so where both could hold the same kind of node
+the app uses its own label (AURA_LABEL): Object is :Item, Location :Place, Agent :Robot, Organization :Company, Topic :Theme, Event
+:Encounter. Person stays :Person: the app's carry a personId, NAMS's never do. Counts below are live from Aura.
 """
 from __future__ import annotations
 
@@ -15,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 ONTOLOGY_FILE = Path(__file__).parents[2] / "ontology" / "puppy_pi.json"
-AURA_LABEL = {"Agent": "Robot", "Location": "Place", "Object": "Item"}  # ontology type -> label stored in Aura (NAMS owns :Location, so our places are :Place)
+# ontology (NAMS) type -> label stored in Aura. Never the same label as NAMS would write for that type, or the two would share nodes and
+# our uniqueness constraints would reject NAMS's writes (NAMS owns :Location, so our places are :Place, and so on).
+AURA_LABEL = {"Agent": "Robot", "Location": "Place", "Object": "Item", "Organization": "Company", "Topic": "Theme", "Event": "Encounter"}
 
 # agent-memory types (not in the domain file): label, memory layer, description, properties
 MEMORY_TYPES = [

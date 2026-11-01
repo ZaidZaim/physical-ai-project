@@ -115,6 +115,34 @@
   #timelineview { overflow:auto !important; background:var(--panel) } .tl { display:grid; grid-template-columns:90px 160px 80px 1fr; gap:0 14px; padding:9px 18px; border-bottom:1px solid var(--line); font:11.5px/1.5 var(--mono) }
   .tl .t { color:var(--mute) } .tl .s { font-family:var(--sans); color:var(--ink) }
 
+  /* ---- people (booth leads): graph first */
+  #peopleview { display:flex; flex-direction:column; background:var(--panel) }
+  #pkpi { display:flex; gap:18px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  .leadcount { display:flex; align-items:baseline; gap:8px } .leadcount b { font:600 34px/1 var(--mono); color:var(--ink); transition:color .3s }
+  .leadcount span { font:11px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
+  .leadcount.bump b { color:var(--new); animation:bump .7s ease-out } @keyframes bump { 0% { transform:scale(1) } 30% { transform:scale(1.25) } 100% { transform:scale(1) } }
+  .leadsplit { display:flex; gap:8px; align-items:center; flex-wrap:wrap } .leadsplit b { font-weight:600 }
+  #pkpi input[type=text] { width:220px } #pkpi a { font:10.5px var(--mono); color:var(--accent); text-decoration:none; letter-spacing:.08em; text-transform:uppercase }
+  #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 320px }
+  #pnetwrap { position:relative; min-height:320px; border-right:1px solid var(--line) } #pnet { position:absolute; inset:0 }
+  #plegend { position:absolute; left:12px; bottom:10px; display:flex; gap:12px; flex-wrap:wrap; font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute); background:var(--panel); border:1px solid var(--line); padding:5px 9px }
+  #plegend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:-1px } #plegend i.sq { border-radius:2px }
+  #pempty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:30px; color:var(--mute); font-size:13px; line-height:1.6 }
+  #plisten.on { color:var(--new); border-color:var(--new) } #plisten.talk { color:var(--accent); border-color:var(--accent) }
+  #plisten.on::before, #plisten.talk::before { content:"● "; animation:blink 1.6s ease-in-out infinite } @keyframes blink { 50% { opacity:.25 } }
+  #ptoast { position:absolute; top:14px; left:50%; transform:translateX(-50%); background:var(--new); color:#fff; font:600 13px var(--sans); padding:8px 16px; border-radius:3px; box-shadow:0 4px 18px rgba(0,0,0,.25); animation:pop .3s ease-out }
+  #pside { overflow:auto; min-height:0; background:var(--panel) }
+  .pside-h { padding:10px 14px 6px; font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
+  .lead { padding:10px 14px; border-top:1px solid var(--line); cursor:pointer } .lead:hover, .lead.sel { background:var(--card) }
+  .lead .top { display:flex; justify-content:space-between; gap:8px; align-items:baseline } .lead .nm { font-weight:600 } .lead .co { color:var(--mute); font-size:11.5px }
+  .lead .next { margin-top:5px; font-size:12px; line-height:1.45 } .lead .next::before { content:"→ "; color:var(--accent) } .lead.done .next { color:var(--mute); text-decoration:line-through }
+  .stage { font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding:1px 6px; border:1px solid currentColor; border-radius:2px; white-space:nowrap }
+  .stage.hot { color:var(--bad) } .stage.warm { color:var(--miss) } .stage.cold { color:var(--mute) }
+  #pdetail { padding:12px 14px; font-size:12px; line-height:1.55 } #pdetail dl { display:grid; grid-template-columns:92px 1fr; gap:3px 10px; margin:8px 0 }
+  #pdetail dt { color:var(--mute); font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; padding-top:2px } #pdetail dd { margin:0 }
+  #pdetail textarea { width:100%; min-height:64px; resize:vertical; background:var(--card); color:var(--ink); border:1px solid var(--line); padding:7px 8px; font:12px/1.45 var(--sans) }
+  .nextbox { margin:10px 0; padding:9px 10px; border:1px solid var(--accent); border-radius:3px } .nextbox .lbl { color:var(--accent) }
+
   /* ---- right: ask + activity */
   .askhead { padding:12px 14px 6px } .askhead p { margin:5px 0 0; color:var(--mute); font-size:11px }
   #chat { flex:1; min-height:80px; overflow:auto; padding:0 14px; display:flex; flex-direction:column; gap:10px }
@@ -143,7 +171,7 @@
     <div><b>Puppy Mind</b><span>Spatial memory · Physical AI</span></div>
   </div>
   <nav id="nav">
-    <button class="on" data-tab="graph">Graph</button><button data-tab="places">Places</button><button data-tab="onto">Ontology</button><button data-tab="timeline">Timeline</button>
+    <button class="on" data-tab="graph">Graph</button><button data-tab="places">Places</button><button data-tab="onto">Ontology</button><button data-tab="timeline">Timeline</button><button data-tab="people">People</button>
   </nav>
   <div class="theme" id="theme" title="Switch theme">DARK <i></i> LIGHT</div>
   <span class="spacer"></span>
@@ -228,6 +256,24 @@
     <div class="view" id="placesview" hidden><div class="cv" id="placesmap" style="position:relative;flex:1"></div><div id="placeslist"></div></div>
     <div class="view" id="schemaview" hidden><div id="onto"></div><div id="ontodetail"><span class="lbl">Ontology</span><div style="color:var(--mute);margin-top:4px">Click a type or a relationship. Circle size is how many exist in your graph right now.</div></div><div id="ontolegend"></div></div>
     <div class="view" id="timelineview" hidden><div id="timeline"></div></div>
+    <div class="view" id="peopleview" hidden>
+      <div id="pkpi">
+        <div class="leadcount" id="pleadbox" title="People who said yes to being remembered"><b id="pleads">0</b><span>leads</span></div>
+        <div class="leadsplit"><span class="stage hot"><b id="phot">0</b> hot</span><span class="stage warm"><b id="pwarm">0</b> warm</span><span class="stage cold"><b id="pcold">0</b> cold</span>
+          <span class="tag" id="popen" title="Leads with a next step that nobody has marked as done">0 follow-ups open</span>
+          <span class="tag" id="plisten" title="The robot listens for its wake word only while this tab is open">robot not listening</span></div>
+        <span class="spacer"></span>
+        <input type="text" id="psearch" placeholder="Find a lead, company or topic" autocomplete="off">
+        <a id="pexport" href="/api/people/export.csv" download>Export CSV</a>
+      </div>
+      <div id="pbody">
+        <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
+          <div id="pempty" hidden>No leads yet.<br>When a visitor says “Hey PuppyPi”, talks to the robot and agrees to be remembered, they appear here, linked to their company and the topics they care about.</div>
+          <div id="plegend"><span><i style="background:var(--bad)"></i>hot</span><span><i style="background:var(--miss)"></i>warm</span><span><i style="background:var(--gone)"></i>cold</span>
+            <span><i class="sq" style="background:var(--long)"></i>company</span><span><i class="sq" style="background:var(--reasoning)"></i>topic</span><span>size = lead score</span></div></div>
+        <aside id="pside"><div id="pcards"></div><div id="pdetail" hidden></div></aside>
+      </div>
+    </div>
   </section>
 
   <!-- right: ask + activity -->
@@ -467,6 +513,12 @@ function connect() {
     log('ask', `agent used ${esc(d.tools.join(' → ') || 'no tools')} for “${esc(d.question)}”`);
     d.ids.forEach(id => glow(id, css('--ask'), 3500));
   });
+  es.addEventListener('greeting', e => { const d = JSON.parse(e.data);
+    if (d.skipped) { log('miss', `person in view, not greeted: ${esc(d.reason || 'nobody to greet')}${d.people !== undefined ? ` (${d.people} seen, ${d.engaged} close and turned to the robot)` : ''}`); return; }
+    log('new', `greeted ${d.kind === 'group' ? 'a group' : d.returning ? 'a returning visitor' : d.name || 'someone'} (${d.people} in view): “${esc(d.text)}”${d.trick ? (d.trick.ok ? ' + ' + esc(d.trick.action) : ' (no trick: ' + esc(d.trick.reason) + ')') : ''}`); });
+  es.addEventListener('gesture', e => { const d = JSON.parse(e.data); log(d.ok ? 'ask' : 'miss', d.ok ? `trick: ${esc(d.name)}` : `trick ${esc(d.name)} skipped: ${esc(d.reason)}`); });
+  es.addEventListener('converse', e => { const d = JSON.parse(e.data); log('ask', `booth chat (${esc(d.tools.join(' → ') || 'no tools')}): “${esc(d.reply)}”`); });
+  es.addEventListener('people', e => { const d = JSON.parse(e.data); log(d.event === 'saved' ? 'new' : 'miss', `people: ${esc(d.event)} ${esc(d.name || '')} ${d.stage ? '(' + esc(d.stage) + ')' : ''}`); if (!$('#peopleview').hidden) loadPeople().catch(() => {}); });
 }
 
 /* ---------- controls / state ---------- */
@@ -539,14 +591,14 @@ async function refreshSummary() {
     $('#c-reasoning').textContent = `${m.reasoning.steps} steps · ${m.reasoning.tool_calls} lookups`;
   } catch (e) {}
 }
-const VIEWS = { graph:'#graphview', places:'#placesview', onto:'#schemaview', timeline:'#timelineview' };
+const VIEWS = { graph:'#graphview', places:'#placesview', onto:'#schemaview', timeline:'#timelineview', people:'#peopleview' };
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('on', x === b));
   const t = b.dataset.tab;
   for (const [k, sel] of Object.entries(VIEWS)) $(sel).hidden = k !== t;
-  $('#lenses').style.visibility = t === 'graph' ? 'visible' : 'hidden';
+  $('#lenses').style.display = t === 'graph' ? '' : 'none';
   const fail = e => { $(VIEWS[t]).insertAdjacentHTML('afterbegin', '<div style="padding:14px;color:var(--bad);font:12px var(--mono)">Could not load this view: ' + esc(e.message || e) + '</div>'); };
-  try { if (t === 'onto') loadOntology().catch(fail); else if (t === 'places') loadPlaces().catch(fail); else if (t === 'timeline') loadTimeline().catch(fail); else setTimeout(() => { net.redraw(); net.fit(); }, 100); } catch (e) { fail(e); }
+  try { if (t === 'onto') loadOntology().catch(fail); else if (t === 'places') loadPlaces().catch(fail); else if (t === 'timeline') loadTimeline().catch(fail); else if (t === 'people') { loadPeople().catch(fail); listenStart(); } else setTimeout(() => { net.redraw(); net.fit(); }, 100); } catch (e) { fail(e); }
 });
 
 /* ---------- places: where the robot is and how rooms connect ---------- */
@@ -575,6 +627,119 @@ async function loadPlaces() {
   });
 }
 
+/* ---------- people: booth leads, graph first (only people who said yes) ---------- */
+const PTOK = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('brain_token') || '';
+const papi = (p, o = {}) => api(p, { ...o, headers:{ ...(o.headers || {}), ...(PTOK ? { 'X-Brain-Token': PTOK } : {}) } });
+if (PTOK) $('#pexport').href += '?token=' + encodeURIComponent(PTOK);
+let peopleNet = null, pNodes = null, pEdges = null, peopleSel = null, leadCount = null, leadsCache = [];
+const STAGE_COLOR = () => ({ hot:css('--bad'), warm:css('--miss'), cold:css('--gone') });
+const openFollowUp = p => !p.followed_up && !!(p.next_step || p.wants_follow_up || p.wants_demo);
+function countTo(el, to) {  // the lead counter counts up instead of jumping
+  const from = parseInt(el.textContent, 10) || 0;
+  if (from === to) return;
+  const t0 = performance.now(), dur = Math.min(900, 150 * Math.abs(to - from) + 300);
+  const step = now => { const k = Math.min(1, (now - t0) / dur); el.textContent = Math.round(from + (to - from) * k); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+  setTimeout(() => { el.textContent = to; }, dur + 50);  // a background tab pauses animation frames: always land on the number
+}
+function toast(text) {
+  const t = $('#ptoast'); t.textContent = text; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 4500);
+}
+async function loadPeople() {
+  const q = $('#psearch').value.trim();
+  const d = await papi('/api/people?' + new URLSearchParams(q ? { q } : {}));
+  const all = q ? (await papi('/api/people')).counts : d.counts;
+  if (leadCount !== null && all.people > leadCount) {  // someone new said yes: count up, celebrate, show who
+    const newest = [...d.people].sort((a, b) => (b.first_met || '').localeCompare(a.first_met || ''))[0];
+    $('#pleadbox').classList.remove('bump'); void $('#pleadbox').offsetWidth; $('#pleadbox').classList.add('bump');
+    if (newest) toast(`New lead: ${newest.name}${newest.company ? ' · ' + newest.company : ''}`);
+  }
+  leadCount = all.people;
+  countTo($('#pleads'), all.people); countTo($('#phot'), all.hot); countTo($('#pwarm'), all.warm); countTo($('#pcold'), all.people - all.hot - all.warm);
+  leadsCache = d.people;
+  const open = d.people.filter(openFollowUp).length;
+  $('#popen').textContent = `${open} follow-up${open === 1 ? '' : 's'} open`; $('#popen').classList.toggle('warn', open > 0);
+  renderCards();
+  await drawPeopleGraph(q ? new Set(d.people.map(p => p.person_id)) : null);
+  if (peopleSel) showPerson(peopleSel, true);
+}
+function renderCards() {
+  if (peopleSel && !$('#pdetail').hidden) return;
+  $('#pcards').innerHTML = `<div class="pside-h">Next steps for the Neo4j team</div>` + (leadsCache.length ? leadsCache.map(p =>
+    `<div class="lead${p.followed_up ? ' done' : ''}" data-id="${esc(p.person_id)}"><div class="top"><span><span class="nm">${esc(p.name)}</span>`
+    + `${p.company ? ' <span class="co">· ' + esc(p.company) + '</span>' : ''}</span><span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></div>`
+    + `<div class="next">${esc(p.next_step || (p.use_case ? 'Ask about: ' + p.use_case : 'No next step yet: open to add one'))}</div></div>`).join('')
+    : '<div class="pside-h" style="text-transform:none;letter-spacing:0;font-size:12px">Nothing to follow up yet.</div>');
+  document.querySelectorAll('#pcards .lead').forEach(c => c.onclick = () => showPerson(c.dataset.id));
+}
+async function drawPeopleGraph(only) {
+  const g = await papi('/api/people/graph'), ST = STAGE_COLOR(), C = { Company:css('--long'), Theme:css('--reasoning') };
+  const byId = Object.fromEntries(leadsCache.map(p => [p.person_id, p]));
+  let nodes = g.nodes, edges = g.edges;
+  if (only) {  // search: the matching leads and what they link to
+    const keep = new Set(only); edges = edges.filter(e => only.has(e.source)); edges.forEach(e => keep.add(e.target)); nodes = nodes.filter(n => keep.has(n.id));
+  }
+  $('#pempty').hidden = nodes.length > 0;
+  const N = nodes.map(n => n.kind === 'Person' ? {
+      id:n.id, label:n.label, shape:'dot', size:14 + (n.score || 0) * 0.32, borderWidth: n.id === peopleSel ? 4 : 2,
+      color:{ background:ST[n.stage] || ST.cold, border: n.id === peopleSel ? css('--ink') : ST[n.stage] || ST.cold, highlight:{ background:ST[n.stage] || ST.cold, border:css('--ink') } },
+      font:{ size:14, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') },
+      title:`${n.label} · ${n.stage} ${n.score || 0}` + (byId[n.id] && byId[n.id].next_step ? `\n→ ${byId[n.id].next_step}` : '') }
+    : { id:n.id, label:n.label, shape:'box', margin:6, color:{ background:C[n.kind], border:C[n.kind] }, font:{ size:11, color:'#fff', face:FONT } });
+  const E = edges.map((e, i) => ({ id:`${e.source}|${e.type}|${e.target}`, from:e.source, to:e.target, dashes:e.type === 'ENJOYED', arrows:{ to:{ enabled:true, scaleFactor:.5 } },
+    label: e.type === 'WORKS_AT' ? 'works at' : e.type === 'ENJOYED' ? 'enjoyed' : '', color:{ color:css('--mute'), opacity:.7 }, font:{ size:9, color:css('--mute'), strokeWidth:0, face:FONT } }));
+  if (!peopleNet) {
+    pNodes = new vis.DataSet(N); pEdges = new vis.DataSet(E);
+    peopleNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-70, springLength:110, avoidOverlap:.6 }, stabilization:{ iterations:150 } }, interaction:{ hover:true, tooltipDelay:120 } });
+    peopleNet.on('click', p => { const id = p.nodes[0]; if (id && id.startsWith('psn-')) showPerson(id); else if (!id) closePerson(); });
+    peopleNet.once('stabilizationIterationsDone', () => peopleNet.fit({ animation:true }));
+  } else {  // update in place: the graph grows instead of re-shuffling
+    const nid = new Set(N.map(n => n.id)), eid = new Set(E.map(e => e.id));
+    pNodes.remove(pNodes.getIds().filter(i => !nid.has(i))); pEdges.remove(pEdges.getIds().filter(i => !eid.has(i)));
+    pNodes.update(N); pEdges.update(E);
+  }
+}
+function closePerson() { peopleSel = null; $('#pdetail').hidden = true; $('#pcards').hidden = false; renderCards(); drawPeopleGraph(null).catch(() => {}); }
+async function showPerson(id, quiet) {
+  const first = peopleSel !== id; peopleSel = id;
+  let p; try { p = await papi('/api/people/' + encodeURIComponent(id)); } catch (e) { closePerson(); return; }
+  $('#pcards').hidden = true; $('#pdetail').hidden = false;
+  const editing = document.activeElement && document.activeElement.id === 'pnext';
+  if (quiet && editing) return;  // a live update must not wipe what someone is typing
+  const row = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : '', last = p.encounters[0];
+  $('#pdetail').innerHTML = `<button class="sm" id="pback">← All leads</button>
+    <div style="margin:10px 0 2px"><b style="font-size:16px">${esc(p.name)}</b> <span class="stage ${esc(p.lead_stage)}">${esc(p.lead_stage)} ${p.lead_score}</span></div>
+    <div style="color:var(--mute)">${esc([p.role, p.company].filter(Boolean).join(' · '))}</div>
+    <div class="nextbox"><div class="lbl"><span>Next step for the Neo4j team</span><span class="tag">${p.next_step_by === 'team' ? 'set by team' : 'AI suggestion'}</span></div>
+      <textarea id="pnext" placeholder="e.g. send the aerospace case study, book a 30-min call">${esc(p.next_step || '')}</textarea>
+      <div style="display:flex;gap:6px;margin-top:6px"><button class="sm pri" id="pnextsave">Save</button><button class="sm" id="pfu">${p.followed_up ? '✓ Done (undo)' : 'Mark done'}</button></div></div>
+    <dl>${row('Building', p.use_case)}${row('Interested', p.interests.join(', '))}${row('Enjoyed', p.enjoyed.join(', '))}${row('Knows Neo4j', p.familiarity)}${row('Email', p.email)}
+      ${p.wants_demo || p.wants_follow_up ? `<dt>Asked for</dt><dd>${[p.wants_demo && 'a demo', p.wants_follow_up && 'a follow-up'].filter(Boolean).join(' and ')}</dd>` : ''}
+      <dt>Met</dt><dd>${p.meet_count}× · ${esc((p.last_met || '').slice(5, 16).replace('T', ' '))}${last && last.place ? ' · ' + esc(last.place) : ''}</dd></dl>
+    ${last && last.summary ? `<div class="lbl" style="margin:8px 0 2px">Conversation</div><div>${esc(last.summary)}</div>` : ''}
+    <div style="margin-top:14px"><button class="sm" id="pforget" style="color:var(--bad)">Forget this person</button></div>`;
+  $('#pback').onclick = closePerson;
+  $('#pnextsave').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/next_step`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text:$('#pnext').value }) }); $('#pnextsave').textContent = 'Saved ✓'; loadPeople().catch(() => {}); };
+  $('#pfu').onclick = async () => { await papi(`/api/people/${encodeURIComponent(id)}/followup`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ done:!p.followed_up }) }); loadPeople(); };
+  $('#pforget').onclick = async () => { if (confirm(`Erase ${p.name} and their conversations? This cannot be undone.`)) { await papi('/api/people/' + encodeURIComponent(id), { method:'DELETE' }); closePerson(); loadPeople(); } };
+  if (first && peopleNet && pNodes && pNodes.get(id)) { drawPeopleGraph(null).catch(() => {}); peopleNet.selectNodes([id]); peopleNet.focus(id, { scale:1.1, animation:{ duration:500 } }); }
+}
+/* While this tab is open, tell the brain: the robot listens for "Hey PuppyPi" (and greets) only then */
+let listenTimer = null;
+function showListen(st) {
+  const el = $('#plisten'); el.classList.toggle('on', st.state === 'listening'); el.classList.toggle('talk', st.state === 'conversation');
+  el.textContent = st.state === 'conversation' ? 'in a conversation' : st.state === 'listening' ? `listening for “${st.wake_word}”` : 'robot not listening';
+}
+async function listenPing() {
+  if ($('#peopleview').hidden || document.hidden) return listenStop();
+  try { showListen(await papi('/api/listen', { method:'POST' })); } catch (e) { showListen({ state:'off' }); }
+}
+function listenStart() { if (!listenTimer) { listenPing(); listenTimer = setInterval(listenPing, 5000); } }
+function listenStop() { clearInterval(listenTimer); listenTimer = null; showListen({ state:'off' }); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('#peopleview').hidden) listenStart(); });
+let ptimer = null; $('#psearch').oninput = () => { clearTimeout(ptimer); ptimer = setTimeout(() => loadPeople().catch(() => {}), 250); };
+
 /* ---------- timeline ---------- */
 async function loadTimeline() {
   const rows = await api('/api/timeline?limit=80');
@@ -584,7 +749,7 @@ async function loadTimeline() {
 
 /* ---------- ontology ---------- */
 let ontoNet = null;
-const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Location', 'Object', 'Person'] },
+const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Object', 'Location', 'Event', 'Person', 'Organization', 'Topic'] },
                 short:{ y:60, label:'SHORT-TERM MEMORY: what is happening', order:['Session', 'Sighting', 'Dialogue', 'Utterance'] },
                 reasoning:{ y:270, label:'REASONING MEMORY: how answers were reached', order:['ReasoningStep', 'Lookup'] } };
 async function loadOntology() {

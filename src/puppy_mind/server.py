@@ -10,12 +10,16 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, StreamingResponse
+from urllib.parse import quote
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .brain import Brain
+from .drive import TRICKS
+from .voice import heard_nothing
 from .scenario import _scene
 from .sources import open_source
 
@@ -175,7 +179,7 @@ def ask(body: Ask):
     return brain.ask(body.question)
 
 
-ROBOT_FILES = {"puppy_drive.py", "puppy_streamer.py"}
+ROBOT_FILES = {"puppy_drive.py", "puppy_streamer.py", "puppy_voice.py"}
 
 
 @app.get("/robot/{name}")
@@ -376,3 +380,219 @@ def nav_cancel():
 @app.get("/api/nav")
 def nav_state():
     return brain.nav.state
+
+
+# ---------------------------------------------------------------- people: talk, greet, remember (docs/PEOPLE.md)
+class Say(BaseModel):
+    text: str
+    encounter_id: str | None = None
+
+
+class FollowUp(BaseModel):
+    done: bool = True
+
+
+class NextStep(BaseModel):
+    text: str
+
+
+def _robot_auth(token: str | None) -> None:
+    if brain.s.brain_token and not secrets.compare_digest(token or "", brain.s.brain_token):
+        raise HTTPException(401, "bad token")
+
+
+def _local_auth(request: Request, header: str | None, query: str | None) -> None:
+    """People records are personal data and booth mode moves the robot: this machine only, unless BRAIN_TOKEN is set and supplied (header or ?token=)."""
+    host = request.client.host if request.client else ""
+    tok = brain.s.brain_token
+    if host in LOOPBACK or (tok and (secrets.compare_digest(header or "", tok) or secrets.compare_digest(query or "", tok))):
+        return
+    raise HTTPException(403, "People data and booth controls are only for this machine. Set BRAIN_TOKEN in .env and pass ?token= to open it from another one.")
+
+
+def _need_voice() -> None:
+    if not brain.people.client:
+        raise HTTPException(503, "OPENAI_API_KEY is not set")
+
+
+@app.post("/api/converse")
+def converse(body: Say, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """One typed turn of the booth conversation (the same brain the voice endpoint uses)."""
+    _local_auth(request, x_brain_token, token)
+    _need_voice()
+    return brain.people.turn(body.text, body.encounter_id, brain.place_info().get("name"))
+
+
+@app.post("/api/voice/turn")
+def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None), require_wake: bool = Form(True),
+               x_brain_token: str | None = Header(None)):
+    """The robot (WAV) or the UI's Hold to talk (WebM) posts what its microphone heard; the reply comes back as WAV to play.
+    204 when nothing intelligible was said."""
+    _robot_auth(x_brain_token)
+    _need_voice()
+    t0 = time.monotonic()
+    audio = file.file.read()
+    if brain.drive.moving:  # a trick or a turn: the microphone hears servos, not a visitor (seen as "Thanks for watching!" phantoms)
+        return Response(status_code=204, headers={"X-Heard": quote("(the robot was moving)")})
+    text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
+    t_heard = time.monotonic()
+    if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
+        ask_again = brain.people.unclear_reply(encounter_id) if (not require_wake or brain.listening) else None
+        if ask_again:  # in the middle of a conversation: never just go silent (the visitor would think it hung up)
+            return Response(brain.voice.speak(ask_again), media_type="audio/wav",
+                            headers={"X-Encounter": encounter_id, "X-Heard": quote("(unclear: %s)" % text[:100]), "X-Reply": quote(ask_again)})
+        return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
+    waker = None
+    if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)
+        if not brain.listening:
+            return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the People tab)")})
+        ok, encounter_id = brain.people.addressed(text, encounter_id)
+        if not ok:  # what bystanders said is not echoed anywhere
+            return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
+        if encounter_id is None:  # a new conversation: the trick and the look up happen while the reply is being prepared
+            waker = brain.on_wake()
+    r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))
+    t_thought = time.monotonic()
+    reply_audio = brain.voice.speak(r["reply"])
+    t_spoken = time.monotonic()
+    if waker:
+        waker.join(timeout=brain.drive.action_busy_s + 5)  # speak once it has finished the trick and looks at the visitor
+    timing = "%.1fs: hear %.1f, think %.1f, speak %.1f, trick %.1f" % (
+        time.monotonic() - t0, t_heard - t0, t_thought - t_heard, t_spoken - t_thought, time.monotonic() - t_spoken)
+    print("voice turn " + timing, flush=True)  # where the time goes, in the app's window
+    return Response(reply_audio, media_type="audio/wav",
+                    headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600]),
+                             "X-Timing": quote(timing)})
+
+
+@app.post("/api/listen")
+def listen(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The People tab pings this while it is open: the robot listens for its wake word (and greets) only then."""
+    _local_auth(request, x_brain_token, token)
+    return brain.listen_ping()
+
+
+@app.get("/api/voice/next")
+def voice_next(x_brain_token: str | None = Header(None)):
+    """Polled by the robot: a greeting it should say (WAV), or 204."""
+    _robot_auth(x_brain_token)
+    brain.people_tick()  # the robot polls every second: a good clock for levelling the head after a conversation
+    it = brain.people.outbox.next()
+    if not it:
+        return Response(status_code=204)
+    if not brain.voice:
+        return Response(status_code=204)
+    return Response(brain.voice.speak(it["text"]), media_type="audio/wav", headers={"X-Reply": quote(it["text"][:600])})
+
+
+@app.get("/api/people")
+def people_list(request: Request, stage: str | None = None, q: str | None = None, x_brain_token: str | None = Header(None), token: str | None = None):
+    _local_auth(request, x_brain_token, token)
+    return {"people": brain.mem.list_people(stage, q), "counts": brain.mem.people_counts(), "consent_required": True}
+
+
+@app.get("/api/people/graph")
+def people_graph(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    _local_auth(request, x_brain_token, token)
+    return brain.mem.people_graph()
+
+
+LEAD_COLUMNS = ["name", "company", "role", "function", "email", "lead_stage", "lead_score", "next_step", "use_case", "familiarity",
+                "interests", "enjoyed", "wants_follow_up", "wants_demo", "followed_up", "notes", "first_met", "last_met", "meet_count"]
+
+
+@app.get("/api/people/export.csv")
+def people_export(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """Leads for the CRM. Everyone in the graph said yes to being remembered, so everyone is exportable."""
+    _local_auth(request, x_brain_token, token)
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(LEAD_COLUMNS)
+    def cell(v) -> str:  # spoken text ends up in a spreadsheet: neutralise formulas such as =HYPERLINK(...)
+        v = "; ".join(v) if isinstance(v, list) else ("" if v is None else str(v))
+        return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
+    for p in brain.mem.list_people():
+        w.writerow([cell(p.get(c)) for c in LEAD_COLUMNS])
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=booth-leads.csv"})
+
+
+@app.get("/api/people/{person_id}")
+def people_get(person_id: str, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    _local_auth(request, x_brain_token, token)
+    p = brain.mem.get_person(person_id)
+    if not p:
+        raise HTTPException(404, "unknown person")
+    return p
+
+
+@app.post("/api/people/{person_id}/next_step")
+def people_next_step(person_id: str, body: NextStep, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The Neo4j team's own next step for this lead (replaces the AI suggestion for good)."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.people.set_next_step(person_id, body.text):
+        raise HTTPException(404, "unknown person")
+    brain.bus.publish("people", {"event": "next_step", "person_id": person_id})
+    return {"ok": True}
+
+
+@app.post("/api/people/{person_id}/followup")
+def people_followup(person_id: str, body: FollowUp, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    _local_auth(request, x_brain_token, token)
+    if not brain.people.set_followed_up(person_id, body.done):
+        raise HTTPException(404, "unknown person")
+    return {"ok": True}
+
+
+@app.delete("/api/people/{person_id}")
+def people_forget(person_id: str, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """Erase a person and their encounters."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.people.forget(person_id):
+        raise HTTPException(404, "unknown person")
+    brain.bus.publish("people", {"event": "forgotten", "person_id": person_id})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- booth mode: look up at people, greet with a trick
+class Booth(BaseModel):
+    on: bool
+    look_up_deg: float | None = None
+
+
+class Trick(BaseModel):
+    name: str
+
+
+@app.get("/api/booth")
+def booth_get():
+    st = brain.drive.status()
+    return {"on": st["booth"], "look_up_deg": st["look_up_deg"], "in_action": st["in_action"], "greet_action": brain.s.greet_action,
+            "tricks": list(TRICKS)}
+
+
+@app.post("/api/booth")
+def booth_set(body: Booth, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """Booth mode moves the robot (pitch, tricks): this machine only, or with BRAIN_TOKEN, like driving."""
+    _local_auth(request, x_brain_token, token)
+    brain.drive.set_booth(body.on, body.look_up_deg)
+    _drive_event()
+    return booth_get()
+
+
+@app.post("/api/gesture")
+def gesture(body: Trick, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    _local_auth(request, x_brain_token, token)
+    return brain.gesture(body.name)
+
+
+@app.post("/api/voice/say")
+def voice_say(body: Say, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """Text -> WAV in the robot's voice, for the UI's 'Speak here' (testing without the robot's speaker). This machine only."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.voice:
+        raise HTTPException(503, "OPENAI_API_KEY is not set")
+    return Response(brain.voice.speak(body.text[:1500]), media_type="audio/wav")

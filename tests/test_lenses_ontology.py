@@ -91,3 +91,30 @@ def test_api_lenses_ontology_and_demo_guard(client, monkeypatch):
     monkeypatch.setenv("PUPPY_FAKE_MEMORY", "0")  # pretend this is the real graph
     r = client.post("/api/demo/replay?delay=0.01")
     assert r.status_code == 403 and "real graph" in r.json()["detail"]
+
+
+def test_booth_vocabulary_is_pole_o_like_nams_and_maps_to_its_own_aura_labels():
+    o = ontology.build({"Company": 2, "Theme": 5, "Encounter": 3, "Person": 4})
+    by = {n["id"]: n for n in o["nodes"]}
+    assert {by[t]["pole"] for t in ("Person", "Organization", "Topic", "Event")} == {"PERSON", "ORGANIZATION", "OBJECT", "EVENT"}
+    assert (by["Organization"]["aura_label"], by["Topic"]["aura_label"], by["Event"]["aura_label"]) == ("Company", "Theme", "Encounter")
+    assert (by["Organization"]["count"], by["Topic"]["count"], by["Event"]["count"], by["Person"]["count"]) == (2, 5, 3, 4)
+    assert by["Person"]["pii"] and by["Event"]["pii"] and not by["Topic"]["pii"]
+    # NAMS writes an entity's ontology type as a label into the shared database: our label for a type must never be that same name
+    # (except Person, whose app nodes are told apart by personId), or our uniqueness constraints would reject NAMS's writes.
+    for typ, label in ontology.AURA_LABEL.items():
+        assert label != typ and label not in by, (typ, label)
+
+
+def test_ontology_declares_every_people_label_and_relationship_the_app_writes():
+    src = (SRC / "people_graph.py").read_text(encoding="utf-8")
+    labels = set(re.findall(r"\(\w*:([A-Z][A-Za-z]+)", src))
+    rels = set(re.findall(r"\[\w*:([A-Z_]+)(?:[|\]{ ])", src)) | set(re.findall(r'"([A-Z_]{4,})", "(?:Company|Theme)"', src))
+    o = ontology.build()
+    aura = {n["aura_label"] for n in o["nodes"]}
+    declared = {(e["type"], e["source"], e["target"]) for e in o["edges"]}
+    assert labels - {"Place"} <= aura, labels - aura
+    assert {"WORKS_AT", "INTERESTED_IN", "ENJOYED", "PARTICIPATED_IN", "HELD_AT"} <= rels
+    assert rels <= {t for t, _, _ in declared}, rels - {t for t, _, _ in declared}
+    assert {("WORKS_AT", "Person", "Organization"), ("INTERESTED_IN", "Person", "Topic"), ("ENJOYED", "Person", "Topic"),
+            ("PARTICIPATED_IN", "Person", "Event"), ("HELD_AT", "Event", "Location")} <= declared
