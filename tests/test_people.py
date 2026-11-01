@@ -348,7 +348,7 @@ def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
     r = s.turn("We're building a physical AI system and wonder how Neo4j can fit.", r["encounter_id"])
     p = mem.get_person(p["person_id"])
     assert p["use_case"] == "a physical AI system" and "memory types" in p["interests"] and p["lead_stage"] in ("warm", "hot")
-    assert "Robot: Great! What are you building?\nVisitor: We're building" in seen[-1]  # whole conversation, robot's question included
+    assert "Robot: Great! And what is your role there?\nVisitor: We're building" in seen[-1]  # whole conversation, robot's question included
 
 
 def test_nothing_is_extracted_or_saved_without_consent():
@@ -369,26 +369,31 @@ def test_a_spelled_name_corrects_the_record():
     assert [p["name"] for p in mem.list_people()] == ["Zaid Zaim"] and mem.list_people()[0]["company"] == "Neo4j"
 
 
-def test_the_robot_is_told_what_is_still_unknown_and_asks_one_thing():
-    from puppy_mind.people import CONSENT_QUESTION, unknown_fields
+def test_the_robot_ends_with_the_next_unknown_fact_as_a_fixed_question():
+    from puppy_mind.people import CONSENT_QUESTION, QUESTIONS, unknown_fields
 
     assert "spell it" in CONSENT_QUESTION
     assert unknown_fields({"company": "Neo4j", "role": "DevRel"})[0] == "what they are building or working on"
-    assert unknown_fields({"company": "x", "role": "y", "use_case": "z", "familiarity": "user", "enjoyed": ["a"], "wants_follow_up": False}) == []
-    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Zaid", company="Neo4j"), "Thanks!"], ["Sure."]])
+    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Zaid", company="Neo4j"), "Thanks!"],
+                ["Graphs connect things. How are you liking it?"]])
     r = s.turn("Yes")
-    s.turn("Tell me about graphs", r["encounter_id"])
-    assert "Still unknown about them: their role" in s.client.prompts[-1] and "ONE short, natural question" in s.client.prompts[-1]
+    assert r["reply"].endswith(QUESTIONS["role"])  # company known: the next unknown is the role
+    r = s.turn("Tell me about graphs", r["encounter_id"])
+    assert r["reply"] == "Graphs connect things. " + QUESTIONS["use_case"]  # the model's own question is replaced
+    assert "one question about them is added" in s.client.prompts[-1]
 
 
-def test_an_unanswered_question_is_not_asked_again():
-    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Rosenberg", company="Rockstar Games"), "Great!"],
-                ["Sure."], ["You're welcome!"]])
-    r = s.turn("Yes")
-    r = s.turn("Tell me about memory types", r["encounter_id"])
-    first = s.client.prompts[-1].split("natural question about ")[1][:20]
-    s.turn("Thank you", r["encounter_id"])
-    assert s.client.prompts[-1].split("natural question about ")[1][:20] != first  # moved on to the next unknown
+def test_an_unanswered_question_is_not_asked_again_and_a_goodbye_gets_none():
+    from puppy_mind.people import QUESTIONS
+
+    s, _ = svc([[call("record_consent", granted=True), call("save_person_facts", name="Christian"), "Thanks!"],
+                ["Contracts fit graphs well."], ["Have a great day!"]])
+    r = s.turn("Yes, of course")
+    assert r["reply"].endswith(QUESTIONS["company"])  # seen at the booth: company was never asked
+    r = s.turn("I want to process thousands of contracts", r["encounter_id"])
+    assert r["reply"].endswith(QUESTIONS["role"])  # he did not answer the company question: move on, do not repeat it
+    r = s.turn("I need to run now to the next one. Thank you very much, PuppyPi.", r["encounter_id"])
+    assert r["reply"] == "Have a great day!"  # no question on a goodbye
 
 
 def test_demo_and_follow_up_only_from_the_visitors_own_words():

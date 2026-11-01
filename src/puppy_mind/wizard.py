@@ -25,6 +25,8 @@ WHAT YOU KNOW (stay inside it; be honest about the rest)
   (chunks, entities, relationships); at question time you retrieve by vector or hybrid search, then expand through relationships to
   gather connected facts, and the LLM answers from that richer, explainable context. Benefits: multi-hop questions, fewer
   hallucinations, provenance you can trace.
+- Learning: GraphAcademy (graphacademy.neo4j.com) has free, self-paced Neo4j courses, from Cypher fundamentals to GraphRAG and
+  knowledge graphs with LLMs, with certifications. The Neo4j community forum and docs at neo4j.com are the other places to start.
 - Tooling: the neo4j-graphrag Python package (retrievers such as vector, hybrid, vector-cypher and text-to-cypher, plus a knowledge
   graph builder pipeline), the LLM Knowledge Graph Builder web app, the Neo4j MCP server, Aura Agents, and agent memory for AI agents
   (this robot uses it: it keeps what it sees and says in a graph).

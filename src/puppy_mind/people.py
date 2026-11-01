@@ -54,6 +54,31 @@ UNKNOWN_FIELDS = (  # what a good lead record needs, in the order the robot asks
     ("company", "where they work"), ("role", "their role"), ("use_case", "what they are building or working on"),
     ("familiarity", "how well they know Neo4j"), ("enjoyed", "what they enjoyed most at the event"),
     ("wants_follow_up", "whether they would like the Neo4j team to follow up"))
+QUESTIONS = {  # the exact question that ends the robot's reply, one unknown fact at a time (the model picked its own and skipped company)
+    "company": "Which company are you with?",
+    "role": "And what is your role there?",
+    "use_case": "What are you working on, or hoping to build with graphs?",
+    "familiarity": "How familiar are you with Neo4j so far?",
+    "enjoyed": "What have you enjoyed most at {event} so far?",
+    "wants_follow_up": "Would you like the Neo4j team to follow up with you after the event?",
+}
+_BYE = re.compile(r"\b(bye|goodbye|have to (go|run)|need to (go|run)|gotta (go|run)|got to (go|run)|see you|that'?s (it|all)|"
+                  r"that is (it|all)|next (one|session|talk)|thanks?,? (that'?s|bye)|thank you (so|very) much)\b", re.I)
+
+
+def says_goodbye(text: str) -> bool:
+    return bool(_BYE.search(text or ""))
+
+
+def end_with_question(reply: str, question: str) -> str:
+    """Make `question` the reply's last sentence, replacing a question the model ended with itself (one question per answer)."""
+    reply = (reply or "").strip()
+    if question.lower() in reply.lower():
+        return reply
+    parts = re.split(r"(?<=[.!?])\s+", reply)
+    if parts and parts[-1].endswith("?"):
+        parts = parts[:-1]
+    return (" ".join(parts) + " " + question).strip()
 
 
 _WISH = {
@@ -409,14 +434,7 @@ class PeopleService:
             lines.append({True: "- Consent to remember them: granted. What they say is saved automatically after each answer.",
                           False: "- Consent to remember them: they said NO. Save nothing."}[enc.consent])
         if enc.consent is True and enc.person_id:
-            p = self.mem.get_person(enc.person_id)
-            missing = unknown_fields(p) if p else []
-            fresh = [m for m in missing if m not in enc.asked_about]  # an unanswered question is not asked again: move on
-            if fresh:
-                enc.asked_about.append(fresh[0])
-                lines.append(f"- Still unknown about them: {', '.join(missing)}. After answering, END with ONE short, natural question about "
-                             f"{fresh[0]} (skip it only if they just asked you something that needs a longer answer). Do not ask again "
-                             f"about anything you already asked in this conversation.")
+            lines.append("- Do NOT end with a question of your own about them: one question about them is added after your answer.")
         if enc.name:
             lines.append(f"- Their name: {enc.name}.")
         if enc.greeted:
@@ -536,6 +554,12 @@ class PeopleService:
         enc = self._encounter(encounter_id, place)
         with enc.lock:
             consent_before = enc.consent
+            learner = None
+            if consent_before is True and enc.person_id and self.extract_fn:  # learn from this message while the reply is prepared
+                transcript = "\n".join(("Visitor: " if m["role"] == "user" else "Robot: ") + m["content"]
+                                       for m in [*enc.messages[-15:], {"role": "user", "content": text}])
+                learner = threading.Thread(target=self._learn, args=(enc, transcript, text, enc.pending_email), daemon=True)
+                learner.start()
             email_before = enc.pending_email  # only an email read back in an EARLIER turn can be confirmed by this message
             sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language, self.s.booth_info)
             history = enc.messages[-12:]
@@ -571,18 +595,32 @@ class PeopleService:
                 enc.consent_asked = True
             enc.last = time.monotonic()
         if enc.consent is True and enc.person_id:
-            # the whole conversation (facts and summary), plus this message for wishes; at the yes: everything they said before
-            transcript = "\n".join(("Visitor: " if m["role"] == "user" else "Robot: ") + m["content"] for m in enc.messages[-16:])
-            latest = "\n".join(m["content"] for m in enc.messages if m["role"] == "user") if consent_before is not True else text
-            if self.learn_in_background:
-                threading.Thread(target=self._learn, args=(enc, transcript, latest, email_before), daemon=True).start()
-            else:
-                self._learn(enc, transcript, latest, email_before)
+            if learner is not None:  # started beside the reply: wait for it, so the question below never asks what they just said
+                learner.join(timeout=8)
+            else:  # just said yes: learn from everything they said before (once, before choosing a question)
+                transcript = "\n".join(("Visitor: " if m["role"] == "user" else "Robot: ") + m["content"] for m in enc.messages[-16:])
+                said = "\n".join(m["content"] for m in enc.messages if m["role"] == "user")
+                self._learn(enc, transcript, said, email_before)
+            question = self._next_question(enc, text)
+            if question:
+                reply = end_with_question(reply, question)
+                enc.messages[-1]["content"] = reply
         person = self.mem.get_person(enc.person_id) if enc.person_id else None
         out = {"encounter_id": enc.id, "reply": reply, "consent": enc.consent, "person": person, "evidence": trace}
         self._publish("converse", {"encounter_id": enc.id, "heard": text if enc.consent is not False else "", "reply": reply,
                                    "tools": [t["tool"] for t in trace], "consent": enc.consent})
         return out
+
+    def _next_question(self, enc: Encounter, text: str) -> str | None:
+        """The one question that ends this reply: the first fact still unknown, never one already asked, nothing on a goodbye."""
+        if says_goodbye(text):
+            return None
+        p = self.mem.get_person(enc.person_id) or {}
+        for key, _label in UNKNOWN_FIELDS:
+            if (not p.get(key) and p.get(key) is not False) and key not in enc.asked_about:
+                enc.asked_about.append(key)
+                return QUESTIONS[key].format(event=self.s.event_name)
+        return None
 
     def _learn(self, enc: Encounter, transcript: str, latest: str = "", confirmable_email: str = "") -> None:
         """Add what the visitor said about themselves to their record (consent given). Never raises: a missed fact is not an error.
