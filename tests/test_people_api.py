@@ -80,15 +80,16 @@ def test_personal_data_is_not_served_to_other_machines_without_token(monkeypatch
 def test_converse_endpoint(client):
     server.brain.people.client = FakeChat([["Hello, I'm PuppyPi!"]])
     r = client.post("/api/converse", json={"text": "hi"}).json()
-    assert r["reply"] == "Hello, I'm PuppyPi!" and r["encounter_id"] and r["consent"] is None
+    assert r["reply"].startswith("Hello, I'm PuppyPi!") and r["encounter_id"] and r["consent"] is None
 
 
 def test_voice_turn_returns_audio_and_headers_and_204_on_silence(client):
     client.post("/api/listen")  # the People tab is open
     server.brain.people.client = FakeChat([["Hello there"]])
     r = client.post("/api/voice/turn", files={"file": ("s.wav", b"RIFF" + b"\0" * 60 + b"Hey PuppyPi, hello robot", "audio/wav")})
-    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content == b"RIFFfake-wav:Hello there"
-    assert r.headers["x-encounter"] and "hello%20robot" in r.headers["x-heard"] and r.headers["x-reply"] == "Hello%20there"
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.startswith(b"RIFFfake-wav:Hello there")
+    assert "think" in unquote(r.headers["x-timing"])  # where the time went, for the robot's log
+    assert r.headers["x-encounter"] and "hello%20robot" in r.headers["x-heard"] and r.headers["x-reply"].startswith("Hello%20there")
     assert client.post("/api/voice/turn", files={"file": ("s.wav", b"tiny", "audio/wav")}).status_code == 204
 
 

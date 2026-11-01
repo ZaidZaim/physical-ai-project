@@ -56,6 +56,7 @@ UNKNOWN_FIELDS = (  # what a good lead record needs, in the order the robot asks
     ("familiarity", "how well they know Neo4j"), ("enjoyed", "what they enjoyed most at the event"),
     ("wants_follow_up", "whether they would like the Neo4j team to follow up"))
 QUESTIONS = {  # the exact question that ends the robot's reply, one unknown fact at a time (the model picked its own and skipped company)
+    "name": "What's your name, by the way?",
     "company": "Which company are you with?",
     "role": "And what is your role there?",
     "use_case": "What are you working on, or hoping to build with graphs?",
@@ -63,8 +64,19 @@ QUESTIONS = {  # the exact question that ends the robot's reply, one unknown fac
     "enjoyed": "What have you enjoyed most at {event} so far?",
     "wants_follow_up": "Would you like the Neo4j team to follow up with you after the event?",
 }
-_BYE = re.compile(r"\b(bye|goodbye|have to (go|run)|need to (go|run)|gotta (go|run)|got to (go|run)|see you|that'?s (it|all)|"
-                  r"that is (it|all)|next (one|session|talk)|thanks?,? (that'?s|bye)|thank you (so|very) much)\b", re.I)
+_BYE = re.compile(r"\b(bye|goodbye|have to (go|run|leave)|need to (go|run|leave)|gotta (go|run)|got to (go|run)|see you|"
+                  r"that'?s (it|all)( for now)?|that is (it|all)|next (one|session|talk)|let'?s (close|stop|end) (it|here)|i'?m off)\b", re.I)
+CONSENT_AFTER_TURNS = 6  # ask at the end; at the latest after this many answers (a visitor may walk off without a goodbye)
+ASK_ORDER = ("name", "company", "role", "use_case", "familiarity", "enjoyed")  # the follow-up wish is the consent question itself
+
+
+def consent_question(name: str = "", leaving: bool = True) -> str:
+    """Asked at the end of the conversation (or mid-way after a while): remembering the visitor is for sending material and following up."""
+    who = f"you as {name}" if name else "your name"
+    tail = ", and spell your name if I misheard it." if name else ". If yes, just tell me your name."
+    lead = "Before you go" if leaving else "By the way"
+    return (f"{lead}: may I remember {who} and what we talked about, so the Neo4j team can send you material and follow up? "
+            f"Just say yes or no{tail}")
 
 
 def says_goodbye(text: str) -> bool:
@@ -264,7 +276,10 @@ class Encounter:
     consent_asked: bool = False  # the robot has asked the permission question (so it does not ask on every turn)
     asked_about: list[str] = field(default_factory=list)  # unknown fields the robot already asked about: never the same question twice
     pending_email: str = ""  # an email the robot heard but the visitor has not confirmed yet
-    record: dict | None = None  # the visitor's lead record during the conversation (saved to the graph in the background)
+    record: dict | None = None  # the visitor's lead record during the conversation: in memory only until they say yes
+    turns: int = 0          # answers in this conversation
+    closing: bool = False   # the consent question came with their goodbye: no more questions after it
+    reasked: bool = False   # asked mid-way, unanswered: asked once more when they say goodbye
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -278,6 +293,7 @@ class PersonView(BaseModel):
 
 class Facts(BaseModel):
     """What one visitor said about themselves in a stretch of conversation (empty when not said). Used after consent."""
+    name: str = Field(description="the visitor's name as they said it, else empty")
     corrected_name: str = Field(description="their name if they corrected or spelled it (spelled letters joined, Z-A-I-D = Zaid), else empty")
     role: str = Field(description="job title they said, else empty")
     function: str = Field(description="area they work in (data engineering, security, product...), else empty")
@@ -432,15 +448,15 @@ class PeopleService:
     def _state(self, enc: Encounter) -> str:
         lines = ["", "STATE OF THIS CONVERSATION"]
         if enc.consent is None and not enc.consent_asked:
-            lines.append("- Consent to remember them: NOT ASKED YET. If they have told you their name or anything about themselves "
-                         "(in this message or before), END this reply with the permission question.")
+            lines.append("- Do NOT ask for permission to remember them: that question is asked automatically at the end of the conversation.")
         elif enc.consent is None:
-            lines.append("- Consent to remember them: you asked and they have not answered yet. If this message is their yes or no, call "
-                         "record_consent. Otherwise answer them and do not ask again in this reply.")
+            lines.append("- You asked whether you may remember them; they have not answered yet. Do not ask again yourself.")
+        elif enc.consent is True:
+            lines.append("- They said YES to being remembered and followed up: thank them" + (
+                ", then say a warm goodbye (they are leaving: no questions)." if enc.closing else "."))
         else:
-            lines.append({True: "- Consent to remember them: granted. What they say is saved automatically after each answer.",
-                          False: "- Consent to remember them: they said NO. Save nothing."}[enc.consent])
-        if enc.consent is True and enc.person_id:
+            lines.append("- They said NO to being remembered: save nothing" + (", and say a friendly goodbye." if enc.closing else "."))
+        if enc.consent is not False and not enc.closing:
             lines.append("- Do NOT end with a question of your own about them: one question about them is added after your answer.")
         if enc.name:
             lines.append(f"- Their name: {enc.name}.")
@@ -449,10 +465,10 @@ class PeopleService:
         if enc.badge and enc.badge.get("name"):
             lines.append(f"- Their name badge seemed to read \"{enc.badge['name']}\"" + (f", {enc.badge['company']}" if enc.badge.get("company") else "")
                          + " (unverified). Confirm it with them before using it.")
-        if enc.person_id:
+        if enc.person_id and enc.consent is True:
             p = self._record(enc)
             if p:
-                lines.append(f"- A returning visitor you remember: {json.dumps(safe_view(p))}")
+                lines.append(f"- A visitor you remember: {json.dumps(safe_view(p))}")
         return "\n".join(lines)
 
     # ---- the visitor's record: read once, kept in memory, written behind
@@ -462,8 +478,12 @@ class PeopleService:
         return enc.record or {}
 
     def _store(self, enc: Encounter, person: dict) -> dict:
-        """Keep the record for the conversation and save it to the graph (in the background unless write_in_background is off)."""
+        """Keep the record for the conversation; save it to the graph only after a yes and with a name (in the background unless
+        write_in_background is off). Before the yes it is a draft in memory, discarded on a no."""
         enc.record = person
+        if enc.consent is not True or not (person.get("name") or "").strip():
+            return person
+        enc.person_id = person["person_id"]
         job = (person, enc.id, enc.place, enc.summary, datetime.now(timezone.utc).isoformat())
         if not self.write_in_background:
             self._write_one(enc, *job)
@@ -628,9 +648,16 @@ class PeopleService:
             raise RuntimeError("OPENAI_API_KEY is not set")
         enc = self._encounter(encounter_id, place)
         with enc.lock:
-            consent_before = enc.consent
+            enc.turns += 1
+            if enc.consent is None and enc.consent_asked:  # the answer to "may I remember you?": decided in code, no model round trip
+                heard = consent_from(text)
+                if heard is not None:
+                    enc.consent = heard
+                    if heard is False:
+                        enc.record = None  # the draft is discarded: nothing about them is kept
+            consent_before = enc.consent if not enc.consent_asked or enc.consent is None else None
             learner = None
-            if consent_before is True and enc.person_id and self.extract_fn:  # learn from this message while the reply is prepared
+            if enc.consent is not False and self.extract_fn:  # learn from this message while the reply is prepared (in memory before a yes)
                 transcript = "\n".join(("Visitor: " if m["role"] == "user" else "Robot: ") + m["content"]
                                        for m in [*enc.messages[-15:], {"role": "user", "content": text}])
                 learner = threading.Thread(target=self._learn, args=(enc, transcript, text, enc.pending_email), daemon=True)
@@ -663,24 +690,30 @@ class PeopleService:
                         history = []
             else:
                 reply = "Sorry, my circuits got tangled on that one. Could you ask me again?"
-            if enc.consent is None and not enc.consent_asked and not asks_consent(reply) and introduces_self(text):
-                reply = (reply.rstrip() + " " + CONSENT_QUESTION).strip()  # the model sometimes forgets: the question is not optional
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
-            if asks_consent(reply):
-                enc.consent_asked = True
             enc.last = time.monotonic()
-        if enc.consent is True and enc.person_id:
+        if enc.consent is not False:
             if learner is not None:  # started beside the reply: wait for it, so the question below never asks what they just said
                 learner.join(timeout=8)
-            else:  # just said yes: learn from everything they said before (once, before choosing a question)
-                transcript = "\n".join(("Visitor: " if m["role"] == "user" else "Robot: ") + m["content"] for m in enc.messages[-16:])
-                said = "\n".join(m["content"] for m in enc.messages if m["role"] == "user")
-                self._learn(enc, transcript, said, email_before)
-            question = self._next_question(enc, text)
+            if enc.consent is True and enc.record is not None and consent_before is None:  # just said yes: keep everything said so far
+                enc.record = merge_person(enc.record, {"wants_follow_up": True}, enc.record.get("name") or "")
+                self._store(enc, enc.record)
+            question = None
+            name = (self._record(enc).get("name") or "").strip()
+            if enc.consent is None and not enc.consent_asked and self._consent_due(enc, text):
+                enc.closing = says_goodbye(text)
+                question = consent_question(name, leaving=enc.closing)
+            elif enc.consent is None and enc.consent_asked and not enc.reasked and says_goodbye(text):
+                enc.closing = enc.reasked = True  # asked mid-way and left unanswered: once more, now that they are leaving
+                question = consent_question(name, leaving=True)
+            elif not enc.closing:
+                question = self._next_question(enc, text)
             if question:
                 reply = end_with_question(reply, question)
                 enc.messages[-1]["content"] = reply
-        person = dict(self._record(enc)) if enc.person_id else None
+        if asks_consent(reply):
+            enc.consent_asked = True
+        person = dict(self._record(enc)) if enc.person_id and enc.consent is True else None
         out = {"encounter_id": enc.id, "reply": reply, "consent": enc.consent, "person": person, "evidence": trace}
         self._publish("converse", {"encounter_id": enc.id, "heard": text if enc.consent is not False else "", "reply": reply,
                                    "tools": [t["tool"] for t in trace], "consent": enc.consent})
@@ -691,17 +724,24 @@ class PeopleService:
         if says_goodbye(text):
             return None
         p = self._record(enc)
-        for key, _label in UNKNOWN_FIELDS:
-            if (not p.get(key) and p.get(key) is not False) and key not in enc.asked_about:
+        for key in ASK_ORDER:
+            if not p.get(key) and key not in enc.asked_about:
                 enc.asked_about.append(key)
                 return QUESTIONS[key].format(event=self.s.event_name)
         return None
+
+    def _consent_due(self, enc: Encounter, text: str) -> bool:
+        """Ask for permission at the end: when they say goodbye, when they ask for material or a follow-up, or after
+        CONSENT_AFTER_TURNS answers (people walk off without a goodbye)."""
+        return says_goodbye(text) or any(explicit_wishes(text).values()) or enc.turns >= CONSENT_AFTER_TURNS
 
     def _learn(self, enc: Encounter, transcript: str, latest: str = "", confirmable_email: str = "") -> None:
         """Add what the visitor said about themselves to their record (consent given). Never raises: a missed fact is not an error.
         Facts and the summary come from the extraction over the whole conversation; a demo/follow-up wish only from the visitor's own
         latest words; an email only once the visitor confirmed it read back."""
         try:
+            if enc.consent is False:
+                return
             f = (self.extract_fn(transcript) if self.extract_fn else {}) or {}
             update = facts_to_update(f)
             for key in ("wants_demo", "wants_follow_up"):
@@ -714,21 +754,25 @@ class PeopleService:
                 current = self._record(enc).get("email") if enc.person_id else None
                 if heard_email != (current or "").lower():
                     enc.pending_email = heard_email  # held: saved only when they confirm it read back, in a later answer
-            new_name = (f.get("corrected_name") or "").strip()
+            new_name = (f.get("corrected_name") or "").strip() or (f.get("name") or "").strip()
             summary = (f.get("conversation_summary") or "").strip()
             if (f.get("next_step") or "").strip():
                 update["next_step"] = f["next_step"].strip()
             if not update and not new_name and not summary:
                 return
             with enc.lock:
-                existing = self._record(enc) or None
-                if existing is None:
+                if enc.consent is False:
                     return
-                person = merge_person(existing, update, new_name or existing["name"])
+                existing = self._record(enc) or {"person_id": "psn-" + uuid.uuid4().hex[:8], "interests": [], "enjoyed": []}
+                corrected = (f.get("corrected_name") or "").strip()
+                name = corrected or existing.get("name") or new_name  # a correction always wins; otherwise keep the name we have
+                person = merge_person(existing, update, name or "")
                 enc.name = person["name"]
                 if summary:
                     enc.summary = summary[:500]
                 saved = self._store(enc, person)
+            if enc.consent is not True:
+                return  # a draft: nothing to show until they said yes
             self._publish("people", {"event": "learned", "person_id": saved["person_id"], "name": saved["name"],
                                      "stage": saved["lead_stage"], "fields": sorted(update) + (["name"] if new_name else [])})
         except Exception as e:

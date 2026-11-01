@@ -430,10 +430,12 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     204 when nothing intelligible was said."""
     _robot_auth(x_brain_token)
     _need_voice()
+    t0 = time.monotonic()
     audio = file.file.read()
     if brain.drive.moving:  # a trick or a turn: the microphone hears servos, not a visitor (seen as "Thanks for watching!" phantoms)
         return Response(status_code=204, headers={"X-Heard": quote("(the robot was moving)")})
     text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
+    t_heard = time.monotonic()
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
     waker = None
@@ -446,11 +448,17 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
         if encounter_id is None:  # a new conversation: the trick and the look up happen while the reply is being prepared
             waker = brain.on_wake()
     r = brain.people.turn(text, encounter_id, brain.place_info().get("name"))
+    t_thought = time.monotonic()
     reply_audio = brain.voice.speak(r["reply"])
+    t_spoken = time.monotonic()
     if waker:
         waker.join(timeout=brain.drive.action_busy_s + 5)  # speak once it has finished the trick and looks at the visitor
+    timing = "%.1fs: hear %.1f, think %.1f, speak %.1f, trick %.1f" % (
+        time.monotonic() - t0, t_heard - t0, t_thought - t_heard, t_spoken - t_thought, time.monotonic() - t_spoken)
+    print("voice turn " + timing, flush=True)  # where the time goes, in the app's window
     return Response(reply_audio, media_type="audio/wav",
-                    headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600])})
+                    headers={"X-Encounter": r["encounter_id"], "X-Heard": quote(text[:300]), "X-Reply": quote(r["reply"][:600]),
+                             "X-Timing": quote(timing)})
 
 
 @app.post("/api/listen")

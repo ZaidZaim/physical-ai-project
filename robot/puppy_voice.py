@@ -179,13 +179,16 @@ class Voice:
         if time.time() - self.last_turn > self.a.forget_after:
             self.encounter = None  # a new person: the brain starts a fresh conversation (and asks for consent again)
         try:
+            t_sent = time.time()
             r = post_audio(self.a.brain, wav_bytes(pcm), self.a.token, self.encounter)
             if r.status != 200:
                 print("heard nothing clear", ("(" + urllib.parse.unquote(r.headers.get("X-Heard", "")) + ")") if r.headers.get("X-Heard") else "")
                 return
             self.encounter = r.headers.get("X-Encounter") or self.encounter
             self.last_turn = time.time()
-            print("heard:", urllib.parse.unquote(r.headers.get("X-Heard", "")), "| say:", urllib.parse.unquote(r.headers.get("X-Reply", "")))
+            print("heard:", urllib.parse.unquote(r.headers.get("X-Heard", "")), "| say:", urllib.parse.unquote(r.headers.get("X-Reply", "")),
+                  "| brain " + urllib.parse.unquote(r.headers.get("X-Timing", "")) if r.headers.get("X-Timing") else "",
+                  "| round trip %.1fs" % (time.time() - t_sent))
             self.play(r.read())
         except Exception as e:
             print("turn failed:", e)

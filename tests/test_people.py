@@ -271,28 +271,28 @@ def test_the_look_prompt_knows_the_camera_is_at_floor_level():
     assert "feet" in PersonView.model_fields["facing_robot"].description
 
 
-def test_permission_is_asked_once_and_the_robot_is_told_when_to_ask():
+def test_permission_is_asked_at_the_end_once_and_never_by_the_model():
     from puppy_mind.people import asks_consent
 
     assert asks_consent("GraphRAG is great. May I remember your name and company? Just say yes or no.")
     assert asks_consent("Can I save your details for a follow-up?") and not asks_consent("I remember GraphRAG well.")
-    s, _ = svc([["Hello Zaid! GraphRAG links facts. May I remember your name, company and interests? Just say yes or no."],
-                ["Sure thing, ask away."], [call("new_visitor"), "Hi! What's your name?"]])
+    s, _ = svc([["Hi Zaid! GraphRAG links facts."], ["Vector search finds similar text."], ["Bye, enjoy!"], ["Sure."]])
     r = s.turn("Hi, I'm Zaid from Neo4j. What is GraphRAG?")
-    assert "NOT ASKED YET" in s.client.prompts[-1]
-    r = s.turn("Wait, what about vector search?", r["encounter_id"])  # asked, not answered: answer and do not ask again
-    assert "you asked and they have not answered yet" in s.client.prompts[-1]
-    s.turn("Hi, I'm Bob, my turn", r["encounter_id"])  # a new visitor must be asked again
-    assert "NOT ASKED YET" in s.client.prompts[-1]
+    assert "remember" not in r["reply"].lower() and "Do NOT ask for permission" in s.client.prompts[-1]
+    r = s.turn("And vector search?", r["encounter_id"])
+    assert "remember" not in r["reply"].lower()
+    r = s.turn("Thanks, I need to run now.", r["encounter_id"])  # the end: now the permission question, with the name check
+    assert "Before you go: may I remember" in r["reply"] and "send you material" in r["reply"]
+    r = s.turn("Hmm, what about Aura?", r["encounter_id"])  # not an answer: not asked twice
+    assert "may I remember" not in r["reply"]
 
 
-def test_the_wizard_is_told_to_keep_spoken_answers_short_and_to_save_earlier_facts():
+def test_the_wizard_is_told_to_keep_spoken_answers_short_and_not_to_ask_permission_itself():
     from puppy_mind.wizard import system_prompt
 
     p = system_prompt("PuppyPi", "the conference", "")
-    assert "at most 2 short sentences" in p and "END that reply with the permission question" in p
-    assert "count as interests" in p and "AT MOST ONCE per conversation" in p
-    assert "please spell it" in p and "not mishearings" in p
+    assert "at most 2 short sentences" in p and "asked automatically at the END of the conversation" in p
+    assert "AT MOST ONCE per conversation" in p and "not mishearings" in p
 
 
 def test_the_booth_language_is_fixed_for_hearing_and_answering():
@@ -313,16 +313,21 @@ def test_the_booth_language_is_fixed_for_hearing_and_answering():
     assert "Always answer in English" in s.client.prompts[-1]
 
 
-def test_the_permission_question_is_added_when_the_model_forgets_it():
-    from puppy_mind.people import CONSENT_QUESTION, introduces_self
+def test_permission_comes_with_a_goodbye_a_request_for_material_or_after_six_answers():
+    from puppy_mind.people import CONSENT_AFTER_TURNS, introduces_self
 
     assert introduces_self("Sorry. My name is Zaid, I work at Neo4j.") and introduces_self("Hi, I'm Ana")
     assert introduces_self("I am a data engineer") and not introduces_self("What is GraphRAG?") and not introduces_self("I'm fine thanks")
-    s, _ = svc([["Hello Zaid! Great to meet someone from Neo4j."], ["GraphRAG links facts."]])
-    r = s.turn("My name is Zaid, I work at Neo4j.")
-    assert r["reply"].endswith(CONSENT_QUESTION)
-    r = s.turn("What is GraphRAG?", r["encounter_id"])
-    assert CONSENT_QUESTION not in r["reply"]  # asked once, not on every turn
+    s, _ = svc([["Sure, happy to."]])
+    r = s.turn("Please send me the slides on GraphRAG")
+    assert "By the way: may I remember" in r["reply"]  # a request for material: ask right away (not leaving)
+    s, _ = svc([["Answer."]] * CONSENT_AFTER_TURNS)
+    r = None
+    for i in range(CONSENT_AFTER_TURNS):
+        r = s.turn(f"question {i}", r["encounter_id"] if r else None)
+        if i < CONSENT_AFTER_TURNS - 1:
+            assert "may I remember" not in r["reply"]
+    assert "may I remember" in r["reply"]  # no goodbye: asked at the latest after six answers
 
 
 def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
@@ -351,13 +356,14 @@ def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():
     assert "Robot: Great! And what is your role there?\nVisitor: We're building" in seen[-1]  # whole conversation, robot's question included
 
 
-def test_nothing_is_extracted_or_saved_without_consent():
-    calls = []
-    s, mem = svc([["Hi! May I remember you? Just say yes or no."], ["No problem."]],
-                 extract_fn=lambda t: calls.append(t) or {"company": "X"})
-    r = s.turn("I'm Ana from Acme")
-    s.turn("No thanks", r["encounter_id"])
-    assert calls == [] and mem.list_people() == []
+def test_before_the_yes_facts_stay_in_memory_and_a_no_discards_them():
+    s, mem = svc([["Nice to meet you, Ana."], ["No problem, enjoy!"]],
+                 extract_fn=lambda t: {"name": "Ana Berg", "company": "Acme", "role": "CTO"})
+    r = s.turn("I'm Ana Berg, CTO at Acme. I have to go now.")
+    assert mem.list_people() == [] and "may I remember you as Ana Berg" in r["reply"]  # drafted in memory, asked with her name
+    r = s.turn("No thanks", r["encounter_id"])
+    enc = s.encounters[r["encounter_id"]]
+    assert r["consent"] is False and enc.record is None and mem.list_people() == []  # nothing kept anywhere
 
 
 def test_a_spelled_name_corrects_the_record():
@@ -406,11 +412,11 @@ def test_demo_and_follow_up_only_from_the_visitors_own_words():
     assert explicit_wishes("That's it, let's close it here") == {}  # a goodbye is not a no
     # the model's or the extractor's guess never sets them (seen at the booth: a demo wish nobody voiced)
     s, mem = svc([[call("record_consent", granted=True), call("save_person_facts", name="Andreas", wants_demo=True), "Thanks!"],
-                  ["Sure."]], extract_fn=lambda t: {"wants_demo": "yes", "wants_follow_up": "no"})
+                  ["Sure."]], extract_fn=lambda t: {"wants_demo": "yes"})
     r = s.turn("Yes")
     assert mem.list_people()[0]["wants_demo"] is False
     s.turn("Actually yes, I'd love a demo", r["encounter_id"])
-    assert mem.list_people()[0]["wants_demo"] is True and mem.list_people()[0]["wants_follow_up"] is False
+    assert mem.list_people()[0]["wants_demo"] is True
 
 
 def test_an_email_is_saved_only_after_the_visitor_confirms_it():
@@ -480,3 +486,36 @@ def test_forgetting_someone_mid_conversation_is_not_undone_by_a_later_save():
     assert s.forget(pid)  # "Forget this person" clicked while she is still at the robot
     s.turn("I'm the CTO, by the way", r["encounter_id"])
     assert mem.list_people() == []
+
+
+
+def test_yes_at_the_end_saves_everything_said_before_and_ends_politely():
+    s, mem = svc([["Contract graphs are a great fit."], ["Great talking to you!"], ["Thank you, Andreas, have a great day!"]],
+                 extract_fn=lambda t: {"name": "Andreas Rosenberg", "company": "Quadrant",
+                                       "use_case": "process electronics documents" if "documents" in t else ""})
+    r = s.turn("I'm Andreas Rosenberg from Quadrant. We process a lot of electronics documents.")
+    assert mem.list_people() == []
+    r = s.turn("That's it, thank you so much.", r["encounter_id"])
+    assert "may I remember you as Andreas Rosenberg" in r["reply"]
+    r = s.turn("Yes, thank you very much.", r["encounter_id"])  # seen at the booth: a 'thank you very much' ended the talk at the yes
+    p = mem.list_people()[0]
+    assert r["consent"] is True and p["name"] == "Andreas Rosenberg" and p["company"] == "Quadrant"
+    assert p["use_case"] == "process electronics documents" and p["wants_follow_up"] is True
+    assert r["reply"] == "Thank you, Andreas, have a great day!"  # leaving: no more questions
+
+
+
+def test_asked_mid_way_it_says_by_the_way_and_asks_once_more_at_the_goodbye():
+    from puppy_mind.people import CONSENT_AFTER_TURNS
+
+    s, _ = svc([["Answer."]] * (CONSENT_AFTER_TURNS + 3))
+    r = None
+    for i in range(CONSENT_AFTER_TURNS):
+        r = s.turn(f"question {i}", r["encounter_id"] if r else None)
+    assert "By the way: may I remember" in r["reply"]  # not "before you go" while they are still asking things
+    r = s.turn("one more question about ontologies", r["encounter_id"])
+    assert "may I remember" not in r["reply"]
+    r = s.turn("That is it for now, see you", r["encounter_id"])
+    assert "Before you go: may I remember" in r["reply"]  # once more, now that they leave
+    r = s.turn("one last thing", r["encounter_id"])
+    assert "may I remember" not in r["reply"]
