@@ -644,6 +644,7 @@ async function loadBooth() {
 async function drawBoothGraph() {  // the robot HOSTED each conversation, which DISCUSSED topics and ENJOYED highlights
   const g = await papi('/api/booth/graph'), C = { Robot:css('--accent'), Conversation:css('--short'), Topic:css('--reasoning') };
   $('#pempty').hidden = g.nodes.length > 1;
+  if (g.nodes.length <= 1) g.nodes = [];  // only the robot: draw nothing, or its star sits under the "Nothing yet" text
   const N = g.nodes.map(n => n.kind === 'Topic'
     ? { id:n.id, label:n.label, shape:'dot', size:9 + 6 * Math.sqrt(n.count), color:{ background:C.Topic, border:C.Topic, highlight:{ background:C.Topic, border:css('--ink') } },
         font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') }, title:`${n.label}: ${n.count} conversation${n.count === 1 ? '' : 's'}` }
