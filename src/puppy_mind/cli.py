@@ -55,7 +55,12 @@ def _nams_cmd(args, s) -> int:
             # a new revision of the existing puppy-pi ontology (PUT), so its history stays in one place; created only the first time
             mine = [o for o in (n._req("GET", "/v1/ontologies") or {}).get("ontologies", [])
                     if o.get("name") == spec["ontology"]["domain"]["id"] and not o.get("is_system")]
-            r = n._req("PUT", f"/v1/ontologies/{mine[0]['id']}", spec) if mine else n._req("POST", "/v1/ontologies", spec)
+            versions = ((n._req("GET", f"/v1/ontologies/{mine[0]['id']}") or {}).get("versions") or []) if mine else []
+            newest = max(versions, key=lambda v: v.get("revision") or 0, default={})
+            if newest.get("message") == spec["message"]:  # this file is already the newest revision: no identical copy
+                r = newest
+            else:
+                r = n._req("PUT", f"/v1/ontologies/{mine[0]['id']}", spec) if mine else n._req("POST", "/v1/ontologies", spec)
             if r is None:
                 print("create failed:", n.stats["last_error"])
                 if "403" in n.stats["last_error"]:
