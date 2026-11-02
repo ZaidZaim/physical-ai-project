@@ -490,6 +490,19 @@ class Nams:
                 log.warning("could not store the NAMS ids of a lead: %s", e)
         self.stats["synced_leads"] = self.stats.get("synced_leads", 0) + 1
 
+    def sync_leads(self, people: list[dict], robot: str, event: str) -> dict:
+        """Backfill leads saved before the booth ontology was active: every person in Aura said yes when they were saved.
+        Each conversation becomes its Event; the person resolves to one entity by person_id however often it is sent."""
+        if not self.booth_types_active():
+            return {"leads": 0, "reason": "the active NAMS ontology has no booth types (run nams-setup --activate)"}
+        done = 0
+        for p in people:
+            before = self.stats.get("synced_leads", 0)
+            for e in sorted(p.get("encounters") or [], key=lambda e: e.get("ts") or ""):
+                self._lead(p, e["id"], e.get("place"), e.get("summary") or "", e.get("ts") or "", robot, event)
+            done += self.stats.get("synced_leads", 0) > before
+        return {"leads": done, "of": len(people)}
+
     def submit_forget(self, entity_ids: list[str]) -> None:
         """The visitor asked to be forgotten: delete their Person and conversation entities (companies and topics are not personal)."""
         for i in [i for i in entity_ids if i]:

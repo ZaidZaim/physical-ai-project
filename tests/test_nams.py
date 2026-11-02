@@ -383,3 +383,24 @@ def test_a_consented_lead_reaches_nams_only_with_the_booth_ontology_and_leaves_i
     assert svc.forget(yosef["person_id"]) and n.flush(5)
     gone = {p.rsplit("/", 1)[-1] for m, p, _ in fake.calls if m == "DELETE"}
     assert gone == {ids["Yosef"], ids[event["name"]]}  # his company and topics stay: they are not personal
+
+
+def test_leads_saved_before_the_booth_ontology_can_be_copied_to_nams_once_it_is_active():
+    from puppy_mind.devfake import FakeMemory
+    from puppy_mind.people import merge_person
+
+    fake = FakeNams()
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test")
+    mem = FakeMemory(s)
+    n, _ = make(fake, mem)
+    ana = merge_person(None, {"company": "Acme", "interests": ["graphrag"]}, "Ana Berg")
+    for eid, ts in (("e1", "2026-10-31T10:00:00Z"), ("e2", "2026-11-01T10:00:00Z")):  # met twice
+        mem.save_person(ana, encounter_id=eid, place=None, summary="", ts=ts)
+    people = [mem.get_person(ana["person_id"])]
+    assert n.sync_leads(people, "PuppyPi", "the conference")["leads"] == 0 and fake.calls_to("POST", "/v1/entities/bulk") == []
+    fake.active += ["Organization", "Topic", "Event"]
+    n._booth_types = (False, -1e9)
+    assert n.sync_leads(people, "PuppyPi", "the conference") == {"leads": 1, "of": 1}
+    events = {e["properties"]["event_id"] for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"] if e["type"] == "Event"}
+    assert events == {"e1", "e2"} and len([k for k in fake.entities if k[1] == "Person"]) == 1  # one person, both conversations
+    assert len(mem.person_nams_ids(ana["person_id"])) == 3  # so forgetting her deletes all of it
