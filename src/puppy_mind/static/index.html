@@ -252,7 +252,7 @@
       <div id="pbody">
         <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
           <div id="pempty" hidden>Nothing yet.<br>When a visitor says “Hey PuppyPi” and talks to the robot, the topics they ask about appear here: the more conversations raise a topic, the bigger it gets.</div>
-          <div id="plegend">topic · size = conversations · link = raised together</div></div>
+          <div id="plegend"><span style="color:var(--accent)">★</span> robot · <span style="color:var(--short)">■</span> conversation (its need) · <span style="color:var(--reasoning)">●</span> topic, size = conversations</div></div>
         <aside id="pside"></aside>
       </div>
     </div>
@@ -645,15 +645,22 @@ async function loadBooth() {
   document.querySelectorAll('#pside .need button').forEach(b => b.onclick = async () => { if (confirm('Remove this note?')) { await papi('/api/booth/conversations/' + encodeURIComponent(b.dataset.id), { method:'DELETE' }); loadBooth(); } });
   await drawBoothGraph();
 }
-async function drawBoothGraph() {
-  const g = await papi('/api/booth/graph'), C = css('--reasoning');
-  $('#pempty').hidden = g.nodes.length > 0;
-  const N = g.nodes.map(n => ({ id:n.id, label:n.label, shape:'dot', size:10 + 6 * Math.sqrt(n.count), color:{ background:C, border:C, highlight:{ background:C, border:css('--ink') } },
-    font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') }, title:`${n.label}: ${n.count} conversation${n.count === 1 ? '' : 's'}` }));
-  const E = g.edges.map(e => ({ id:`${e.source}|${e.target}`, from:e.source, to:e.target, width:Math.min(6, e.weight), color:{ color:css('--mute'), opacity:.5 } }));
+async function drawBoothGraph() {  // the robot HOSTED each conversation, which DISCUSSED topics and ENJOYED highlights
+  const g = await papi('/api/booth/graph'), C = { Robot:css('--accent'), Conversation:css('--short'), Topic:css('--reasoning') };
+  $('#pempty').hidden = g.nodes.length > 1;
+  const N = g.nodes.map(n => n.kind === 'Topic'
+    ? { id:n.id, label:n.label, shape:'dot', size:9 + 6 * Math.sqrt(n.count), color:{ background:C.Topic, border:C.Topic, highlight:{ background:C.Topic, border:css('--ink') } },
+        font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') }, title:`${n.label}: ${n.count} conversation${n.count === 1 ? '' : 's'}` }
+    : n.kind === 'Robot'
+    ? { id:n.id, label:n.label, shape:'star', size:22, color:{ background:C.Robot, border:C.Robot }, font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') } }
+    : { id:n.id, label:n.label, shape:'box', margin:7, color:{ background:C.Conversation, border:C.Conversation }, font:{ size:11, color:'#fff', face:FONT },
+        widthConstraint:{ maximum:170 }, title:[n.title || n.label, n.familiarity && 'knows Neo4j: ' + n.familiarity, n.ts && n.ts.slice(5, 16).replace('T', ' ')].filter(Boolean).join('\n') });
+  const L = { HOSTED:'hosted', DISCUSSED:'discussed', ENJOYED:'enjoyed' };
+  const E = g.edges.map(e => ({ id:`${e.source}|${e.type}|${e.target}`, from:e.source, to:e.target, label:L[e.type], dashes:e.type === 'ENJOYED',
+    arrows:{ to:{ enabled:true, scaleFactor:.45 } }, color:{ color:css('--mute'), opacity:.6 }, font:{ size:9, color:css('--mute'), strokeWidth:0, face:FONT, align:'middle' } }));
   if (!boothNet) {
     pNodes = new vis.DataSet(N); pEdges = new vis.DataSet(E);
-    boothNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-70, springLength:110, avoidOverlap:.6 }, stabilization:{ iterations:150 } }, interaction:{ hover:true, tooltipDelay:120 } });
+    boothNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-80, springLength:120, avoidOverlap:.7 }, stabilization:{ iterations:180 } }, interaction:{ hover:true, tooltipDelay:120 } });
     boothNet.once('stabilizationIterationsDone', () => boothNet.fit({ animation:true }));
   } else {  // update in place: the graph grows instead of re-shuffling
     const nid = new Set(N.map(n => n.id)), eid = new Set(E.map(e => e.id));

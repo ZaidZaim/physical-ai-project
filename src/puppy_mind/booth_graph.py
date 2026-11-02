@@ -15,7 +15,6 @@ Both expose the same methods and return the same shapes (snake_case).
 from __future__ import annotations
 
 from collections import Counter
-from itertools import combinations
 from typing import Any
 
 BOOTH_CONSTRAINTS = [
@@ -48,12 +47,23 @@ def _insights(convs: list[dict]) -> dict[str, Any]:
     }
 
 
-def _graph(convs: list[dict]) -> dict[str, Any]:
-    """Topics sized by how many conversations raised them, linked when raised in the same conversation."""
-    count = Counter(t for c in convs for t in c["topics"])
-    pairs = Counter(tuple(sorted(p)) for c in convs for p in combinations(set(c["topics"]), 2))
-    return {"nodes": [{"id": t, "label": t, "count": k} for t, k in count.items()],
-            "edges": [{"source": a, "target": b, "weight": k} for (a, b), k in pairs.items()]}
+def _graph(convs: list[dict], robot: str = "PuppyPi", limit: int = 60) -> dict[str, Any]:
+    """The booth as a graph: the robot HOSTED each (anonymous) conversation, which DISCUSSED topics and ENJOYED highlights. Topics
+    are shared, so the ones many conversations raised become hubs. The latest `limit` conversations."""
+    convs = convs[:limit]
+    count = Counter(t for c in convs for t in [*c["topics"], *c["enjoyed"]])
+    nodes = [{"id": "robot", "kind": "Robot", "label": robot}]
+    edges: list[dict] = []
+    for c in convs:
+        cid = "conv:" + c["id"]
+        when = (c.get("ts") or "")[11:16]
+        nodes.append({"id": cid, "kind": "Conversation", "label": (c.get("need") or f"conversation {when}")[:48],
+                      "title": c.get("summary") or c.get("need") or "", "ts": c.get("ts"), "familiarity": c.get("familiarity")})
+        edges.append({"source": "robot", "target": cid, "type": "HOSTED"})
+        edges += [{"source": cid, "target": "topic:" + t, "type": "DISCUSSED"} for t in c["topics"]]
+        edges += [{"source": cid, "target": "topic:" + t, "type": "ENJOYED"} for t in c["enjoyed"] if t not in c["topics"]]
+    nodes += [{"id": "topic:" + t, "kind": "Topic", "label": t, "count": k} for t, k in count.items()]
+    return {"nodes": nodes, "edges": edges}
 
 
 class BoothGraph:
@@ -117,7 +127,7 @@ class BoothGraph:
         return _insights(self.list_conversations())
 
     def booth_graph(self) -> dict[str, Any]:
-        return _graph(self.list_conversations())
+        return _graph(self.list_conversations(), getattr(getattr(self, "s", None), "robot_name", "PuppyPi"))
 
 
 class FakeBooth:
@@ -150,4 +160,4 @@ class FakeBooth:
         return _insights(self.list_conversations())
 
     def booth_graph(self) -> dict[str, Any]:
-        return _graph(self.list_conversations())
+        return _graph(self.list_conversations(), getattr(getattr(self, "s", None), "robot_name", "PuppyPi"))

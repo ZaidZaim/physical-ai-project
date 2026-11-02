@@ -84,6 +84,9 @@ def test_the_scrubber_removes_what_the_visitor_said_about_who_they_are():
     assert clean_topics(["GraphRAG", "brightwave analytics", "lena@x.io", "knowledge graphs", "graphrag", "knowledge graph"], idw) == \
         ["graphrag", "knowledge graphs"]
     assert identifying_words(["I'm curious about GraphRAG", "I am just looking", "We are building a chatbot"]) == set()
+    # seen at the booth: "key graph algorithms" next to "graph algorithms"; one word ("graphs") is too general to merge into
+    assert clean_topics(["key graph algorithms", "graph algorithms", "graphs", "knowledge graphs", "graph algorithms in pharma"],
+                        general=True) == ["graph algorithms", "graphs", "knowledge graphs"]
 
 
 def test_a_conversation_is_kept_as_an_anonymous_note_scrubbed_in_code():
@@ -158,9 +161,15 @@ def test_booth_insights_count_topics_needs_and_familiarity():
     assert (i["conversations"], i["questions"], i["topics"]) == (2, 3, 2)
     assert i["top_topics"][0] == {"name": "graphrag", "count": 2} and i["familiarity"]["curious"] == 1 and i["familiarity"]["user"] == 1
     assert [n["need"] for n in i["needs"]] == ["chat over manuals"] and i["top_enjoyed"] == [{"name": "robot demo", "count": 1}]
-    g = mem.booth_graph()
-    assert {n["id"]: n["count"] for n in g["nodes"]} == {"graphrag": 2, "vector search": 1}
-    assert g["edges"] == [{"source": "graphrag", "target": "vector search", "weight": 1}]
+    g = mem.booth_graph()  # seen at the booth: topics alone, linked to each other, "missed the relationships"
+    kinds = {n["id"]: n["kind"] for n in g["nodes"]}
+    assert kinds == {"robot": "Robot", "conv:a": "Conversation", "conv:b": "Conversation", "topic:graphrag": "Topic",
+                     "topic:vector search": "Topic", "topic:robot demo": "Topic"}
+    assert {n["id"]: n["count"] for n in g["nodes"] if n["kind"] == "Topic"} == {"topic:graphrag": 2, "topic:vector search": 1, "topic:robot demo": 1}
+    assert {(e["source"], e["type"], e["target"]) for e in g["edges"]} == {
+        ("robot", "HOSTED", "conv:a"), ("robot", "HOSTED", "conv:b"), ("conv:a", "DISCUSSED", "topic:graphrag"),
+        ("conv:a", "DISCUSSED", "topic:vector search"), ("conv:a", "ENJOYED", "topic:robot demo"), ("conv:b", "DISCUSSED", "topic:graphrag")}
+    assert next(n for n in g["nodes"] if n["id"] == "conv:a")["label"] == "chat over manuals"
     assert mem.delete_conversation("a") and mem.booth_insights()["conversations"] == 1
 
 
@@ -177,6 +186,10 @@ def test_the_robot_ends_with_one_interest_question_and_never_repeats_it():
     assert r["reply"] == "Contracts fit graphs well."  # nothing left to ask before the wind-down
     r = h.turn("I need to run now to the next one. Thank you very much, PuppyPi.", r["encounter_id"])
     assert r["reply"] == "Have a great day!" and "They are leaving" in h.client.prompts[-1]
+    # seen at the booth: after the goodbye it stayed "in a conversation"; now it is over, and only the wake word starts the next one
+    assert not h.conversation_active() and h.unclear_reply(r["encounter_id"]) is None
+    assert h.addressed("what about vector search", r["encounter_id"]) == (False, None)
+    assert h.addressed("Hey PuppyPi, one more thing", r["encounter_id"]) == (True, None)
 
 
 def test_a_conversation_ends_when_they_leave_and_what_they_enjoyed_is_asked_only_near_the_end():

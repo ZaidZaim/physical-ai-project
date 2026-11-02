@@ -38,7 +38,7 @@ def test_booth_insight_endpoints_and_removing_a_note(client):
                                         "familiarity": "curious", "questions": ["what is graphrag"]}, place="Booth", ts="2026-11-02T10:00:00Z")
     i = client.get("/api/booth/insights").json()
     assert i["conversations"] == 1 and i["needs"][0]["need"] == "chat over manuals" and i["needs"][0]["id"] == "c1"
-    assert {n["id"] for n in client.get("/api/booth/graph").json()["nodes"]} == {"graphrag", "agent memory"}
+    assert {n["id"] for n in client.get("/api/booth/graph").json()["nodes"]} == {"robot", "conv:c1", "topic:graphrag", "topic:agent memory"}
     assert client.get("/api/booth/conversations").json()["conversations"][0]["place"] == "Booth"
     assert client.delete("/api/booth/conversations/c1").status_code == 200
     assert client.delete("/api/booth/conversations/c1").status_code == 404 and client.get("/api/booth/insights").json()["conversations"] == 0

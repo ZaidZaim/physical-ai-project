@@ -131,16 +131,27 @@ def scrub(text: str, identifying: set[str]) -> str:
     return re.sub(r"\s{2,}", " ", re.sub(r"\s+([,.;:!?])", r"\1", t)).strip(" ,;:-")
 
 
-def clean_topics(items: Any, identifying: set[str] = frozenset(), absorb: bool = False) -> list[str]:
+def _within(short: str, long: str) -> bool:
+    """A topic of two or more words inside a longer one ("graph algorithms" in "key graph algorithms"). One word is too general:
+    "graphs" is not "knowledge graphs"."""
+    return len(short.split()) >= 2 and short != long and bool(re.search(r"\b" + re.escape(short) + r"\b", long))
+
+
+def clean_topics(items: Any, identifying: set[str] = frozenset(), absorb: bool = False, general: bool = False) -> list[str]:
     """Lower-cased, de-duplicated topics, none naming the visitor. With `absorb`, a phrase inside a longer one is the same thing said
-    twice ("interesting keynotes" / "interesting keynotes on agentic ai"): only the longest is kept, where it first appeared."""
+    twice ("interesting keynotes" / "interesting keynotes on agentic ai"): only the longest is kept, where it first appeared. With
+    `general` the other way round, for topics that should meet across conversations: "key graph algorithms" is "graph algorithms"."""
     out: list[str] = []
     for t in items or []:
         t = " ".join(str(t).lower().split())[:60]
         if not t or any(t.rstrip("s") == o.rstrip("s") for o in out) or _EMAIL.search(t) \
                 or any(re.search(rf"\b{re.escape(w)}\b", t) for w in identifying):  # "knowledge graph" = "knowledge graphs"
             continue
-        if absorb:
+        if general:
+            if any(_within(o, t) for o in out):
+                continue
+            out = [o for o in out if not _within(t, o)]
+        elif absorb:
             if any(t in o for o in out):
                 continue
             longer = [i for i, o in enumerate(out) if o in t]
@@ -186,6 +197,7 @@ class Encounter:
     asked_about: list[str] = field(default_factory=list)  # never the same question twice
     turns: int = 0          # answers in this conversation
     closing: bool = False   # they said goodbye: no more questions
+    ended: bool = False     # the goodbye was answered: the conversation is over (the next visitor says the wake word)
     unclear_at: float = 0.0  # when the robot last said it did not catch something (at most every UNCLEAR_EVERY_S)
     lock: threading.Lock = field(default_factory=threading.Lock)
     notes_lock: threading.Lock = field(default_factory=threading.Lock)  # the learner may run inside a turn (which holds `lock`)
@@ -378,7 +390,7 @@ class BoothHost:
         open, instead of going silent. Outside a conversation, hall noise stays unanswered (None)."""
         enc = self.encounters.get(encounter_id or "")
         now = time.monotonic()
-        if not enc or not enc.messages or now - enc.last >= self.s.wake_window_s or now - enc.unclear_at < self.UNCLEAR_EVERY_S:
+        if not enc or not enc.messages or enc.ended or now - enc.last >= self.s.wake_window_s or now - enc.unclear_at < self.UNCLEAR_EVERY_S:
             return None
         enc.unclear_at = enc.last = now
         return "Sorry, I didn't catch that. Could you say it again?"
@@ -387,7 +399,7 @@ class BoothHost:
     def conversation_active(self) -> bool:
         """Someone talked with the robot less than WAKE_WINDOW_S ago."""
         now = time.monotonic()
-        return any(now - e.last < self.s.wake_window_s for e in list(self.encounters.values()) if e.messages)
+        return any(now - e.last < self.s.wake_window_s for e in list(self.encounters.values()) if e.messages and not e.ended)
 
     def addressed(self, text: str, encounter_id: str | None) -> tuple[bool, str | None]:
         """Should the robot answer what its microphone heard? Yes if it contains the wake word, or a conversation is open (the
@@ -395,7 +407,7 @@ class BoothHost:
         conversation, a wake word starts a fresh one, since it is most likely someone new."""
         now = time.monotonic()
         enc = self.encounters.get(encounter_id or "")
-        if enc and now - enc.last < self.s.wake_window_s:
+        if enc and now - enc.last < self.s.wake_window_s and not enc.ended:
             return True, enc.id
         if self._recent_greeting and now - self._recent_greeting[0] < self.s.wake_window_s and not enc:
             return True, None  # they may simply answer the greeting
@@ -455,7 +467,9 @@ class BoothHost:
             enc.last = time.monotonic()
         if learner is not None:  # started beside the reply: wait for it, so the question below never asks what they just said
             learner.join(timeout=8)
-        if not enc.closing:
+        if enc.closing:
+            enc.ended = True  # seen at the booth: after "Goodbye" it stayed "in a conversation" for another 90 s
+        else:
             question = self._next_question(enc, text)
             if question:
                 reply = end_with_question(reply, question)
@@ -487,7 +501,7 @@ class BoothHost:
             f = (self.extract_fn(transcript) if self.extract_fn else {}) or {}
             idw = identifying_words(visitor_lines)
             notes = {
-                "topics": clean_topics(f.get("topics"), idw),
+                "topics": clean_topics(f.get("topics"), idw, general=True),
                 "enjoyed": clean_topics(f.get("enjoyed"), idw, absorb=True),
                 "questions": [q for q in (scrub(q, idw)[:120] for q in f.get("questions") or []) if len(q) > 3][:20],
                 "need": scrub(f.get("need") or "", idw)[:160],
@@ -502,7 +516,7 @@ class BoothHost:
                 whole, old = enc.turns <= 8, enc.notes  # the transcript is the last 15 messages and this one
                 lists = {k: (notes[k] or old.get(k, [])) if whole else [*old.get(k, []), *notes[k]] for k in ("topics", "enjoyed", "questions")}
                 enc.notes = {
-                    "topics": clean_topics(lists["topics"]),
+                    "topics": clean_topics(lists["topics"], general=True),
                     "enjoyed": clean_topics(lists["enjoyed"], absorb=True),
                     "questions": list(dict.fromkeys(lists["questions"]))[:20],
                     **{k: notes[k] or old.get(k, "") for k in ("need", "familiarity", "summary")},
