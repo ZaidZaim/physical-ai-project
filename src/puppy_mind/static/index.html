@@ -123,20 +123,23 @@
   .bkpi.bump b { color:var(--new); animation:bump .7s ease-out } @keyframes bump { 0% { transform:scale(1) } 30% { transform:scale(1.25) } 100% { transform:scale(1) } }
   #pfam { display:flex; gap:4px; align-items:flex-end; height:30px } #pfam div { display:flex; flex-direction:column; align-items:center; gap:2px; font:9px var(--mono); color:var(--mute); text-transform:uppercase; letter-spacing:.06em }
   #pfam i { display:block; width:30px; background:var(--reasoning); border-radius:2px 2px 0 0; min-height:2px }
-  #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 340px }
-  #pnetwrap { position:relative; min-height:320px; border-right:1px solid var(--line) } #pnet { position:absolute; inset:0 }
+  #pbody { flex:1; min-height:0; position:relative }
+  #pnetwrap { position:absolute; inset:0 } #pnet { position:absolute; inset:0 }
   #plegend { position:absolute; left:12px; bottom:10px; font:10px var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--mute); background:var(--panel); border:1px solid var(--line); padding:5px 9px }
   #pempty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:30px; color:var(--mute); font-size:13px; line-height:1.6 }
   #plisten.on { color:var(--new); border-color:var(--new) } #plisten.talk { color:var(--accent); border-color:var(--accent) }
   #plisten.on::before, #plisten.talk::before { content:"● "; animation:blink 1.6s ease-in-out infinite } @keyframes blink { 50% { opacity:.25 } }
   #ptoast { position:absolute; top:14px; left:50%; transform:translateX(-50%); background:var(--new); color:#fff; font:600 13px var(--sans); padding:8px 16px; border-radius:3px; box-shadow:0 4px 18px rgba(0,0,0,.25); animation:pop .3s ease-out }
-  #pside { overflow:auto; min-height:0; background:var(--panel) }
+  #pside { position:absolute; top:12px; right:12px; width:340px; max-height:calc(100% - 24px); overflow:auto; background:var(--panel);
+           border:1px solid var(--line); box-shadow:0 6px 24px rgba(0,0,0,.3) }
+  #pside .x { float:right; margin:8px 10px 0 0 } #pside .big { padding:4px 14px 10px; font-size:15px; font-weight:600; line-height:1.4 }
+  #pside .meta { padding:0 14px 10px; color:var(--mute); font:11px var(--mono) }
   .pside-h { padding:10px 14px 6px; font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) }
   .need { padding:9px 14px; border-top:1px solid var(--line); font-size:12.5px; line-height:1.45; position:relative }
   .need .tags { margin-top:4px; display:flex; gap:6px; flex-wrap:wrap } .need .tags span { font:10px var(--mono); color:var(--reasoning) }
   .need .tags span.when { color:var(--mute) } .need button { position:absolute; right:8px; top:7px; opacity:0 } .need:hover button { opacity:1 }
   .q { padding:6px 14px; border-top:1px solid var(--line); font-size:12px; color:var(--ink) } .q::before { content:"? "; color:var(--accent); font-weight:600 }
-  .q.joy::before { content:"♥ "; color:var(--new) }
+  .q.joy::before { content:"♥ "; color:var(--new) } .q.tagq { color:var(--reasoning); font-family:var(--mono) } .q.tagq::before { content:"" }
   .privacy { padding:10px 14px 14px; color:var(--mute); font-size:11px; line-height:1.5 }
 </style>
 </head>
@@ -254,7 +257,7 @@
         <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
           <div id="pempty" hidden>Nothing yet.<br>When a visitor says “Hey PuppyPi” and talks to the robot, the topics they ask about appear here: the more conversations raise a topic, the bigger it gets.</div>
           <div id="plegend"><span style="color:var(--accent)">★</span> robot · <span style="color:var(--short)">■</span> conversation (its need) · <span style="color:var(--reasoning)">●</span> topic, size = conversations</div></div>
-        <aside id="pside"></aside>
+        <aside id="pside" hidden></aside>
       </div>
     </div>
   </section>
@@ -636,14 +639,6 @@ async function loadBooth() {
   countTo($('#pconv'), d.conversations); countTo($('#pq'), d.questions); countTo($('#ptopics'), d.topics);
   const F = { none:'new', curious:'curious', user:'user', expert:'expert' }, fmax = Math.max(1, ...Object.values(d.familiarity));
   $('#pfam').innerHTML = Object.entries(F).map(([k, lbl]) => `<div title="${d.familiarity[k]} ${lbl}"><i style="height:${2 + 20 * d.familiarity[k] / fmax}px"></i>${lbl}</div>`).join('');
-  $('#pside').innerHTML = `<div class="pside-h">What visitors need</div>` + (d.needs.length ? d.needs.map(n =>
-      `<div class="need"><div>${esc(n.need)}</div><div class="tags">${n.topics.map(t => `<span>#${esc(t)}</span>`).join('')}<span class="when">${esc((n.ts || '').slice(5, 16).replace('T', ' '))}</span></div>`
-      + `<button class="sm" data-id="${esc(n.id)}" title="Remove this note">×</button></div>`).join('')
-    : '<div class="need" style="color:var(--mute)">Nothing yet.</div>')
-    + `<div class="pside-h">Questions asked</div>` + (d.recent_questions.length ? d.recent_questions.map(q => `<div class="q">${esc(q)}</div>`).join('') : '<div class="q" style="color:var(--mute)">None yet.</div>')
-    + (d.top_enjoyed.length ? `<div class="pside-h">Enjoyed at the event</div>` + d.top_enjoyed.map(x => `<div class="q joy">${esc(x.name)} · ${x.count}</div>`).join('') : '')
-    + `<div class="privacy">Anonymous: the robot keeps topics, needs and questions, never names, companies or contact details.</div>`;
-  document.querySelectorAll('#pside .need button').forEach(b => b.onclick = async () => { if (confirm('Remove this note?')) { await papi('/api/booth/conversations/' + encodeURIComponent(b.dataset.id), { method:'DELETE' }); loadBooth(); } });
   await drawBoothGraph();
 }
 async function drawBoothGraph() {  // the robot HOSTED each conversation, which DISCUSSED topics and ENJOYED highlights
@@ -663,11 +658,35 @@ async function drawBoothGraph() {  // the robot HOSTED each conversation, which 
     pNodes = new vis.DataSet(N); pEdges = new vis.DataSet(E);
     boothNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-80, springLength:120, avoidOverlap:.7 }, stabilization:{ iterations:180 } }, interaction:{ hover:true, tooltipDelay:120 } });
     boothNet.once('stabilizationIterationsDone', () => boothNet.fit({ animation:true }));
+    boothNet.on('click', p => showBoothNode(p.nodes[0]));
   } else {  // update in place: the graph grows instead of re-shuffling
     const nid = new Set(N.map(n => n.id)), eid = new Set(E.map(e => e.id));
     pNodes.remove(pNodes.getIds().filter(i => !nid.has(i))); pEdges.remove(pEdges.getIds().filter(i => !eid.has(i)));
     pNodes.update(N); pEdges.update(E);
   }
+  boothData = g;
+  if (boothSel) showBoothNode(boothSel);
+}
+let boothData = { nodes:[], edges:[] }, boothSel = null;
+function showBoothNode(id) {  // graph first: the details of what was clicked, nothing else
+  const box = $('#pside'), n = boothData.nodes.find(x => x.id === id);
+  boothSel = n && n.kind !== 'Robot' ? id : null;
+  if (!boothSel) { box.hidden = true; return; }
+  const list = (h, items, cls = 'q') => items.length ? `<div class="pside-h">${h}</div>` + items.map(x => `<div class="${cls}">${esc(x)}</div>`).join('') : '';
+  if (n.kind === 'Conversation') {
+    box.innerHTML = `<button class="sm x" id="pclose">×</button><div class="pside-h">Conversation</div>`
+      + `<div class="big">${esc(n.need || 'No need mentioned')}</div>`
+      + `<div class="meta">${esc((n.ts || '').slice(5, 16).replace('T', ' '))}${n.familiarity ? ' · knows Neo4j: ' + esc(n.familiarity) : ''} · ${n.turns} answers</div>`
+      + list('Asked', n.questions) + list('Topics', n.topics.map(t => '#' + t), 'q tagq') + list('Enjoyed', n.enjoyed, 'q joy')
+      + `<div class="privacy">Anonymous: never names, companies or contact details.<br><button class="sm" id="pdel" style="margin-top:8px;color:var(--bad)">Remove this conversation</button></div>`;
+    $('#pdel').onclick = async () => { if (confirm('Remove this conversation note?')) { await papi('/api/booth/conversations/' + encodeURIComponent(n.conv_id), { method:'DELETE' }); boothSel = null; box.hidden = true; loadBooth(); } };
+  } else {
+    const convs = boothData.edges.filter(e => e.target === id).map(e => boothData.nodes.find(x => x.id === e.source)).filter(Boolean);
+    box.innerHTML = `<button class="sm x" id="pclose">×</button><div class="pside-h">Topic</div><div class="big">${esc(n.label)}</div>`
+      + `<div class="meta">${n.count} conversation${n.count === 1 ? '' : 's'}</div>` + list('Raised in', convs.map(c => c.label));
+  }
+  $('#pclose').onclick = () => showBoothNode(null);
+  box.hidden = false;
 }
 /* While this tab is open, tell the brain: the robot listens for "Hey PuppyPi" (and greets) only then */
 let listenTimer = null;

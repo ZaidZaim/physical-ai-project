@@ -57,8 +57,10 @@ def _graph(convs: list[dict], robot: str = "PuppyPi", limit: int = 60) -> dict[s
     for c in convs:
         cid = "conv:" + c["id"]
         when = (c.get("ts") or "")[11:16]
-        nodes.append({"id": cid, "kind": "Conversation", "label": (c.get("need") or f"conversation {when}")[:48],
-                      "title": c.get("summary") or c.get("need") or "", "ts": c.get("ts"), "familiarity": c.get("familiarity")})
+        nodes.append({"id": cid, "kind": "Conversation", "conv_id": c["id"], "label": (c.get("need") or f"conversation {when}")[:48],
+                      "title": c.get("summary") or c.get("need") or "", "ts": c.get("ts"), "familiarity": c.get("familiarity"),
+                      "need": c.get("need"), "summary": c.get("summary"), "questions": c.get("questions") or [],
+                      "topics": c.get("topics") or [], "enjoyed": c.get("enjoyed") or [], "turns": c.get("turns") or 0})
         edges.append({"source": "robot", "target": cid, "type": "HOSTED"})
         edges += [{"source": cid, "target": "topic:" + t, "type": "DISCUSSED"} for t in c["topics"]]
         edges += [{"source": cid, "target": "topic:" + t, "type": "ENJOYED"} for t in c["enjoyed"] if t not in c["topics"]]

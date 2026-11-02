@@ -148,7 +148,7 @@ def test_the_latest_notes_win_while_they_cover_the_whole_conversation_and_a_hell
     for t in ("What is GraphRAG?", "And agent memory?", "Thanks, bye!"):
         r = h.turn(t, r["encounter_id"])
     [c] = mem.list_conversations()
-    assert c["topics"] == ["graphrag", "agent memory"] and c["questions"] == ["what is graphrag", "what is agent memory"]
+    assert c["topics"] == ["graphrag", "agent memory"] and c["questions"] == ["what is GraphRAG", "what is agent memory"]
     assert c["need"] == "a memory for support agents" and c["turns"] == 4
 
 
@@ -333,3 +333,19 @@ def test_the_speech_models_own_word_list_is_not_a_visitor():
     # seen on the robot: noise came back as the prompt itself, which starts with "Hey PuppyPi", and opened a conversation
     assert heard_nothing(VOCAB_HINT) and heard_nothing("Hey PuppyPi, Neo4j, Cypher, GraphRAG, GraphAcademy, Aura, AuraDB, GenAI.")
     assert not heard_nothing("Hey PuppyPi, what is GraphRAG?") and not heard_nothing("How do Cypher and GraphRAG work with Aura?")
+
+
+def test_misheard_neo4j_terms_are_fixed_before_the_wizard_and_the_note_see_them():
+    from puppy_mind.voice import fix_terms
+
+    # seen on the robot: "agent memory" came out as "Asian memory", GraphAcademy as "graph economy"
+    assert fix_terms("I'd like to learn more about Asian memory") == "I'd like to learn more about agent memory"
+    assert fix_terms("Do you recommend any courses on Graph economy?") == "Do you recommend any courses on GraphAcademy?"
+    assert fix_terms("graph rag with neo for j and cipher") == "GraphRAG with Neo4j and Cypher"
+    assert fix_terms("I enjoyed the keynotes on graphs") == "I enjoyed the keynotes on graphs"  # nothing else changes
+    notes = iter([{"topics": ["Asian memory"], "questions": ["courses on graph economy"], "need": ""}])
+    h, mem = host([["Agent memory keeps context."]], extract_fn=lambda t: next(notes))
+    h.turn("Tell me about Asian memory")
+    [c] = mem.list_conversations()
+    assert c["topics"] == ["agent memory"] and c["questions"] == ["courses on GraphAcademy"]
+    assert h.encounters[c["id"]].messages[0]["content"] == "Tell me about agent memory"

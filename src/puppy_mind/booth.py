@@ -30,6 +30,7 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .voice import fix_terms
 from .wizard import system_prompt
 
 # ------------------------------------------------------------------ pure helpers
@@ -241,7 +242,8 @@ solve, how well they know Neo4j, what they enjoyed at the event, and the questio
 visitor's company or employer, job title, email, phone number, location or anything else that could identify them, even if they
 said it: write "a visitor" or leave it out. Only what the Visitor said or clearly implied; never take facts from the Robot's lines
 and never invent: questions are only the ones the Visitor actually asked, each once; enjoyed is empty unless the Visitor said what
-they enjoyed."""
+they enjoyed. Fix obvious speech-to-text mishearings of Neo4j terms (GraphAcademy, agent memory, GraphRAG, Cypher, Aura) and
+leave out anything you cannot make sense of."""
 
 
 class Outbox:
@@ -437,6 +439,7 @@ class BoothHost:
     def turn(self, text: str, encounter_id: str | None = None, place: str | None = None) -> dict[str, Any]:
         if not self.client:
             raise RuntimeError("OPENAI_API_KEY is not set")
+        text = fix_terms(text)  # typed turns too ("graph rag", "cipher")
         enc = self._encounter(encounter_id, place)
         with enc.lock:
             enc.turns += 1
@@ -517,6 +520,7 @@ class BoothHost:
         missed note is not an error. Dropped if a new visitor took over meanwhile (their words are noted on their own)."""
         try:
             f = (self.extract_fn(transcript) if self.extract_fn else {}) or {}
+            f = {k: ([fix_terms(str(x)) for x in v] if isinstance(v, list) else fix_terms(v) if isinstance(v, str) else v) for k, v in f.items()}
             idw = identifying_words(visitor_lines)
             notes = {
                 "topics": clean_topics(f.get("topics"), idw, general=True),

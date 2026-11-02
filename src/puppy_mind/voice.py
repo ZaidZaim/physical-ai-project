@@ -22,6 +22,21 @@ _SILENCE = re.compile(
 
 _HINT_TERMS = [h.strip().lower() for h in VOCAB_HINT.split(",")]
 
+# How speech-to-text mishears the booth's words (each seen on the robot or typical for the model), and what was meant. Applied to
+# every transcript, so the Wizard answers the right question and the booth notes keep the right topic.
+TERM_FIXES = [
+    (r"\basian (memory|memories)\b", r"agent \1"), (r"\bagents? memory\b", "agent memory"),
+    (r"\bgraph (economy|academy|academic)\b", "GraphAcademy"), (r"\bgraph ?academy\b", "GraphAcademy"),
+    (r"\bgraph ?(rag|rack|rug|wreck)\b", "GraphRAG"), (r"\bneo ?(4|four|for) ?j\b", "Neo4j"), (r"\bneo forge\b", "Neo4j"),
+    (r"\bcipher\b", "Cypher"), (r"\baura ?d ?b\b", "AuraDB"), (r"\bpuppy ?pie\b", "PuppyPi"), (r"\bcontext graft\b", "context graph"),
+]
+
+
+def fix_terms(text: str) -> str:
+    for pat, rep in TERM_FIXES:
+        text = re.sub(pat, rep, text or "", flags=re.I)
+    return text
+
 
 def echoes_the_hint(text: str) -> bool:
     """The speech model returned its own prompt: on noise it can answer with VOCAB_HINT itself. Seen on the robot: "Hey PuppyPi,
@@ -49,7 +64,7 @@ class Voice:
     def transcribe(self, audio: bytes, filename: str = "speech.wav") -> str:
         r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), prompt=VOCAB_HINT,
                                                     language=self.s.voice_language or None)  # never guess: see Settings.voice_language
-        return (getattr(r, "text", "") or "").strip()
+        return fix_terms((getattr(r, "text", "") or "").strip())
 
     def speak(self, text: str) -> bytes:
         """WAV bytes, so the robot can play them with plain `aplay`."""
