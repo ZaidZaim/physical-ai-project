@@ -127,6 +127,7 @@ class Brain:
         self.drive.gesture_cooldown_s, self.drive.max_gestures_per_hour = self.s.gesture_cooldown_s, self.s.max_gestures_per_hour
         self.people = PeopleService(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
                                     gesture_fn=self.gesture)
+        self.people.nams = self.nams if self.nams.enabled else None
         if self.agent:
             from .voice import Voice
 

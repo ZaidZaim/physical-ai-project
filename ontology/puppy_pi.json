@@ -1,11 +1,11 @@
 {
-  "message": "puppy-mind: physical-world vocabulary (Agent=robot, Location, Object) with spatial relationships, plus booth visitors in POLE+O terms (Person, Organization, Topic, Event); extends the agent-memory ontology",
+  "message": "puppy-mind rev 2: the conference booth in POLE+O. Person (consented visitor, PII-marked, unique person_id), Organization, Topic and Event (one booth conversation) with the lead fields the Neo4j team follows up on; robot hosts conversations; booth extraction aliases live in this file",
   "validation_mode": "permissive",
   "ontology": {
     "domain": {
       "id": "puppy-pi",
       "name": "PuppyPi Physical World",
-      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places and the spatial relationships between them, and, at a conference booth, the consenting visitors it talks to, their organizations, the topics they care about and the conversations it had with them",
+      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places and the spatial relationships between them; and at a conference booth, the visitors who said yes to being remembered, the organizations they work for, the topics they care about and the conversations the robot hosted with them, so the Neo4j team can follow up",
       "tagline": "Talk with your environment"
     },
     "entity_types": [
@@ -18,6 +18,12 @@
         "icon": "bot",
         "pii_sensitive": false,
         "properties": [
+          {
+            "name": "agent_id",
+            "type": "string",
+            "required": false,
+            "unique": true
+          },
           {
             "name": "model",
             "type": "string",
@@ -73,7 +79,7 @@
       },
       {
         "label": "Person",
-        "description": "A visitor the robot talked to. Stored ONLY after the visitor said yes out loud; never identified from camera frames. Carries what they told the robot and a lead score for follow-up.",
+        "description": "A conference visitor the robot talked to. Stored ONLY after the visitor said yes out loud to being remembered and followed up; never identified from camera frames. person_id is the app's id (one entity per visitor, never merged by a similar name). Carries what they told the robot and the lead fields for the Neo4j team's follow-up.",
         "pole_type": "PERSON",
         "subtype": "visitor",
         "color": "#D29922",
@@ -83,12 +89,14 @@
           {
             "name": "person_id",
             "type": "string",
-            "required": false
+            "required": false,
+            "unique": true
           },
           {
             "name": "name",
             "type": "string",
-            "required": false
+            "required": false,
+            "pii": true
           },
           {
             "name": "role",
@@ -108,7 +116,8 @@
           {
             "name": "email",
             "type": "string",
-            "required": false
+            "required": false,
+            "pii": true
           },
           {
             "name": "use_case",
@@ -118,25 +127,41 @@
           {
             "name": "familiarity",
             "type": "string",
-            "required": false
+            "required": false,
+            "enum": [
+              "none",
+              "curious",
+              "user",
+              "expert"
+            ]
           },
           {
             "name": "lead_score",
-            "type": "string",
+            "type": "integer",
             "required": false
           },
           {
             "name": "lead_stage",
             "type": "string",
-            "required": false
+            "required": false,
+            "enum": [
+              "cold",
+              "warm",
+              "hot"
+            ]
           },
           {
             "name": "wants_follow_up",
-            "type": "string",
+            "type": "boolean",
             "required": false
           },
           {
             "name": "wants_demo",
+            "type": "boolean",
+            "required": false
+          },
+          {
+            "name": "next_step",
             "type": "string",
             "required": false
           },
@@ -159,7 +184,7 @@
       },
       {
         "label": "Organization",
-        "description": "The company or institution a visitor works for.",
+        "description": "A company or institution a visitor works for, as they said it (shared by all its visitors).",
         "pole_type": "ORGANIZATION",
         "subtype": "company",
         "color": "#8B5CF6",
@@ -175,7 +200,7 @@
       },
       {
         "label": "Topic",
-        "description": "Something visitors care about: a technology or theme they want to learn about or build with (GraphRAG, Aura, knowledge graphs) or something they enjoyed at the event (a talk, the robot demo).",
+        "description": "A technology or theme visitors care about (GraphRAG, Aura, knowledge graphs, agent memory) or something they enjoyed at the event (a keynote, the robot demo). Shared: visitors who care about the same topic meet in it.",
         "pole_type": "OBJECT",
         "subtype": "topic",
         "color": "#14B8A6",
@@ -191,9 +216,9 @@
       },
       {
         "label": "Event",
-        "description": "One conversation the robot had with a consenting visitor at the booth: when, where, and a one-sentence summary (never a transcript).",
+        "description": "One conversation the robot hosted at the booth with a visitor who said yes: when, at which event and place, and a one-sentence summary (never a transcript).",
         "pole_type": "EVENT",
-        "subtype": "encounter",
+        "subtype": "booth_conversation",
         "color": "#F97316",
         "icon": "message-circle",
         "pii_sensitive": true,
@@ -201,10 +226,16 @@
           {
             "name": "event_id",
             "type": "string",
-            "required": false
+            "required": false,
+            "unique": true
           },
           {
             "name": "ts",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "event_name",
             "type": "string",
             "required": false
           },
@@ -216,7 +247,31 @@
         ]
       }
     ],
-    "extraction_aliases": {},
+    "extraction_aliases": {
+      "puppypi": "Agent",
+      "puppy pi": "Agent",
+      "robot": "Agent",
+      "robot dog": "Agent",
+      "graph wizard": "Agent",
+      "company": "Organization",
+      "employer": "Organization",
+      "startup": "Organization",
+      "university": "Organization",
+      "topic": "Topic",
+      "interest": "Topic",
+      "technology": "Topic",
+      "use case": "Topic",
+      "keynote": "Topic",
+      "talk": "Topic",
+      "session": "Topic",
+      "graphrag": "Topic",
+      "knowledge graph": "Topic",
+      "agent memory": "Topic",
+      "booth conversation": "Event",
+      "conversation at the booth": "Event",
+      "booth": "Location",
+      "demo area": "Location"
+    },
     "relationships": [
       {
         "type": "ON",
@@ -276,7 +331,7 @@
         "type": "INTERACTED_WITH",
         "source": "Agent",
         "target": "Person",
-        "description": "Consented interaction"
+        "description": "The robot talked with this visitor, who said yes to being remembered"
       },
       {
         "type": "WORKS_AT",
@@ -307,6 +362,18 @@
         "source": "Event",
         "target": "Location",
         "description": "Where the conversation took place"
+      },
+      {
+        "type": "HOSTED",
+        "source": "Agent",
+        "target": "Event",
+        "description": "The robot hosted this booth conversation"
+      },
+      {
+        "type": "DISCUSSED",
+        "source": "Event",
+        "target": "Topic",
+        "description": "A topic the visitor raised in this conversation"
       }
     ]
   }

@@ -4,7 +4,9 @@ Division of labour (see docs/MEMORY.md)
   Aura (graph.py)  authoritative physical world model: typed, time-aware facts (what is ON what, since/until,
                    possibly_gone). Exact queries. NAMS cannot update or delete relationships, so it cannot hold this.
   NAMS (this file) the story and the meaning around it:
-      * entities   Agent (the robot) / Location / Object (+ Person only with consent), linked by ON / NEXT_TO / LOCATED_AT / OBSERVED
+      * entities   Agent (the robot) / Location / Object, linked by ON / NEXT_TO / LOCATED_AT / OBSERVED
+      * leads      a booth visitor who said yes: Person (unique person_id), Organization, Topic and Event (the conversation), written
+                   explicitly after each save (never extracted from what they said) and deleted again when they ask to be forgotten
       * narrative  every observation is written as a message to an observation-log conversation; NAMS itself builds
                    Observations and Reflections from message windows (the "story of the day")
       * dialogue   questions and answers (chat conversation), reasoning steps and tool calls (provenance)
@@ -33,6 +35,9 @@ from .config import Settings
 log = logging.getLogger("puppy_mind.nams")
 
 T_ROBOT, T_PLACE, T_OBJECT, T_PERSON = "Agent", "Location", "Object", "Person"  # types of the workspace's ACTIVE ontology (verified live)
+T_ORG, T_TOPIC, T_EVENT = "Organization", "Topic", "Event"  # the booth types (ontology/puppy_pi.json revision 2)
+LEAD_PROPS = ("person_id", "role", "function", "company", "email", "use_case", "familiarity", "lead_score", "lead_stage",
+              "wants_follow_up", "wants_demo", "next_step", "first_met", "last_met")
 OWN_DESCRIPTIONS = ("Place observed by", "Hiwonder PuppyPi")  # how our own robot/place entities are told apart from extracted ones
 SPATIAL = ("ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND")
 
@@ -74,6 +79,7 @@ class Nams:
         self._info: dict[str, dict] = {}       # aura object id -> {"label","color"}
         self._gone: set[str] = set()
         self._flagged: set[str] = set()       # NAMS entity ids it flagged as possible duplicates
+        self._booth_types: tuple[bool, float] = (False, -1e9)  # (active ontology has the booth types, when checked)
         self._q: queue.Queue = queue.Queue(maxsize=1000)
         self._stop = threading.Event()
         self.http = client
@@ -416,6 +422,78 @@ class Nams:
         self._link_mirrors()
         self._reject_flags(force=True)
         return {"objects": len(objs), "relationships": len(rels), "linked": sum(1 for o in objs if o["id"] in self._links)}
+
+    # ------------------------------------------------------------------ booth leads (async; only visitors who said yes)
+    def booth_types_active(self) -> bool:
+        """The active ontology declares Organization, Topic and Event (rechecked every 5 min until it does): before that, in permissive
+        mode NAMS would file our leads under types it guesses, so nothing is sent."""
+        ok, at = self._booth_types
+        if not ok and time.monotonic() - at > 300:
+            a = self._req("GET", "/v1/ontologies/active") or {}
+            schema = (a.get("version") or {}).get("schema_json") or a.get("ontology") or {}
+            if isinstance(schema, str):
+                schema = json.loads(schema or "{}")
+            labels = {t.get("label") for t in schema.get("entity_types", [])}
+            self._booth_types = ({T_ORG, T_TOPIC, T_EVENT} <= labels, time.monotonic())
+        return self._booth_types[0]
+
+    def submit_lead(self, person: dict, encounter_id: str, place: str | None, summary: str, ts: str, robot: str, event: str) -> None:
+        self._submit(self._lead, dict(person), encounter_id, place, summary, ts, robot, event)
+
+    def _lead_entities(self, items: list[dict]) -> list[str | None]:
+        """Like _create_entities, but a merge is wanted here: the same person_id / event_id / company / topic resolves to one entity."""
+        out = self._req("POST", "/v1/entities/bulk", {"entities": items}) or {}
+        ids: list[str | None] = [None] * len(items)
+        for r in out.get("results", []):
+            i = r.get("index")
+            if isinstance(i, int) and 0 <= i < len(items):
+                if r.get("error"):
+                    self.stats["failed"] += 1
+                    self.stats["last_error"] = f"lead entity {items[i]['type']}: {r['error']}"[:200]
+                else:
+                    ids[i] = r.get("id") or r.get("merged_into") or r.get("duplicate_of")
+        return ids
+
+    def _lead(self, p: dict, encounter_id: str, place: str | None, summary: str, ts: str, robot: str, event: str) -> None:
+        if not self.booth_types_active() or not (p.get("name") or "").strip():
+            return
+        props = {k: str(p[k]).lower() if isinstance(p[k], bool) else str(p[k]) for k in LEAD_PROPS if p.get(k) not in (None, "")}
+        about = ", ".join(x for x in (p.get("role") and f"{p['role']}" + (f" at {p['company']}" if p.get("company") else ""),
+                                      p.get("use_case") and f"building: {p['use_case']}", p.get("next_step") and f"next step: {p['next_step']}") if x)
+        items = [{"name": p["name"], "type": T_PERSON, "properties": props,
+                  "description": f"Booth visitor at {event} who said yes to being remembered and followed up" + (f"; {about}" if about else "")},
+                 {"name": f"Booth conversation with {p['name']} on {ts[:10]} ({encounter_id[:6]})", "type": T_EVENT,
+                  "properties": {"event_id": encounter_id, "ts": ts, "event_name": event, **({"summary": summary} if summary else {})},
+                  "description": summary or f"{robot} talked with {p['name']} at {event}"}]
+        if p.get("company"):
+            items.append({"name": p["company"], "type": T_ORG, "description": "Organization a booth visitor works for"})
+        topics = list(dict.fromkeys([*(p.get("interests") or []), *(p.get("enjoyed") or [])]))
+        items += [{"name": t, "type": T_TOPIC, "description": "Topic booth visitors care about"} for t in topics]
+        ids = self._lead_entities(items)
+        person, conv = ids[0], ids[1]
+        if not person:
+            return
+        org = ids[2] if p.get("company") else None
+        topic_id = dict(zip(topics, ids[3:] if p.get("company") else ids[2:]))
+        bot = self._fixed_entity("robot", robot, T_ROBOT, "Hiwonder PuppyPi quadruped robot")
+        where = self._fixed_entity("place", self._place_name(place, None), T_PLACE, f"Place observed by {robot}") if place else None
+        rels = [("WORKS_AT", person, org), ("PARTICIPATED_IN", person, conv), ("INTERACTED_WITH", bot, person), ("HOSTED", bot, conv),
+                ("HELD_AT", conv, where)]
+        rels += [("INTERESTED_IN", person, topic_id.get(t)) for t in (p.get("interests") or [])]
+        rels += [("ENJOYED", person, topic_id.get(t)) for t in (p.get("enjoyed") or [])]
+        rels += [("DISCUSSED", conv, topic_id.get(t)) for t in (p.get("interests") or [])]
+        self._relationships([{"relationshipType": t, "sourceId": a, "targetId": b} for t, a, b in rels if a and b])
+        if self.mem is not None and hasattr(self.mem, "set_person_nams"):
+            try:  # so that forgetting them can delete these entities too
+                self.mem.set_person_nams(p["person_id"], person, encounter_id, conv)
+            except Exception as e:
+                log.warning("could not store the NAMS ids of a lead: %s", e)
+        self.stats["synced_leads"] = self.stats.get("synced_leads", 0) + 1
+
+    def submit_forget(self, entity_ids: list[str]) -> None:
+        """The visitor asked to be forgotten: delete their Person and conversation entities (companies and topics are not personal)."""
+        for i in [i for i in entity_ids if i]:
+            self._submit(self._req, "DELETE", f"/v1/entities/{i}")
 
     # ------------------------------------------------------------------ conversations (async)
     def conversation(self, session_id: str, kind: str) -> str | None:

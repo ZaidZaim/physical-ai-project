@@ -41,11 +41,21 @@ def _nams_cmd(args, s) -> int:
             spec = json.loads(Path("ontology/puppy_pi.json").read_text(encoding="utf-8"))
             for obj in s.vocab:  # let NAMS extraction map common nouns in observation text to PhysicalObject
                 spec["ontology"]["extraction_aliases"].setdefault(obj, "Object")
-            spec["ontology"]["extraction_aliases"].update({
-                "puppypi": "Agent", "robot": "Agent", "visitor": "Person", "attendee": "Person",
-                "company": "Organization", "employer": "Organization",
-                "topic": "Topic", "interest": "Topic", "talk": "Topic", "conversation at the booth": "Event"})
-            r = n._req("POST", "/v1/ontologies", spec)
+            if args.preview:  # what NAMS would extract from this text with the file's ontology: nothing is stored or changed
+                n.http.timeout = 120  # extraction with a draft ontology took over 20 s
+                r = n._req("POST", "/v1/ontologies/preview", {"text": args.preview, "ontology": spec["ontology"]})
+                if r is None:
+                    print("preview failed:", n.stats["last_error"])
+                    return 1
+                for e in r.get("entities", []):
+                    print(f"  {e.get('type')}: {e.get('name')}  ({e.get('decision')})")
+                for x in r.get("relationships", []):
+                    print(f"  {x.get('source')} -[{x.get('type')}]-> {x.get('target')}")
+                return 0
+            # a new revision of the existing puppy-pi ontology (PUT), so its history stays in one place; created only the first time
+            mine = [o for o in (n._req("GET", "/v1/ontologies") or {}).get("ontologies", [])
+                    if o.get("name") == spec["ontology"]["domain"]["id"] and not o.get("is_system")]
+            r = n._req("PUT", f"/v1/ontologies/{mine[0]['id']}", spec) if mine else n._req("POST", "/v1/ontologies", spec)
             if r is None:
                 print("create failed:", n.stats["last_error"])
                 if "403" in n.stats["last_error"]:
@@ -53,6 +63,7 @@ def _nams_cmd(args, s) -> int:
                     print("Memory sync works without it: the app already uses the types of your active ontology (Agent, Location, Object, Person).")
                     print("The booth types (Organization, Topic, Event) reach NAMS once this version is created and activated.")
                 return 1
+            r = r.get("version") or r
             print("created ontology version:", json.dumps({k: r.get(k) for k in ("id", "ontology_id", "revision", "semver_tag", "validation_mode")}))
             if args.activate:
                 a = n._req("POST", "/v1/ontologies/active", {"version_id": r["id"]})
@@ -279,8 +290,9 @@ def main(argv: list[str] | None = None) -> int:
     rt.add_argument("--real-memory", action="store_true", help="save observations to Aura (and analyse frames with OpenAI) instead of in-RAM memory")
     rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
     sub.add_parser("nams-check", help="test the NAMS key/workspace and show the active ontology")
-    ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS (add --activate to switch to it)")
+    ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS, or its next revision (add --activate to switch to it)")
     ns.add_argument("--activate", action="store_true")
+    ns.add_argument("--preview", metavar="TEXT", help="only show what NAMS would extract from TEXT with ontology/puppy_pi.json (changes nothing)")
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
     nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")

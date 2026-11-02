@@ -18,6 +18,7 @@ class FakeNams:
         self.headers_seen = {}
         self.merge_always = set()   # entity names NAMS "merges" (measured live: look-alike names get merged)
         self.pairs = []             # pending review pairs returned by GET /v1/reviews
+        self.active = ["Agent", "Object", "Location", "Person"]  # entity types of the active ontology (revision 1)
 
     def _id(self, p):
         self.n += 1
@@ -33,6 +34,9 @@ class FakeNams:
         if path == "/v1/status":
             return httpx.Response(200, json={"status": "ok"})
         self.calls.append((req.method, path, body))
+        if req.method == "GET" and path == "/v1/ontologies/active":  # the live shape: the schema as a JSON string
+            return httpx.Response(200, json={"version": {"id": "ov-x", "schema_json": json.dumps(
+                {"entity_types": [{"label": t} for t in self.active]})}})
         if path == "/v1/conversations":
             return httpx.Response(201, json={"id": self._id("conv"), "metadata": body.get("metadata")})
         if re.fullmatch(r"/v1/conversations/[^/]+/messages", path):
@@ -341,3 +345,41 @@ def test_backfill_links_objects_to_the_same_place_entity_live_syncing_uses():
     rels = [r for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
     assert {r["targetId"] for r in rels if r["relationshipType"] == "LOCATED_AT"} == {live}
     n.close()
+
+
+def test_a_consented_lead_reaches_nams_only_with_the_booth_ontology_and_leaves_it_when_forgotten():
+    from puppy_mind.devfake import FakeMemory
+    from puppy_mind.people import PeopleService, merge_person
+
+    fake = FakeNams()
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test", people_consent=True)
+    mem = FakeMemory(s)
+    n, _ = make(fake, mem)
+    svc = PeopleService(s, mem, client=None)
+    svc.nams, svc.write_in_background = n, False
+    enc = svc._encounter("enc-yosef1", "Booth")
+    enc.consent = True
+    yosef = merge_person(None, {"company": "Microsoft", "role": "VP of Developer", "use_case": "collaborate with Neo4j",
+                                "interests": ["knowledge graphs"], "enjoyed": ["agentic ai keynote"], "wants_follow_up": True}, "Yosef")
+    svc._store(enc, yosef)
+    assert n.flush(5) and fake.calls_to("POST", "/v1/entities/bulk") == []  # revision 1 active: nothing about him is sent
+    fake.active += ["Organization", "Topic", "Event"]
+    n._booth_types = (False, -1e9)
+    svc._store(enc, yosef)
+    assert n.flush(5)
+    sent = {(e["type"], e["name"]): e for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"]}
+    person = sent[("Person", "Yosef")]
+    assert person["properties"]["person_id"] == yosef["person_id"] and person["properties"]["wants_follow_up"] == "true"
+    assert ("Organization", "Microsoft") in sent and ("Topic", "knowledge graphs") in sent and ("Topic", "agentic ai keynote") in sent
+    event = next(e for (t, _), e in sent.items() if t == "Event")
+    assert event["properties"]["event_id"] == "enc-yosef1"
+    ids = {name: i for (name, _), i in fake.entities.items()}
+    rels = {(r["relationshipType"], r["sourceId"], r["targetId"]) for call in fake.calls_to("POST", "/v1/relationships/bulk")
+            for r in call["relationships"]}
+    assert {("WORKS_AT", ids["Yosef"], ids["Microsoft"]), ("INTERESTED_IN", ids["Yosef"], ids["knowledge graphs"]),
+            ("ENJOYED", ids["Yosef"], ids["agentic ai keynote"]), ("PARTICIPATED_IN", ids["Yosef"], ids[event["name"]]),
+            ("INTERACTED_WITH", ids[s.robot_name], ids["Yosef"]), ("HOSTED", ids[s.robot_name], ids[event["name"]])} <= rels
+    assert set(mem.person_nams_ids(yosef["person_id"])) == {ids["Yosef"], ids[event["name"]]}
+    assert svc.forget(yosef["person_id"]) and n.flush(5)
+    gone = {p.rsplit("/", 1)[-1] for m, p, _ in fake.calls if m == "DELETE"}
+    assert gone == {ids["Yosef"], ids[event["name"]]}  # his company and topics stay: they are not personal

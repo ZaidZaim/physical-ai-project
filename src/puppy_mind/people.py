@@ -452,6 +452,7 @@ class PeopleService:
         self.active_fn: Callable[[], bool] = lambda: True  # set by Brain: greet only while someone has the People tab open
         self.look_fn = look_fn if look_fn is not None else (self._look if client is not None else None)
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
+        self.nams = None  # set by Brain: consented leads are mirrored to NAMS after each save, and deleted there when forgotten
         # after each answer with consent, facts are pulled from what the visitor said (the model alone saved only at the moment of consent)
         self.extract_fn = extract_fn if extract_fn is not None else (self._extract if client is not None else None)
         self.learn_in_background = True  # tests set False to learn synchronously
@@ -543,6 +544,8 @@ class PeopleService:
                 for k in ("meet_count", "first_met", "last_met", "followed_up"):
                     if saved.get(k) is not None:
                         enc.record[k] = saved[k]
+            if self.nams is not None and enc.consent is True:  # forgotten in the meantime: not mirrored
+                self.nams.submit_lead(saved, encounter_id, place, summary, ts, self.s.robot_name, self.s.event_name)
         except Exception as e:
             self._publish("error", {"error": f"could not save {person.get('name')} to the graph: {e}"[:200]})
 
@@ -572,7 +575,17 @@ class PeopleService:
         for e in self._open_records(person_id):
             e.person_id, e.record, e.consent, e.name = None, None, False, ""
         self.flush()
-        return self.mem.forget_person(person_id)
+        return self._erase(person_id)
+
+    def _erase(self, person_id: str) -> bool:
+        """Aura first, NAMS behind it (their Person and conversation entities; ids were stored on our nodes when mirrored)."""
+        if self.nams is not None:
+            self.nams.flush(10)  # a mirror still queued would bring them back after the delete
+            ids = self.mem.person_nams_ids(person_id) if hasattr(self.mem, "person_nams_ids") else []
+        ok = self.mem.forget_person(person_id)
+        if self.nams is not None:
+            self.nams.submit_forget(ids)
+        return ok
 
     def flush(self, timeout: float = 10.0) -> None:
         """Wait until queued saves reached the graph (tests, shutdown)."""
@@ -604,8 +617,9 @@ class PeopleService:
                 pid = p["person_id"] if p else None
             if not pid:
                 return {"forgotten": False, "reason": "no one by that name is remembered"}
-            ok = self.mem.forget_person(pid)
             enc.person_id, enc.consent, enc.record = None, False, None
+            self.flush()
+            ok = self._erase(pid)
             self._publish("people", {"event": "forgotten", "person_id": pid})
             return {"forgotten": ok}
         if name == "save_person_facts":

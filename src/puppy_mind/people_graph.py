@@ -148,6 +148,21 @@ class PeopleGraph:
         self._write("MATCH (t:Theme) WHERE NOT (t)<-[:INTERESTED_IN|ENJOYED]-() DELETE t")
         return bool(rows)
 
+    def set_person_nams(self, person_id: str, person_nams_id: str, encounter_id: str, event_nams_id: str | None) -> None:
+        """The NAMS entities mirroring this person and conversation (deleted with them when they ask to be forgotten)."""
+        self._write("""
+            MATCH (p:Person {personId:$pid}) SET p.namsId = $pn
+            WITH p OPTIONAL MATCH (p)-[:PARTICIPATED_IN]->(e:Encounter {id:$eid})
+            FOREACH (x IN CASE WHEN e IS NULL OR $en IS NULL THEN [] ELSE [e] END | SET x.namsId = $en)
+            """, pid=person_id, pn=person_nams_id, eid=encounter_id, en=event_nams_id)
+
+    def person_nams_ids(self, person_id: str) -> list[str]:
+        rows = self._read("""
+            MATCH (p:Person {personId:$pid})
+            RETURN [p.namsId] + [(p)-[:PARTICIPATED_IN]->(e:Encounter) WHERE e.namsId IS NOT NULL | e.namsId] AS ids
+            """, pid=person_id)
+        return [i for i in (rows[0]["ids"] if rows else []) if i]
+
     def set_followed_up(self, person_id: str, done: bool) -> bool:
         return bool(self._write("MATCH (p:Person {personId:$pid}) SET p.followedUp = $d RETURN 1 AS ok", pid=person_id, d=done))
 
@@ -236,6 +251,18 @@ class FakePeople:
 
     def forget_person(self, person_id: str) -> bool:
         return self._people().pop(person_id, None) is not None
+
+    def set_person_nams(self, person_id: str, person_nams_id: str, encounter_id: str, event_nams_id: str | None) -> None:
+        p = self._people().get(person_id)
+        if p:
+            p["nams_id"] = person_nams_id
+            for e in p["encounters"]:
+                if e["id"] == encounter_id and event_nams_id:
+                    e["nams_id"] = event_nams_id
+
+    def person_nams_ids(self, person_id: str) -> list[str]:
+        p = self._people().get(person_id) or {"encounters": []}
+        return [i for i in [p.get("nams_id"), *(e.get("nams_id") for e in p["encounters"])] if i]
 
     def set_next_step(self, person_id: str, text: str) -> bool:
         p = self._people().get(person_id)
