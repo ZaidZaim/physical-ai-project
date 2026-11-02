@@ -274,3 +274,20 @@ def test_unclear_audio_inside_a_conversation_gets_a_question_back_outside_silenc
     assert r.status_code == 200 and unquote(r.headers["x-reply"]) == "Sorry, I didn't catch that. Could you say it again?"
     assert r.headers["x-encounter"] == enc
     assert post("Thanks for watching!", enc).status_code == 204  # not every few seconds
+
+
+def test_camera_analysis_pauses_while_a_visitor_talks(client):
+    # seen on a phone hotspot: a frame upload every 5 s made replies take 13-22 s instead of 6
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, wake_action="", listen_always=True, watch_interval_s=0)
+    server.brain.booth.s = server.brain.s
+    server.brain.perception = object()  # something to analyse with (never called: the check comes first)
+    server.brain.booth.client = FakeChat([["Hi!"], ["Bye!"]])
+    post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
+                                              data={"encounter_id": enc} if enc else {})
+    enc = post("Hey PuppyPi").headers["x-encounter"]
+    assert server.brain.submit_frame(b"jpeg") is False and server.brain.frame == b"jpeg"  # shown, not analysed
+    post("Thanks!", enc)
+    assert not server.brain.booth.conversation_active()
+    server.brain.perception = None

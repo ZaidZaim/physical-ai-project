@@ -149,6 +149,8 @@ class Brain:
         if self.drive.moving:  # blurry + viewpoint changing: don't analyse, don't learn from it
             self._moved = True
             return False
+        if self.booth.conversation_active():  # the visitor comes first: on a phone hotspot a frame upload every 5 s made replies
+            return False                      # take 13-22 s instead of 6 (the live picture keeps showing)
         if (
             self.perception
             and time.monotonic() - self._last_perceive >= self.s.watch_interval_s

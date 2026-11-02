@@ -504,7 +504,7 @@ class BoothHost:
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
             enc.last = time.monotonic()
         if learner is not None:  # started beside the reply: wait for it, so the question below never asks what they just said
-            learner.join(timeout=8)
+            learner.join(timeout=2)  # not longer: on a slow network the note may take 10 s; it is saved when it is done
         if enc.closing:
             enc.ended = True  # seen at the booth: after "Goodbye" it stayed "in a conversation" for another 90 s
         else:
