@@ -73,7 +73,7 @@ class Settings:
     greet_action: str = os.getenv("GREET_ACTION", "")  # no trick when greeting by default; tricks still play on request
     # the robot only starts a conversation when it hears this; follow-ups need no wake word for WAKE_WINDOW_S. Empty: no wake word.
     wake_word: str = os.getenv("WAKE_WORD", "Hey PuppyPi")
-    wake_window_s: float = float(os.getenv("WAKE_WINDOW_S", "90"))
+    wake_window_s: float = float(os.getenv("WAKE_WINDOW_S", "45"))
     # listen for the wake word whether or not a browser has the Booth tab open (seen at the booth: the tab went to the background
     # mid-conversation, the robot stopped listening and never heard the goodbye). false: only while the tab is open.
     listen_always: bool = _bool("LISTEN_ALWAYS", True)

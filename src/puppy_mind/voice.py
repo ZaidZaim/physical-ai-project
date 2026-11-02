@@ -20,10 +20,21 @@ _SILENCE = re.compile(
     r"subtitles? (by|from)|amara\.org|transcribed by", re.I)
 
 
+_HINT_TERMS = [h.strip().lower() for h in VOCAB_HINT.split(",")]
+
+
+def echoes_the_hint(text: str) -> bool:
+    """The speech model returned its own prompt: on noise it can answer with VOCAB_HINT itself. Seen on the robot: "Hey PuppyPi,
+    Neo4j, Cypher, GraphRAG, GraphAcademy, Aura, ..." opened a conversation nobody had started."""
+    low = (text or "").lower()
+    return sum(1 for h in _HINT_TERMS if h and h in low) >= 5
+
+
 def heard_nothing(text: str) -> bool:
-    """True when a transcript is empty, a lone filler word, or one of the phrases the model invents for silence."""
+    """True when a transcript is empty, a lone filler word, one of the phrases the model invents for silence, or its own prompt."""
     t = re.sub(r"[^\w\s']", " ", (text or "").lower()).split()
-    return not t or (len(t) == 1 and t[0] in ("you", "bye", "uh", "um", "hmm", "so", "okay")) or bool(_SILENCE.search(text or ""))
+    return (not t or (len(t) == 1 and t[0] in ("you", "bye", "uh", "um", "hmm", "so", "okay")) or bool(_SILENCE.search(text or ""))
+            or echoes_the_hint(text))
 
 
 class Voice:

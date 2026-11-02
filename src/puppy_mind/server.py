@@ -457,6 +457,16 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
                              "X-Timing": quote(timing)})
 
 
+@app.post("/api/booth/end")
+def booth_end(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """End the conversation from the Booth tab (the robot levels its head on its next poll)."""
+    _local_auth(request, x_brain_token, token)
+    n = brain.booth.end_conversations()
+    brain.booth_tick()
+    brain.bus.publish("listen", brain.listen_state())
+    return {"ended": n, **brain.listen_state()}
+
+
 @app.post("/api/listen")
 def listen(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     """The Booth tab pings this while it is open: the robot listens for its wake word (and greets) only then."""

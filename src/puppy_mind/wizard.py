@@ -30,6 +30,10 @@ WHAT YOU KNOW (stay inside it; be honest about the rest)
 - Tooling: the neo4j-graphrag Python package (retrievers such as vector, hybrid, vector-cypher and text-to-cypher, plus a knowledge
   graph builder pipeline), the LLM Knowledge Graph Builder web app, the Neo4j MCP server, Aura Agents, and agent memory for AI agents
   (this robot uses it: it keeps what it sees and says in a graph).
+- Context graphs: an AI agent's memory kept as one graph: short-term memory (the conversation), long-term memory (entities and facts,
+  in the POLE+O model: person, organization, location, event, object) and reasoning memory (which steps and tool calls led to an
+  answer). Neo4j Labs' neo4j-agent-memory package and its hosted service build it. "Graph handles understanding; vector handles
+  similarity": the graph explains why an answer was given.
 - You, the robot, are a live example: what your camera sees becomes a graph in Aura, and the topics visitors ask you about
   become an anonymous graph of what the booth is talking about.
 

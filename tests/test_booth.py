@@ -310,3 +310,26 @@ def test_the_look_prompt_knows_the_camera_is_at_floor_level_and_never_reads_badg
 
     assert "FLOOR LEVEL" in LOOK_PROMPT and "feet" in LOOK_PROMPT and "Sitting people count" in LOOK_PROMPT
     assert "Never read name badges" in LOOK_PROMPT and set(PersonView.model_fields) == {"zone", "facing_robot", "close"}
+
+
+def test_a_visitor_can_end_the_conversation_in_more_words_and_the_tab_can_end_it_too():
+    from puppy_mind.booth import says_goodbye
+
+    for done in ("Thank you and goodbye.", "Thanks!", "Okay, thank you so much.", "Thank you, PuppyPi.", "Stop.", "End the conversation.",
+                 "That's all for now.", "I need to run to the next one."):
+        assert says_goodbye(done), done
+    for going_on in ("Thanks, and what about vector search?", "How do I stop a running Cypher query in Aura?", "Thank you for the "
+                     "explanation of GraphRAG, can you also explain agent memory?", "Tell me about Neo4j context graph."):
+        assert not says_goodbye(going_on), going_on
+    h, _ = host([["Hello!"]])
+    r = h.turn("Hey PuppyPi")
+    assert h.conversation_active() and h.end_conversations() == 1 and not h.conversation_active()
+    assert h.addressed("what about vector search", r["encounter_id"]) == (False, None)
+
+
+def test_the_speech_models_own_word_list_is_not_a_visitor():
+    from puppy_mind.voice import VOCAB_HINT, heard_nothing
+
+    # seen on the robot: noise came back as the prompt itself, which starts with "Hey PuppyPi", and opened a conversation
+    assert heard_nothing(VOCAB_HINT) and heard_nothing("Hey PuppyPi, Neo4j, Cypher, GraphRAG, GraphAcademy, Aura, AuraDB, GenAI.")
+    assert not heard_nothing("Hey PuppyPi, what is GraphRAG?") and not heard_nothing("How do Cypher and GraphRAG work with Aura?")

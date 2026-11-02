@@ -52,8 +52,15 @@ _OWN_ASK = re.compile(r"\benjoy|\bconference\b|\bthe event\b|\bremember\b|\bfoll
                       r"\bwhere do you work\b|\bwhich company\b|\b(save|store|keep|note)\s+(your|you|this|our)\b", re.I)
 
 
+_THANKS_ONLY = re.compile(r"\W*(?:(?:ok(?:ay)?|great|cool|perfect|alright|all right|awesome|nice)\W+)?(?:thanks?|thank you)"
+                          r"(?:\W+(?:so|very) much)?(?:\W+(?:puppy ?pi|robot|wizard))?\W*", re.I)
+_END = re.compile(r"\b(stop( talking)?|end (the |this )?conversation|that'?s enough|we'?re done|i'?m done|no more questions)\b", re.I)
+
+
 def says_goodbye(text: str) -> bool:
-    return bool(_BYE.search(text or ""))
+    """The visitor is done: a goodbye, "I need to run", a plain "thanks" on its own, or "stop" / "end the conversation"."""
+    t = (text or "").strip()  # "stop" ends it only as a short command: "how do I stop a running query?" is a question
+    return bool(_BYE.search(t) or _THANKS_ONLY.fullmatch(t) or (_END.search(t) and len(t.split()) <= 6))
 
 
 def asks_something(text: str) -> bool:
@@ -399,6 +406,14 @@ class BoothHost:
         return "Sorry, I didn't catch that. Could you say it again?"
 
     # ---- wake word (robot microphone only: Hold to talk and typing are addressed to the robot by definition)
+    def end_conversations(self) -> int:
+        """The Booth tab's "End conversation": every open conversation is over (the next visitor says the wake word)."""
+        n = 0
+        for e in list(self.encounters.values()):
+            if e.messages and not e.ended:
+                e.ended, e.closing, n = True, True, n + 1
+        return n
+
     def conversation_active(self) -> bool:
         """Someone talked with the robot less than WAKE_WINDOW_S ago."""
         now = time.monotonic()

@@ -246,7 +246,8 @@
         <div class="bkpi small"><b id="pq">0</b><span>questions</span></div>
         <div class="bkpi small"><b id="ptopics">0</b><span>topics</span></div>
         <div id="pfam" title="How well visitors know Neo4j"></div>
-        <span class="tag" id="plisten" title="The robot listens for its wake word only while this tab is open">robot not listening</span>
+        <span class="tag" id="plisten" title="Whether the robot listens for its wake word, or is in a conversation">robot not listening</span>
+        <button class="sm" id="pend" hidden title="End the conversation: the next visitor starts with the wake word">End conversation</button>
         <span class="spacer"></span>
       </div>
       <div id="pbody">
@@ -672,12 +673,14 @@ async function drawBoothGraph() {  // the robot HOSTED each conversation, which 
 let listenTimer = null;
 function showListen(st) {
   const el = $('#plisten'); el.classList.toggle('on', st.state === 'listening'); el.classList.toggle('talk', st.state === 'conversation');
+  $('#pend').hidden = st.state !== 'conversation';
   el.textContent = st.state === 'conversation' ? 'in a conversation' : st.state === 'listening' ? `listening for “${st.wake_word}”` : 'robot not listening';
 }
 async function listenPing() {
   if ($('#boothview').hidden || document.hidden) return listenStop();
   try { showListen(await papi('/api/listen', { method:'POST' })); } catch (e) { showListen({ state:'off' }); }
 }
+$('#pend').onclick = async () => { try { showListen(await papi('/api/booth/end', { method:'POST' })); } catch (e) {} };
 function listenStart() { if (!listenTimer) { listenPing(); listenTimer = setInterval(listenPing, 5000); } }
 function listenStop() { clearInterval(listenTimer); listenTimer = null; showListen({ state:'off' }); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('#boothview').hidden) listenStart(); });
