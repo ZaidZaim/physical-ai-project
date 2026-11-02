@@ -347,60 +347,33 @@ def test_backfill_links_objects_to_the_same_place_entity_live_syncing_uses():
     n.close()
 
 
-def test_a_consented_lead_reaches_nams_only_with_the_booth_ontology_and_leaves_it_when_forgotten():
+def test_a_booth_conversation_reaches_nams_as_an_anonymous_event_once_the_booth_ontology_is_active():
+    from puppy_mind.booth import BoothHost
     from puppy_mind.devfake import FakeMemory
-    from puppy_mind.people import PeopleService, merge_person
-
-    fake = FakeNams()
-    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test", people_consent=True)
-    mem = FakeMemory(s)
-    n, _ = make(fake, mem)
-    svc = PeopleService(s, mem, client=None)
-    svc.nams, svc.write_in_background = n, False
-    enc = svc._encounter("enc-yosef1", "Booth")
-    enc.consent = True
-    yosef = merge_person(None, {"company": "Microsoft", "role": "VP of Developer", "use_case": "collaborate with Neo4j",
-                                "interests": ["knowledge graphs"], "enjoyed": ["agentic ai keynote"], "wants_follow_up": True}, "Yosef")
-    svc._store(enc, yosef)
-    assert n.flush(5) and fake.calls_to("POST", "/v1/entities/bulk") == []  # revision 1 active: nothing about him is sent
-    fake.active += ["Organization", "Topic", "Event"]
-    n._booth_types = (False, -1e9)
-    svc._store(enc, yosef)
-    assert n.flush(5)
-    sent = {(e["type"], e["name"]): e for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"]}
-    person = sent[("Person", "Yosef")]
-    assert person["properties"]["person_id"] == yosef["person_id"] and person["properties"]["wants_follow_up"] == "true"
-    assert ("Organization", "Microsoft") in sent and ("Topic", "knowledge graphs") in sent and ("Topic", "agentic ai keynote") in sent
-    event = next(e for (t, _), e in sent.items() if t == "Event")
-    assert event["properties"]["event_id"] == "enc-yosef1"
-    ids = {name: i for (name, _), i in fake.entities.items()}
-    rels = {(r["relationshipType"], r["sourceId"], r["targetId"]) for call in fake.calls_to("POST", "/v1/relationships/bulk")
-            for r in call["relationships"]}
-    assert {("WORKS_AT", ids["Yosef"], ids["Microsoft"]), ("INTERESTED_IN", ids["Yosef"], ids["knowledge graphs"]),
-            ("ENJOYED", ids["Yosef"], ids["agentic ai keynote"]), ("PARTICIPATED_IN", ids["Yosef"], ids[event["name"]]),
-            ("INTERACTED_WITH", ids[s.robot_name], ids["Yosef"]), ("HOSTED", ids[s.robot_name], ids[event["name"]])} <= rels
-    assert set(mem.person_nams_ids(yosef["person_id"])) == {ids["Yosef"], ids[event["name"]]}
-    assert svc.forget(yosef["person_id"]) and n.flush(5)
-    gone = {p.rsplit("/", 1)[-1] for m, p, _ in fake.calls if m == "DELETE"}
-    assert gone == {ids["Yosef"], ids[event["name"]]}  # his company and topics stay: they are not personal
-
-
-def test_leads_saved_before_the_booth_ontology_can_be_copied_to_nams_once_it_is_active():
-    from puppy_mind.devfake import FakeMemory
-    from puppy_mind.people import merge_person
 
     fake = FakeNams()
     s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test")
     mem = FakeMemory(s)
     n, _ = make(fake, mem)
-    ana = merge_person(None, {"company": "Acme", "interests": ["graphrag"]}, "Ana Berg")
-    for eid, ts in (("e1", "2026-10-31T10:00:00Z"), ("e2", "2026-11-01T10:00:00Z")):  # met twice
-        mem.save_person(ana, encounter_id=eid, place=None, summary="", ts=ts)
-    people = [mem.get_person(ana["person_id"])]
-    assert n.sync_leads(people, "PuppyPi", "the conference")["leads"] == 0 and fake.calls_to("POST", "/v1/entities/bulk") == []
+    host = BoothHost(s, mem, client=None)
+    host.nams, host.write_in_background = n, False
+    enc = host._encounter("conv-abc123", "Booth")
+    enc.turns, enc.notes = 3, {"topics": ["knowledge graphs", "contracts"], "enjoyed": ["agentic ai keynote"], "need": "search contracts",
+                               "familiarity": "curious", "questions": ["what is graphrag"], "summary": "asked about contract search"}
+    host._save(enc)
+    assert n.flush(5) and fake.calls_to("POST", "/v1/entities/bulk") == []  # booth types not active yet: nothing is sent
     fake.active += ["Organization", "Topic", "Event"]
     n._booth_types = (False, -1e9)
-    assert n.sync_leads(people, "PuppyPi", "the conference") == {"leads": 1, "of": 1}
-    events = {e["properties"]["event_id"] for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"] if e["type"] == "Event"}
-    assert events == {"e1", "e2"} and len([k for k in fake.entities if k[1] == "Person"]) == 1  # one person, both conversations
-    assert len(mem.person_nams_ids(ana["person_id"])) == 3  # so forgetting her deletes all of it
+    host._save(enc)
+    host._save(enc)  # saved after every answer: the same Event, not a second one
+    assert n.flush(5)
+    sent = [e for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"]]
+    assert {e["type"] for e in sent} == {"Event", "Topic", "Agent", "Location"}  # never a Person or an Organization
+    event = next(e for e in sent if e["type"] == "Event")
+    assert event["properties"]["event_id"] == "conv-abc123" and event["properties"]["need"] == "search contracts"
+    assert len([k for k in fake.entities if k[1] == "Event"]) == 1
+    ids = {name: i for (name, _), i in fake.entities.items()}
+    rels = {(r["relationshipType"], r["sourceId"], r["targetId"]) for call in fake.calls_to("POST", "/v1/relationships/bulk")
+            for r in call["relationships"]}
+    assert {("DISCUSSED", ids[event["name"]], ids["knowledge graphs"]), ("ENJOYED", ids[event["name"]], ids["agentic ai keynote"]),
+            ("HOSTED", ids[s.robot_name], ids[event["name"]])} <= rels

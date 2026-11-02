@@ -61,7 +61,7 @@ class Settings:
     adjacency_max_gap_s: float = float(os.getenv("ADJACENCY_MAX_GAP_S", "60"))
 
     people_consent: bool = _bool("PEOPLE_CONSENT", False)
-    # booth conversation: greet people the camera sees, talk, and (only with a spoken yes) remember them as leads
+    # booth host: greet people the camera sees and talk; only anonymous notes are kept (lead generation is on hold)
     people_greet: bool = _bool("PEOPLE_GREET", True)
     greet_cooldown_s: float = float(os.getenv("GREET_COOLDOWN_S", "60"))  # at most one greeting per this many seconds, whoever it is for
     max_greetings_per_hour: int = int(os.getenv("MAX_GREETINGS_PER_HOUR", "40"))

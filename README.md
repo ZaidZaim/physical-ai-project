@@ -24,7 +24,7 @@ things it remembers.
 | **Know where** | "Which rooms do you know?" | Rooms are recognised from what is in them; a room map is learned as the robot moves |
 | **Explain** | "Where did you last see it?" | Every answer comes with the tool calls and graph facts it used |
 | **Act** | "Turn to the door." | Turns in place to face a remembered object, or looks around for it. Between rooms it gives you the route. It never walks on its own |
-| **Host** | "Hi, I'm Ana from Acme" | At a booth it greets people, talks through the WonderEcho Pro as the **Graph Wizard** (Neo4j, GenAI, GraphRAG), and with a spoken yes remembers who they are as leads in the **People** tab: [docs/PEOPLE.md](docs/PEOPLE.md) |
+| **Host** | "Hey PuppyPi, what is GraphRAG?" | At a booth it boxes, looks up and answers through the WonderEcho Pro as the **Graph Wizard** (Neo4j, GenAI, GraphRAG), and keeps anonymous notes of what visitors ask about and need in the **Booth** tab, never who they are: [docs/BOOTH.md](docs/BOOTH.md) |
 
 ## How it works
 
@@ -60,7 +60,7 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `Place` | `placeId`, `name`, `roomType`, `visits` |
 | `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
 | `Session` · `Robot` | `id`, `startedAt` · `name` |
-| `Person` | `personId`, `name`, `role`, `function`, `company`, `email`, `useCase`, `familiarity`, `leadScore`, `leadStage`, `consentAt`, `firstMet`, `lastMet`, `meetCount` (only after a spoken yes) |
+| `Encounter` | `id`, `ts`, `event`, `need`, `familiarity`, `questions`, `summary`, `turns` (one anonymous booth conversation; `DISCUSSED` / `ENJOYED` a `Theme`) |
 | `Company` · `Theme` | `name` · `name` |
 | `Encounter` | `id`, `ts`, `summary` (one sentence, never a transcript) |
 
@@ -219,7 +219,7 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 ## Testing
 
 ```bash
-uv run pytest                          # 175 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, people + consent + API
+uv run pytest                          # 193 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, booth host + privacy scrubber + API
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on
@@ -242,7 +242,7 @@ on real hardware, and when: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ```
 src/puppy_mind/   brain.py (orchestration) · perception.py · graph.py (Aura) · matching.py · spatial.py (rooms) · pose.py (heading)
-                  navigate.py (phase 5) · agent.py · people.py / people_graph.py / wizard.py / voice.py (booth conversation, leads) · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
+                  navigate.py (phase 5) · agent.py · booth.py / booth_graph.py / wizard.py / voice.py (booth host, anonymous notes) · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
                   static/index.html (the UI)
 robot/            puppy_drive.py, puppy_streamer.py, puppy_voice.py: optional scripts for running on the robot
 ontology/         puppy_pi.json: the domain ontology (also installed into NAMS)
@@ -258,7 +258,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | ingestion pipeline, schema, known weak points |
 | [SPATIAL.md](docs/SPATIAL.md) | room recognition, room map, view-aware misses, gyro heading |
-| [PEOPLE.md](docs/PEOPLE.md) | greeting, the Graph Wizard, consent, leads, the People tab, WonderEcho Pro setup |
+| [BOOTH.md](docs/BOOTH.md) | the Graph Wizard, anonymous booth notes, the Booth tab, tricks, WonderEcho Pro setup |
 | [MEMORY.md](docs/MEMORY.md) | Aura + NAMS together, measured NAMS behaviour, setup |
 | [ONTOLOGY_REVIEW.md](docs/ONTOLOGY_REVIEW.md) | the model checked against Neo4j modeling practice |
 | [AURA_VIEWS.md](docs/AURA_VIEWS.md) | clean, one-question queries for Aura |

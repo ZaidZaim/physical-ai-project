@@ -25,7 +25,7 @@ from neo4j.exceptions import ClientError
 from .config import Settings
 from .matching import Known, Seen, assign
 from .models import EXCLUSIVE_PREDICATES, PREDICATES, Scene
-from .people_graph import PEOPLE_LABELS, PeopleGraph
+from .booth_graph import BOOTH_LABELS, BoothGraph
 from .pose import bearing_of, in_view
 from .spatial import TRANSIENT
 
@@ -54,7 +54,7 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class Memory(PeopleGraph):
+class Memory(BoothGraph):
     def __init__(self, s: Settings):
         self.s = s
         self.driver = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password), notifications_min_severity="OFF")
@@ -168,13 +168,13 @@ class Memory(PeopleGraph):
                 self._write(q)
             except ClientError:
                 pass
-        self.init_people_schema()
+        self.init_booth_schema()
         self._write("MERGE (:Robot {name:$n})", n=self.s.robot_name)
 
     def reset(self) -> None:
         """Delete all memory THIS APP owns. Never touches NAMS's nodes (labels Entity, Conversation, Message, ...), not even one
         that carries one of our labels: NAMS gives an extracted entity its type as a label (a "Session" event became :Session:Entity)."""
-        for lbl in ("Sighting", "Item", "Session", "Place", "Robot", "Dialogue", "Utterance", "ReasoningStep", "Lookup", *PEOPLE_LABELS):
+        for lbl in ("Sighting", "Item", "Session", "Place", "Robot", "Dialogue", "Utterance", "ReasoningStep", "Lookup", *BOOTH_LABELS):
             self._write(f"MATCH (n:{lbl}) WHERE NOT n:Entity DETACH DELETE n")
 
     def start_session(self, session_id: str | None = None) -> str:
@@ -1081,8 +1081,7 @@ class Memory(PeopleGraph):
                    count { (:Sighting) } AS Sighting, count { (s:Session) WHERE NOT s:Entity } AS Session,
                    count { (:Dialogue) } AS Dialogue, count { (:Utterance) } AS Utterance,
                    count { (:ReasoningStep) } AS ReasoningStep, count { (:Lookup) } AS Lookup,
-                   count { (p:Person) WHERE p.personId IS NOT NULL } AS Person, count { (:Theme) } AS Theme, count { (:Company) } AS Company,
-                   count { (:Encounter) } AS Encounter
+                   count { (:Theme) } AS Theme, count { (:Encounter) } AS Encounter
             """
         )[0]
 

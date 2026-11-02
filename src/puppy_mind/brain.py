@@ -26,7 +26,7 @@ from .navigate import Navigator, Plan, pick_target, plan_go_to
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
-from .people import PeopleService
+from .booth import BoothHost
 from .sources import FolderSource, FrameSource, ahash, hamming
 from .tour import TourRecorder
 
@@ -121,20 +121,20 @@ class Brain:
             self.agent = Agent(self.s, self.mem, self.nams)
             self.agent.place_fn = self.place_info
             self.agent.go_fn = self.go_to
-        # People at the booth: talk, greet, remember (only after a spoken yes). Works without OpenAI for listing/greeting text only.
+        # The booth host: greet, talk as the Graph Wizard, keep anonymous notes of what the booth talked about (never who).
         self.voice = None
         self.drive.set_booth(self.s.booth_mode, self.s.look_up_deg)
         self.drive.gesture_cooldown_s, self.drive.max_gestures_per_hour = self.s.gesture_cooldown_s, self.s.max_gestures_per_hour
-        self.people = PeopleService(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
-                                    gesture_fn=self.gesture)
-        self.people.nams = self.nams if self.nams.enabled else None
+        self.booth = BoothHost(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
+                               gesture_fn=self.gesture)
+        self.booth.nams = self.nams if self.nams.enabled else None
         if self.agent:
             from .voice import Voice
 
             self.voice = Voice(self.s, self.agent.client)
-        self._listen_until = 0.0  # the People tab pings while it is open: only then does the robot listen and greet
+        self._listen_until = 0.0  # the Booth tab pings while it is open: only then does the robot listen and greet
         self._engaged = False     # looking up at a visitor (after the wake word), until the conversation goes quiet
-        self.people.active_fn = lambda: self.listening
+        self.booth.active_fn = lambda: self.listening
 
     @property
     def fps(self) -> float:
@@ -256,7 +256,7 @@ class Brain:
             "moved_hypotheses": res.get("moved_hypotheses", []), "place": self.place_info(),
         })
         try:
-            self.people.on_view(scene, jpeg)  # a person in view: greet them (background; never blocks)
+            self.booth.on_view(scene, jpeg)  # a person in view: greet them (background; never blocks)
         except Exception as e:
             self.bus.publish("error", {"error": f"greeting failed: {e}"[:200]})
         self.nams.submit_observation({  # background: never blocks the robot
@@ -414,11 +414,11 @@ class Brain:
             out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
 
-    # ---- people mode: the People tab is open, so the robot listens for its wake word
+    # ---- booth host: the Booth tab is open, so the robot listens for its wake word
     LISTEN_TTL_S = 15.0
 
     def listen_ping(self) -> dict:
-        """The People tab is open (it pings every few seconds). Listening stops LISTEN_TTL_S after the last ping."""
+        """The Booth tab is open (it pings every few seconds). Listening stops LISTEN_TTL_S after the last ping."""
         self._listen_until = time.monotonic() + self.LISTEN_TTL_S
         if not self.drive.booth:  # tricks and the head tilt need booth mode
             self.drive.set_booth(True, self.s.idle_look_up_deg)
@@ -429,7 +429,7 @@ class Brain:
         return time.monotonic() < self._listen_until
 
     def listen_state(self) -> dict:
-        state = "conversation" if self._engaged or self.people.conversation_active() else "listening" if self.listening else "off"
+        state = "conversation" if self._engaged or self.booth.conversation_active() else "listening" if self.listening else "off"
         return {"state": state, "wake_word": self.s.wake_word}
 
     def on_wake(self) -> threading.Thread:
@@ -450,9 +450,9 @@ class Brain:
         t.start()
         return t
 
-    def people_tick(self) -> None:
+    def booth_tick(self) -> None:
         """On every robot poll: level the head once the conversation went quiet; leave booth mode when nobody watches."""
-        if self._engaged and not self.people.conversation_active():
+        if self._engaged and not self.booth.conversation_active():
             self._engaged = False
             self.drive.set_booth(self.listening or self.s.booth_mode, self.s.idle_look_up_deg)
             self.bus.publish("listen", self.listen_state())

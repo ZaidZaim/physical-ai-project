@@ -81,13 +81,6 @@ def _nams_cmd(args, s) -> int:
 
             mem = Memory(s)
             n.mem = mem
-            if args.leads:  # the booth leads only (the world model is untouched)
-                people = [mem.get_person(p["person_id"]) for p in mem.list_people()]
-                print("leads:", n.sync_leads([p for p in people if p], s.robot_name, s.event_name))
-                n.flush(60)
-                print("done:", n.status())
-                mem.close()
-                return 0 if n.auth != "invalid" else 1
             if args.rebuild:
                 links = mem.nams_links()
                 gone = 0
@@ -307,7 +300,6 @@ def main(argv: list[str] | None = None) -> int:
     ns.add_argument("--preview", metavar="TEXT", help="only show what NAMS would extract from TEXT with ontology/puppy_pi.json (changes nothing)")
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
-    nc.add_argument("--leads", action="store_true", help="copy the booth leads saved in Aura to NAMS instead (Person, Organization, Topic, Event)")
     nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")
     et = sub.add_parser("export-tour", help="save the frames stored in Aura as a replayable tour (read-only)")
     et.add_argument("--session", help="only this session (default: all)")

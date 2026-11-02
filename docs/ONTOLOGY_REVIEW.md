@@ -51,6 +51,8 @@ and `ontology.py`.
   [AURA_VIEWS.md](AURA_VIEWS.md) (checked against the live database by `eval/check_views.py`).
 
 ### Booth visitors (People) - review of the new model (2026-10-31)
+
+> **Superseded on 2026-11-02:** lead generation is on hold (no personal data), so the booth model is now anonymous: `Encounter` -[`DISCUSSED`|`ENJOYED`]-> `Theme`, no `Person` or `Company` (see [BOOTH.md](BOOTH.md)). The review below is kept for when it is picked up again from branch `parked/booth-lead-generation`.
 - **Vocabulary**: the ontology uses NAMS's POLE+O types: `Person` (PERSON), `Organization` (ORGANIZATION), `Topic` (OBJECT),
   `Event` (EVENT, one booth conversation). `puppy-mind nams-setup` sends the same file to NAMS, so both memories mean the same thing.
 - **Labels**: NAMS writes an entity's type as a label into the shared database. A shared label would mix the two sides, and our
@@ -66,7 +68,7 @@ and `ontology.py`.
   number of visitors at an event (hundreds to low thousands), which is fine; revisit only if one database collects many events.
 - **Personal data**: `pii_sensitive` is set on `Person` and `Event` in the ontology. Erasing a person removes their encounters and
   any `Company` / `Theme` left without links.
-- `tests/test_lenses_ontology.py` checks that every label and relationship written by `people_graph.py` is declared in the
+- `tests/test_lenses_ontology.py` checks that every label and relationship written by `booth_graph.py` is declared in the
   ontology, and that no Aura label equals a NAMS type name.
 
 ## Deferred (not changed, deliberate)

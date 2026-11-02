@@ -88,17 +88,15 @@ RETURN i, m, e, r, f
 ```
 Each object next to its NAMS entity. NAMS's generic `RELATED_TO` / `SAME_AS` edges from text extraction are left out on purpose.
 
-## 9. Booth visitors: who, where they work, what they care about
+## 9. The booth: what visitors talked about (anonymous)
 
 ```cypher
-MATCH (p:Person) WHERE p.personId IS NOT NULL
-OPTIONAL MATCH (p)-[w:WORKS_AT]->(c:Company)
-OPTIONAL MATCH (p)-[r:INTERESTED_IN|ENJOYED]->(t:Theme)
-OPTIONAL MATCH (p)-[pi:PARTICIPATED_IN]->(e:Encounter)-[h:HELD_AT]->(pl:Place)
-RETURN p, w, c, r, t, pi, e, h, pl
+MATCH (e:Encounter)-[r:DISCUSSED|ENJOYED]->(t:Theme)
+OPTIONAL MATCH (e)-[h:HELD_AT]->(pl:Place)
+RETURN e, r, t, h, pl
 ```
-Only people who said yes to being remembered. `personId IS NOT NULL` leaves out NAMS's own `Person` entities. Shared `Theme` and
-`Company` nodes show who has what in common.
+One node per booth conversation, linked to the topics it raised. Nobody is identified: there is no `Person` in the app's graph
+(lead generation is on hold). Popular topics are the ones with many conversations around them.
 
 ## 10. Census (a table, not a picture)
 
@@ -120,6 +118,5 @@ In the Query result, click a label in the legend to set its **caption**, size an
 | `Item` | `label` (or `color`) | small |
 | `Sighting` | `ts` | small, grey: it is evidence, not a thing |
 | `Robot` | `name` | |
-| `Person` | `name` | colour by `leadStage` if you like |
-| `Company` · `Theme` · `Encounter` | `name` · `name` · `ts` | |
+| `Theme` · `Encounter` | `name` · `need` | |
 | `Entity` (NAMS) | `name` | a different colour from `Item`, so the two memories stay apart |

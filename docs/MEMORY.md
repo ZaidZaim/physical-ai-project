@@ -5,7 +5,7 @@ Two graphs, each doing what it is best at, cross-linked.
 | | Aura (`graph.py`) | NAMS (`nams.py`) |
 |---|---|---|
 | Role | Authoritative **physical world model** | **Semantic + episodic** memory around it |
-| Holds | Object / Location / Observation, `ON`/`NEXT_TO`... with `since`/`until`/`endedBy`, `possibly_gone`, miss counters | Entities (Robot, Place, PhysicalObject, Person if consented), asserted relationships, a **narrative log**, Q&A, reasoning traces |
+| Holds | Object / Location / Observation, `ON`/`NEXT_TO`... with `since`/`until`/`endedBy`, `possibly_gone`, miss counters | Entities (Robot, Place, PhysicalObject; anonymous booth conversations and topics), asserted relationships, a **narrative log**, Q&A, reasoning traces |
 | Good at | Exact, temporal questions: *what is on the table now? what changed? where was X last seen?* | Meaning and recall: *what did a visitor ask earlier? what story did the day tell?* (NAMS builds Observations and Reflections from the narrative messages) |
 | Cannot | Fuzzy semantic recall | Update/delete relationships (create-only), update entity properties (name/description only), so it cannot be the time-aware truth |
 

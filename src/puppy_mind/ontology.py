@@ -2,14 +2,14 @@
 
 Memory layers (context-graph model, as in the Neo4j agent-memory design):
   short-term  what is happening now: the observation stream and the conversation (Session, Sighting, Dialogue, Utterance)
-  long-term   what is known: entities and facts (Robot, Place, PhysicalObject; at a booth Person, Organization, Topic, Event) and the
-              relationships between them
+  long-term   what is known: entities and facts (Robot, Place, PhysicalObject; at a booth anonymous conversations (Event) and
+              the Topics they raised) and the relationships between them
   reasoning   how answers were reached: ReasoningStep -> Lookup, with RELIED_ON links to the entities that mattered
 
 The domain part comes from ontology/puppy_pi.json (the same file `nams-setup` sends to NAMS), so NAMS and Aura share one vocabulary: the
 POLE+O types. NAMS writes an extracted entity's type as a label into the same database, so where both could hold the same kind of node
 the app uses its own label (AURA_LABEL): Object is :Item, Location :Place, Agent :Robot, Organization :Company, Topic :Theme, Event
-:Encounter. Person stays :Person: the app's carry a personId, NAMS's never do. Counts below are live from Aura.
+:Encounter. The app never writes a Person (booth conversations are anonymous). Counts below are live from Aura.
 """
 from __future__ import annotations
 
