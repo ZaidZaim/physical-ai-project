@@ -437,7 +437,7 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     waker = None
     if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)
         if not brain.listening:
-            return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the Booth tab)")})
+            return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the Booth tab, or set LISTEN_ALWAYS=true)")})
         ok, encounter_id = brain.booth.addressed(text, encounter_id)
         if not ok:  # what bystanders said is not echoed anywhere
             return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
@@ -500,8 +500,10 @@ def booth_conversations(request: Request, x_brain_token: str | None = Header(Non
 def booth_conversation_delete(conv_id: str, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
     """Remove one note (a test, or a note that should not be there)."""
     _local_auth(request, x_brain_token, token)
+    nams_id = brain.mem.conversation_nams_id(conv_id)
     if not brain.mem.delete_conversation(conv_id):
         raise HTTPException(404, "unknown conversation")
+    brain.nams.submit_forget_conversation(nams_id)
     brain.bus.publish("booth", {"event": "deleted", "id": conv_id})
     return {"ok": True}
 

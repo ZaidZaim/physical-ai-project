@@ -132,7 +132,7 @@ class Brain:
             from .voice import Voice
 
             self.voice = Voice(self.s, self.agent.client)
-        self._listen_until = 0.0  # the Booth tab pings while it is open: only then does the robot listen and greet
+        self._listen_until = 0.0  # the Booth tab pings while it is open; with LISTEN_ALWAYS the robot listens regardless
         self._engaged = False     # looking up at a visitor (after the wake word), until the conversation goes quiet
         self.booth.active_fn = lambda: self.listening
 
@@ -426,7 +426,7 @@ class Brain:
 
     @property
     def listening(self) -> bool:
-        return time.monotonic() < self._listen_until
+        return self.s.listen_always or time.monotonic() < self._listen_until
 
     def listen_state(self) -> dict:
         state = "conversation" if self._engaged or self.booth.conversation_active() else "listening" if self.listening else "off"
@@ -458,6 +458,8 @@ class Brain:
             self.bus.publish("listen", self.listen_state())
         if not self.listening and not self._engaged and self.drive.booth and not self.s.booth_mode:
             self.drive.set_booth(False, self.s.idle_look_up_deg)
+        elif self.listening and not self.drive.booth:  # LISTEN_ALWAYS without the tab: tricks and the head tilt need booth mode
+            self.drive.set_booth(True, self.s.idle_look_up_deg)
 
     def gesture(self, name: str) -> dict:
         """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""

@@ -74,6 +74,9 @@ class Settings:
     # the robot only starts a conversation when it hears this; follow-ups need no wake word for WAKE_WINDOW_S. Empty: no wake word.
     wake_word: str = os.getenv("WAKE_WORD", "Hey PuppyPi")
     wake_window_s: float = float(os.getenv("WAKE_WINDOW_S", "90"))
+    # listen for the wake word whether or not a browser has the Booth tab open (seen at the booth: the tab went to the background
+    # mid-conversation, the robot stopped listening and never heard the goodbye). false: only while the tab is open.
+    listen_always: bool = _bool("LISTEN_ALWAYS", True)
     # on "Hey PuppyPi": this trick first, then the robot looks up at the visitor by ENGAGED_LOOK_UP_DEG for the conversation, and back
     # to IDLE_LOOK_UP_DEG when it goes quiet. Hiwonder's pose node rejects more than 31 deg of pitch, so it is capped at 30.
     wake_action: str = os.getenv("WAKE_ACTION", "boxing")

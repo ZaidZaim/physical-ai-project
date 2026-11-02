@@ -207,7 +207,28 @@ def test_no_trick_by_default_when_greeting():
     assert Settings().greet_action == "" or __import__("os").getenv("GREET_ACTION")
 
 
-def test_the_robot_listens_only_while_the_booth_tab_is_open(client):
+def test_the_booth_tab_is_optional_the_robot_listens_and_hears_the_goodbye_without_it(client):
+    # seen at the booth: the tab went to the background mid-conversation, the robot stopped listening and missed the goodbye
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, listen_always=True, wake_action="")
+    server.brain.booth.s = server.brain.s
+    server.brain._listen_until = 0  # no tab has pinged
+    server.brain.booth.client = FakeChat([["Hi!"], ["Goodbye!"]])
+    post = lambda said, enc=None: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")},
+                                              data={"encounter_id": enc} if enc else {})
+    r = post("Hey PuppyPi")
+    assert r.status_code == 200
+    client.get("/api/voice/next")  # the robot's next poll: booth mode (tricks, tilt) comes on without the tab
+    assert server.brain.drive.booth
+    r = post("Thanks, I need to run.", r.headers["x-encounter"])
+    assert r.status_code == 200 and not server.brain.booth.conversation_active()
+
+
+def test_with_listen_always_off_the_robot_listens_only_while_the_booth_tab_is_open(client):
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, listen_always=False)
     server.brain.booth.client = FakeChat([["Hi!"]])
     post = lambda said: client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + said.encode(), "audio/wav")})
     r = post("Hey PuppyPi")

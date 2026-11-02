@@ -377,3 +377,28 @@ def test_a_booth_conversation_reaches_nams_as_an_anonymous_event_once_the_booth_
             for r in call["relationships"]}
     assert {("DISCUSSED", ids[event["name"]], ids["knowledge graphs"]), ("ENJOYED", ids[event["name"]], ids["agentic ai keynote"]),
             ("HOSTED", ids[s.robot_name], ids[event["name"]])} <= rels
+
+
+def test_two_booth_conversations_never_merge_into_one_event_and_a_later_save_reuses_its_own():
+    # seen live: NAMS merged "Booth conversation 2026-11-02 adaea8" and "... 034074" (look-alike names) into one Event
+    from puppy_mind.devfake import FakeMemory
+
+    fake = FakeNams()
+    fake.active += ["Organization", "Topic", "Event"]
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test")
+    mem = FakeMemory(s)
+    n, _ = make(fake, mem)
+    a = {"id": "aaaa111111", "need": "chat over manuals", "topics": ["graphrag"], "turns": 2}
+    b = {"id": "bbbb222222", "need": "fraud rings in payments", "topics": ["fraud detection"], "turns": 3}
+    for c in (a, b):
+        mem.save_conversation(c, place=None, ts="2026-11-02T17:00:00Z")
+    fake.merge_always = {"fraud rings in payments ("}  # NAMS folds b's first name into someone else's entity
+    n.submit_conversation(a, None, "2026-11-02T17:00:00Z", "PuppyPi")
+    n.submit_conversation(b, None, "2026-11-02T17:05:00Z", "PuppyPi")
+    n.submit_conversation({**a, "need": "a chatbot over product manuals", "turns": 3}, None, "2026-11-02T17:01:00Z", "PuppyPi")
+    assert n.flush(5)
+    ea, eb = mem.conversation_nams_id(a["id"]), mem.conversation_nams_id(b["id"])
+    assert ea and eb and ea != eb and eb != "someone-elses"  # b got its own Event under the more distinctive name
+    events = [k for k in fake.entities if k[1] == "Event"]
+    assert len(events) == 2 and any(name.startswith("Booth conversation bbbb222222") for name, _ in events)
+    assert sum(1 for m, p, b_ in fake.calls if m == "PUT" and p == f"/v1/entities/{ea}") == 1  # the later save updated a's Event

@@ -81,6 +81,12 @@ def _nams_cmd(args, s) -> int:
 
             mem = Memory(s)
             n.mem = mem
+            if args.booth:  # the anonymous booth conversations only (the world model is untouched)
+                print("booth:", n.sync_conversations(mem.list_conversations(), s.robot_name))
+                n.flush(60)
+                print("done:", n.status())
+                mem.close()
+                return 0 if n.auth != "invalid" else 1
             if args.rebuild:
                 links = mem.nams_links()
                 gone = 0
@@ -300,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     ns.add_argument("--preview", metavar="TEXT", help="only show what NAMS would extract from TEXT with ontology/puppy_pi.json (changes nothing)")
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
+    nc.add_argument("--booth", action="store_true", help="copy the anonymous booth conversations saved in Aura to NAMS instead")
     nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")
     et = sub.add_parser("export-tour", help="save the frames stored in Aura as a replayable tour (read-only)")
     et.add_argument("--session", help="only this session (default: all)")

@@ -77,6 +77,7 @@ class Nams:
         self._gone: set[str] = set()
         self._flagged: set[str] = set()       # NAMS entity ids it flagged as possible duplicates
         self._booth_types: tuple[bool, float] = (False, -1e9)  # (active ontology has the booth types, when checked)
+        self._events: dict[str, str] = {}      # booth conversation id -> its NAMS Event id (also kept on the Aura Encounter)
         self._q: queue.Queue = queue.Queue(maxsize=1000)
         self._stop = threading.Event()
         self.http = client
@@ -434,33 +435,90 @@ class Nams:
             self._booth_types = ({T_TOPIC, T_EVENT} <= labels, time.monotonic())
         return self._booth_types[0]
 
-    def submit_conversation(self, note: dict, place: str | None, ts: str, robot: str) -> None:
-        self._submit(self._conversation_note, dict(note), place, ts, robot)
+    def _lead_free_ids(self, items: list[dict]) -> list[str | None]:
+        """Bulk-create where a merge is wanted (the same topic name is one shared Topic)."""
+        if not items:
+            return []
+        out = self._req("POST", "/v1/entities/bulk", {"entities": items}) or {}
+        ids: list[str | None] = [None] * len(items)
+        for r in out.get("results", []):
+            i = r.get("index")
+            if isinstance(i, int) and 0 <= i < len(items) and not r.get("error"):
+                ids[i] = r.get("id") or r.get("merged_into") or r.get("duplicate_of")
+        return ids
 
-    def _conversation_note(self, c: dict, place: str | None, ts: str, robot: str) -> None:
-        """One booth conversation as an anonymous Event that DISCUSSED / ENJOYED Topics. The same conversation id resolves to the
-        same Event (unique event_id), so saving it after every answer updates it instead of adding one."""
-        if not self.booth_types_active():
-            return
-        topics = list(dict.fromkeys([*(c.get("topics") or []), *(c.get("enjoyed") or [])]))
-        props = {"event_id": c["id"], "ts": ts, "event_name": c.get("event") or "", "turns": str(c.get("turns") or 0)}
+    def _event_for(self, c: dict, ts: str, robot: str) -> str | None:
+        """The one NAMS Event of this conversation. Created once, then reused (its id is kept here and on the Aura Encounter, so
+        the need changing between saves or a restart never makes a second one). NAMS merges entities whose NAMES look alike, and
+        "Booth conversation 2026-11-02 adaea8" / "... 034074" did merge two conversations into one: the name leads with the need,
+        and if NAMS still hands back another conversation's Event, it is created again under the full conversation id."""
+        cid = c["id"]
+        known = self._events.get(cid)
+        if not known and self.mem is not None and hasattr(self.mem, "conversation_nams_id"):
+            try:
+                known = self.mem.conversation_nams_id(cid)
+            except Exception as e:
+                log.warning("could not read a conversation's NAMS id: %s", e)
+        props = {"event_id": cid, "ts": ts, "event_name": c.get("event") or "", "turns": str(c.get("turns") or 0)}
         for k in ("need", "familiarity", "summary"):
             if c.get(k):
                 props[k] = str(c[k])
         if c.get("questions"):
             props["questions"] = " | ".join(c["questions"])[:2000]
-        items = [{"name": f"Booth conversation {ts[:10]} {c['id'][:6]}", "type": T_EVENT, "properties": props,
-                  "description": c.get("summary") or c.get("need") or f"An anonymous conversation {robot} had at {c.get('event')}"}]
-        items += [{"name": t, "type": T_TOPIC, "description": "Topic visitors raised at the booth"} for t in topics]
-        out = self._req("POST", "/v1/entities/bulk", {"entities": items}) or {}
-        ids: list[str | None] = [None] * len(items)
-        for r in out.get("results", []):  # a merge is wanted here: same event_id / topic name -> one entity
-            i = r.get("index")
-            if isinstance(i, int) and 0 <= i < len(items) and not r.get("error"):
-                ids[i] = r.get("id") or r.get("merged_into") or r.get("duplicate_of")
-        conv, topic_id = ids[0], dict(zip(topics, ids[1:]))
+        desc = c.get("summary") or c.get("need") or f"An anonymous conversation {robot} had at {c.get('event')}"
+        if known:
+            self._req("PUT", f"/v1/entities/{known}", {"description": desc})  # NAMS updates name/description only
+            self._events[cid] = known
+            return known
+        about = (c.get("need") or ", ".join((c.get("topics") or [])[:3]) or "booth conversation")[:70]
+        got = None
+        for name in (f"{about} ({ts[11:16]}, {cid[:6]})", f"Booth conversation {cid} at {ts[:16]}: {about}"):
+            r = self._create_entities([{"name": name, "type": T_EVENT, "properties": props, "description": desc}])
+            if r and r[0]["id"] and r[0]["resolution"] not in ("merged", "duplicate"):
+                got = r[0]["id"]
+                break
+            # a new conversation never IS an existing Event: it was merged into another one. Try the more distinctive name.
+        if not got:
+            self.stats["failed"] += 1
+            self.stats["last_error"] = f"booth conversation {cid}: NAMS merged it into another conversation"
+            return None
+        self._events[cid] = got
+        if self.mem is not None and hasattr(self.mem, "set_conversation_nams"):
+            try:
+                self.mem.set_conversation_nams(cid, got)
+            except Exception as e:
+                log.warning("could not store a conversation's NAMS id: %s", e)
+        return got
+
+    def sync_conversations(self, convs: list[dict], robot: str) -> dict:
+        """Copy booth conversations saved in Aura to NAMS (after a rebuild, or ones saved before the booth ontology was active)."""
+        if not self.booth_types_active():
+            return {"conversations": 0, "reason": "the active NAMS ontology has no booth types (run nams-setup --activate)"}
+        before = self.stats.get("synced_conversations", 0)
+        for c in sorted(convs, key=lambda c: c.get("ts") or ""):
+            self._conversation_note(c, c.get("place"), c.get("ts") or "", robot)
+        return {"conversations": self.stats.get("synced_conversations", 0) - before, "of": len(convs)}
+
+    def submit_forget_conversation(self, nams_id: str | None) -> None:
+        """A note removed in the Booth tab goes from NAMS too (its topics stay: they are shared)."""
+        if nams_id:
+            self._events = {k: v for k, v in self._events.items() if v != nams_id}
+            self._submit(self._req, "DELETE", f"/v1/entities/{nams_id}")
+
+    def submit_conversation(self, note: dict, place: str | None, ts: str, robot: str) -> None:
+        self._submit(self._conversation_note, dict(note), place, ts, robot)
+
+    def _conversation_note(self, c: dict, place: str | None, ts: str, robot: str) -> None:
+        """One booth conversation as an anonymous Event that DISCUSSED / ENJOYED Topics. The same conversation id resolves to the
+        same Event, so saving it after every answer updates it instead of adding one (see _event_for)."""
+        if not self.booth_types_active():
+            return
+        topics = list(dict.fromkeys([*(c.get("topics") or []), *(c.get("enjoyed") or [])]))
+        conv = self._event_for(c, ts, robot)
         if not conv:
             return
+        topic_id = dict(zip(topics, self._lead_free_ids(
+            [{"name": t, "type": T_TOPIC, "description": "Topic visitors raised at the booth"} for t in topics])))
         bot = self._fixed_entity("robot", robot, T_ROBOT, "Hiwonder PuppyPi quadruped robot")
         where = self._fixed_entity("place", self._place_name(place, None), T_PLACE, f"Place observed by {robot}") if place else None
         rels = [("HOSTED", bot, conv), ("HELD_AT", conv, where)]

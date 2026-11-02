@@ -129,6 +129,13 @@ class BoothGraph:
     def booth_graph(self) -> dict[str, Any]:
         return _graph(self.list_conversations(), getattr(getattr(self, "s", None), "robot_name", "PuppyPi"))
 
+    def set_conversation_nams(self, conv_id: str, nams_id: str) -> None:
+        self._write("MATCH (e:Encounter {id:$id}) SET e.namsId = $n", id=conv_id, n=nams_id)
+
+    def conversation_nams_id(self, conv_id: str) -> str | None:
+        rows = self._read("MATCH (e:Encounter {id:$id}) RETURN e.namsId AS n", id=conv_id)
+        return rows[0]["n"] if rows else None
+
 
 class FakeBooth:
     """In-RAM twin of BoothGraph (dev + tests)."""
@@ -146,7 +153,8 @@ class FakeBooth:
             "id": c["id"], "ts": old["ts"] if old else ts, "event": c.get("event") or "", "need": c.get("need") or None,
             "familiarity": c.get("familiarity") or None, "questions": list(c.get("questions") or []),
             "summary": (c.get("summary") or "")[:500], "turns": int(c.get("turns") or 0), "place": place,
-            "topics": [t for t in c.get("topics") or [] if t], "enjoyed": [t for t in c.get("enjoyed") or [] if t]}
+            "topics": [t for t in c.get("topics") or [] if t], "enjoyed": [t for t in c.get("enjoyed") or [] if t],
+            **({"nams_id": old["nams_id"]} if old and old.get("nams_id") else {})}
 
     def list_conversations(self, limit: int = 200) -> list[dict[str, Any]]:
         out = sorted((dict(c, topics=list(c["topics"]), enjoyed=list(c["enjoyed"]), questions=list(c["questions"]))
@@ -161,3 +169,10 @@ class FakeBooth:
 
     def booth_graph(self) -> dict[str, Any]:
         return _graph(self.list_conversations(), getattr(getattr(self, "s", None), "robot_name", "PuppyPi"))
+
+    def set_conversation_nams(self, conv_id: str, nams_id: str) -> None:
+        if conv_id in self._convs():
+            self._convs()[conv_id]["nams_id"] = nams_id
+
+    def conversation_nams_id(self, conv_id: str) -> str | None:
+        return (self._convs().get(conv_id) or {}).get("nams_id")

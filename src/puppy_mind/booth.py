@@ -40,6 +40,7 @@ QUESTIONS = {  # the exact question that ends the robot's reply, one at a time, 
     "enjoyed": "What have you enjoyed most at {event} so far?",
 }
 ASK_ORDER = ("use_case", "familiarity", "enjoyed")
+NOTE_KEY = {"use_case": "need"}  # where the answer to each question ends up in the note
 ENJOYED_AFTER_TURNS = 8  # "what have you enjoyed?" is a wind-down question, not one for the middle of their questions
 _BYE = re.compile(r"\b(bye|goodbye|have to (go|run|leave)|need to (go|run|leave)|gotta (go|run)|got to (go|run)|see you|"
                   r"that'?s (it|all)( for now)?|that is (it|all)|next (one|session|talk)|let'?s (close|stop|end) (it|here)|i'?m off)\b", re.I)
@@ -217,9 +218,11 @@ class Notes(BaseModel):
     """What a booth conversation was about, with nothing that identifies the visitor."""
     topics: list[str] = Field(description="technologies or themes the visitor asked about or wants to work with (GraphRAG, agent "
                                           "memory, knowledge graphs...), short lower-case phrases")
-    need: str = Field(description="what they are trying to build or solve, in at most 15 neutral words with NO person, company or "
-                                  "product name of theirs (e.g. 'process thousands of contracts with a knowledge graph'), else empty")
-    familiarity: Literal["", "none", "curious", "user", "expert"] = Field(description="how well they know Neo4j, only if they said it")
+    need: str = Field(description="what the Visitor SAID they are trying to build or solve, in at most 15 neutral words with NO "
+                                  "person, company or product name of theirs (e.g. 'process thousands of contracts with a knowledge "
+                                  "graph'). Empty if they only asked questions: never infer it from a question or the Robot's answer")
+    familiarity: Literal["", "none", "curious", "user", "expert"] = Field(
+        description="how well they know Neo4j, only if they SAID it ('first time', 'I use it at work'); else empty")
     enjoyed: list[str] = Field(description="what they enjoyed at the event (a keynote topic, the robot demo), short phrases, no names")
     questions: list[str] = Field(description="each question they asked the robot, rephrased neutrally in a few words, no names")
     summary: str = Field(description="one neutral sentence about what the conversation was about, never who the visitor is")
@@ -483,7 +486,7 @@ class BoothHost:
         for key in ASK_ORDER:
             if key == "enjoyed" and (enc.turns < ENJOYED_AFTER_TURNS or asks_something(text)):
                 continue
-            if not enc.notes.get(key) and key not in enc.asked_about:
+            if not enc.notes.get(NOTE_KEY.get(key, key)) and key not in enc.asked_about:
                 enc.asked_about.append(key)
                 return QUESTIONS[key].format(event=self.s.event_name)
         return None
