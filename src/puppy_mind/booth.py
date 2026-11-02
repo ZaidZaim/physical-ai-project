@@ -172,6 +172,23 @@ def clean_topics(items: Any, identifying: set[str] = frozenset(), absorb: bool =
     return out[:20]
 
 
+_FILLER = {"what", "with", "that", "this", "they", "them", "their", "there", "about", "would", "could", "should", "want", "like",
+           "have", "from", "into", "your", "some", "more", "most", "very", "just", "much", "tell", "know", "learn", "using", "uses",
+           "make", "help", "need", "visitor", "booth", "neo4j"}
+
+
+def _content_words(text: str) -> set[str]:
+    return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) >= 4 and w not in _FILLER}
+
+
+def grounded(item: str, said: set[str], need: int = 1) -> bool:
+    """The note's words were actually said by the visitor: at least `need` of its content words appear in their own lines. Seen
+    on the robot: from "Hey PuppyPi" and "What is a graph?" the extraction wrote the need "build a knowledge graph for agent
+    memory" and the topic "agent memory". A topic with no content word at all (a short acronym like "rag") is kept."""
+    words = _content_words(item)
+    return not words or len(words & said) >= min(need, len(words))
+
+
 def greeting(robot: str = "PuppyPi", wake: str = "") -> str:
     """What the robot says when someone is close and turned toward it."""
     ask = f"Say \"{wake}\" and ask me anything about Neo4j, GenAI or GraphRAG." if wake else "Ask me anything about Neo4j, GenAI or GraphRAG."
@@ -522,11 +539,12 @@ class BoothHost:
             f = (self.extract_fn(transcript) if self.extract_fn else {}) or {}
             f = {k: ([fix_terms(str(x)) for x in v] if isinstance(v, list) else fix_terms(v) if isinstance(v, str) else v) for k, v in f.items()}
             idw = identifying_words(visitor_lines)
+            said = _content_words(" ".join(visitor_lines))
             notes = {
-                "topics": clean_topics(f.get("topics"), idw, general=True),
-                "enjoyed": clean_topics(f.get("enjoyed"), idw, absorb=True),
-                "questions": [q for q in (scrub(q, idw)[:120] for q in f.get("questions") or []) if len(q) > 3][:20],
-                "need": scrub(f.get("need") or "", idw)[:160],
+                "topics": clean_topics([t for t in f.get("topics") or [] if grounded(t, said)], idw, general=True),
+                "enjoyed": clean_topics([t for t in f.get("enjoyed") or [] if grounded(t, said)], idw, absorb=True),
+                "questions": [q for q in (scrub(q, idw)[:120] for q in f.get("questions") or [] if grounded(q, said)) if len(q) > 3][:20],
+                "need": scrub(f.get("need") or "", idw)[:160] if grounded(f.get("need") or "", said, 2) else "",
                 "familiarity": f.get("familiarity") if f.get("familiarity") in ("none", "curious", "user", "expert") else "",
                 "summary": scrub(f.get("summary") or "", idw)[:300],
             }

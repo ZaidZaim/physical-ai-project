@@ -345,7 +345,22 @@ def test_misheard_neo4j_terms_are_fixed_before_the_wizard_and_the_note_see_them(
     assert fix_terms("I enjoyed the keynotes on graphs") == "I enjoyed the keynotes on graphs"  # nothing else changes
     notes = iter([{"topics": ["Asian memory"], "questions": ["courses on graph economy"], "need": ""}])
     h, mem = host([["Agent memory keeps context."]], extract_fn=lambda t: next(notes))
-    h.turn("Tell me about Asian memory")
+    h.turn("Tell me about Asian memory. Which courses on graph economy?")
     [c] = mem.list_conversations()
     assert c["topics"] == ["agent memory"] and c["questions"] == ["courses on GraphAcademy"]
-    assert h.encounters[c["id"]].messages[0]["content"] == "Tell me about agent memory"
+    assert h.encounters[c["id"]].messages[0]["content"] == "Tell me about agent memory. Which courses on GraphAcademy?"
+
+
+def test_a_note_keeps_only_what_the_visitor_actually_said():
+    from puppy_mind.booth import _content_words, grounded
+
+    # seen on the robot: "Hey PuppyPi" + "What is a graph?" became the need "build a knowledge graph for agent memory"
+    said = _content_words("Hey PuppyPi! What is a graph?")
+    assert grounded("graphs", said) and grounded("what is a graph", said)
+    assert not grounded("agent memory", said) and not grounded("build a knowledge graph for agent memory", said, 2)
+    notes = iter([{"topics": ["knowledge graphs", "agent memory", "graphs"], "need": "build a knowledge graph for agent memory",
+                   "questions": ["what is a graph", "how to build agent memory"]}])
+    h, mem = host([["A graph is nodes and relationships."]], extract_fn=lambda t: next(notes))
+    h.turn("What is a graph?")
+    [c] = mem.list_conversations()
+    assert c["topics"] == ["knowledge graphs", "graphs"] and c["need"] is None and c["questions"] == ["what is a graph"]

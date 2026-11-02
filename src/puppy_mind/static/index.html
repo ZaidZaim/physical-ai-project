@@ -448,8 +448,17 @@ $('#f').onsubmit = e => { e.preventDefault(); const q = $('#q').value.trim(); if
 document.querySelectorAll('#sugg button').forEach(b => b.onclick = () => ask(b.textContent));
 
 /* ---------- live events (SSE) ---------- */
+/* A background tab lets go of its two long-lived connections (the live feed and the camera stream). A browser allows 6 per site,
+   shared by all tabs: with a few Puppy Mind tabs open they ran out, and the camera went black and every other request waited. */
+let liveES = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (liveES) { liveES.close(); liveES = null; }
+    const v = $('#vimg'); v.src = ''; v.hidden = true; $('#novid').hidden = false;  // refreshStats reattaches it when shown
+  } else if (!liveES) connect();
+});
 function connect() {
-  const es = new EventSource('/api/events');
+  const es = liveES = new EventSource('/api/events');
   es.onopen = () => { $('#conn').textContent = 'live'; $('#dot').classList.add('on'); };
   es.onerror = () => { $('#conn').textContent = 'reconnecting'; $('#dot').classList.remove('on'); };
   es.addEventListener('status', e => {
@@ -531,7 +540,7 @@ async function refreshStats() {
   const lap = (s.camera_name || '').startsWith('webcam');
   $('#fps').textContent = s.watching || s.fps ? `${lap ? 'LAPTOP WEBCAM' : (s.camera_name ? 'ROBOT CAMERA' : '')} · ${s.fps} FPS` + (s.camera_error ? ' · ' + s.camera_error : '') : '';
   $('#fps').style.color = lap ? 'var(--bad)' : '';
-  if (s.has_frame && $('#vimg').hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
+  if (s.has_frame && $('#vimg').hidden && !document.hidden) { $('#vimg').src = '/api/stream'; $('#vimg').hidden = false; $('#novid').hidden = true; }
   $('#demo').hidden = s.memory !== 'fake';   // the scripted demo only exists on throwaway memory, never on your real graph
   refreshSummary();
 }
