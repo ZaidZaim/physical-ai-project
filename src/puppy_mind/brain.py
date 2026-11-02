@@ -434,7 +434,9 @@ class Brain:
     def on_wake(self) -> threading.Thread:
         """'Hey PuppyPi': the trick, then look up at the visitor. Runs beside the reply being prepared; join it before speaking."""
         def run() -> None:
-            r = self.gesture(self.s.wake_action) if self.s.wake_action else {"ok": False}
+            r = self.gesture(self.s.wake_action) if self.s.wake_action else {"ok": False, "reason": "no WAKE_ACTION set"}
+            # a refused trick (booth mode off, the 60 s cooldown, moving) looked exactly like a robot that ignored it
+            print("wake trick %s: %s" % (self.s.wake_action or "-", "played" if r.get("ok") else "not played, " + r.get("reason", "")), flush=True)
             if r.get("ok"):
                 end = time.monotonic() + self.drive.action_busy_s + 3
                 while self.drive.in_action and time.monotonic() < end:
