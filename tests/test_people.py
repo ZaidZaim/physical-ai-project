@@ -321,7 +321,7 @@ def test_the_booth_language_is_fixed_for_hearing_and_answering():
     assert "Always answer in English" in s.client.prompts[-1]
 
 
-def test_permission_comes_with_a_goodbye_a_request_for_material_or_after_six_answers():
+def test_permission_comes_with_a_goodbye_a_request_for_material_or_after_many_answers():
     from puppy_mind.people import CONSENT_AFTER_TURNS, introduces_self
 
     assert introduces_self("Sorry. My name is Zaid, I work at Neo4j.") and introduces_self("Hi, I'm Ana")
@@ -335,7 +335,42 @@ def test_permission_comes_with_a_goodbye_a_request_for_material_or_after_six_ans
         r = s.turn(f"question {i}", r["encounter_id"] if r else None)
         if i < CONSENT_AFTER_TURNS - 1:
             assert "may I remember" not in r["reply"]
-    assert "may I remember" in r["reply"]  # no goodbye: asked at the latest after six answers
+    assert "may I remember" in r["reply"]  # no goodbye: asked once the answers add up and they stop asking things
+
+
+def test_yosefs_conversation_ends_when_he_leaves_not_while_he_still_asks():
+    # seen on the robot: permission ("Before you go") after his 6th answer and "what have you enjoyed?" next, while he still had
+    # four questions; he said goodbye only at the 12th
+    from puppy_mind.people import CONSENT_LATEST_TURNS, asks_something
+
+    said = ["Hey PuppyPi!", "Tell me more about artificial intelligence.", "I work at Microsoft in developer.",
+            "I run as a VP of Developer.", "I would like to see where we can collaborate, Microsoft and Neo4j.",
+            "Just getting started, I created a Neo4j Aura instance already.", "There were very interesting keynotes on agentic AI.",
+            "Tell me more about knowledge graphs. What are knowledge graphs and why should we use them?",
+            "What are common use cases? Neo4j talks about the seven graphs, so what is this?",
+            "Why should I use Neo4j compared to SQL?", "Okay, thank you so much. I need to run to the next one."]
+    assert all(asks_something(t) for t in said[7:10]) and not asks_something(said[5]) and not asks_something(said[3])
+    s, _ = svc([["Answer."]] * len(said))
+    r, replies = None, []
+    for t in said:
+        r = s.turn(t, r["encounter_id"] if r else None)
+        replies.append(r["reply"])
+    assert not any("may I remember" in x for x in replies[:-1])
+    assert "Before you go: may I remember" in replies[-1]
+    assert not any("enjoyed" in x for x in replies[:7])  # not in the middle of the conversation
+    from puppy_mind.people import drop_own_ask  # the real model asked these itself in a replay of his sentences
+    for own in ("May I remember you so the Neo4j team can send you material and follow up?",
+                "Would you like me to remember this conversation so the Neo4j team can follow up with you?",
+                "What interests you most about the conference so far?", "What have you enjoyed most at the conference so far?"):
+        assert drop_own_ask("Knowledge graphs connect facts. " + own) == "Knowledge graphs connect facts."
+    assert drop_own_ask("Graphs connect facts. Want to hear about GraphRAG?") == "Graphs connect facts. Want to hear about GraphRAG?"
+    assert "remember" not in drop_own_ask("May I remember you so the Neo4j team can send you material and follow up?")  # the whole reply
+    s, _ = svc([["Answer."]] * CONSENT_LATEST_TURNS)  # someone who only ever asks questions is still asked, eventually
+    r = None
+    for i in range(CONSENT_LATEST_TURNS):
+        r = s.turn(f"What about thing {i}?", r["encounter_id"] if r else None)
+        assert ("may I remember" in r["reply"]) == (i == CONSENT_LATEST_TURNS - 1)
+        assert "enjoyed" not in r["reply"]
 
 
 def test_what_a_visitor_says_after_yes_is_saved_and_earlier_facts_at_the_yes():

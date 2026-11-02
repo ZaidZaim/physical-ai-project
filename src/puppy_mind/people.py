@@ -66,8 +66,20 @@ QUESTIONS = {  # the exact question that ends the robot's reply, one unknown fac
 }
 _BYE = re.compile(r"\b(bye|goodbye|have to (go|run|leave)|need to (go|run|leave)|gotta (go|run)|got to (go|run)|see you|"
                   r"that'?s (it|all)( for now)?|that is (it|all)|next (one|session|talk)|let'?s (close|stop|end) (it|here)|i'?m off)\b", re.I)
-CONSENT_AFTER_TURNS = 6  # ask at the end; at the latest after this many answers (a visitor may walk off without a goodbye)
+# Permission is asked at the end. Without a goodbye: after CONSENT_AFTER_TURNS answers once the visitor stops asking things, and
+# after CONSENT_LATEST_TURNS answers in any case (people walk off without a goodbye). At 6 answers it interrupted a visitor who
+# still had four questions to ask.
+CONSENT_AFTER_TURNS = 10
+CONSENT_LATEST_TURNS = 14
+ENJOYED_AFTER_TURNS = 8  # "what have you enjoyed at the event?" is a wind-down question, not one for the middle of their questions
 ASK_ORDER = ("name", "company", "role", "use_case", "familiarity", "enjoyed")  # the follow-up wish is the consent question itself
+_QUESTION = re.compile(r"\?\s*$|^\W*(what|why|how|when|where|which|who|can|could|would|will|do|does|did|is|are|should|tell me|"
+                       r"explain|show me|i'?d like to know|i want to know)\b", re.I)
+
+
+def asks_something(text: str) -> bool:
+    """The visitor asked a question ("Why should I use Neo4j compared to SQL?", "Tell me more about knowledge graphs.")."""
+    return bool(_QUESTION.search((text or "").strip()))
 
 
 def consent_question(name: str = "", leaving: bool = True) -> str:
@@ -92,6 +104,19 @@ def end_with_question(reply: str, question: str) -> str:
     if parts and parts[-1].endswith("?"):
         parts = parts[:-1]
     return (" ".join(parts) + " " + question).strip()
+
+
+_OWN_ASK = re.compile(r"\benjoy|\bconference\b|\bthe event\b|\bremember\b|\bfollow[- ]?up\b|\bstay in touch\b|"
+                      r"\b(save|store|keep|note)\s+(your|you|this|our)\b", re.I)
+
+
+def drop_own_ask(reply: str) -> str:
+    """Remove a closing question the model asked on its own about permission or what they enjoyed: the code asks those at the end.
+    In the replay of a real booth talk the model asked "May I remember you?" three times while the visitor was still asking."""
+    parts = re.split(r"(?<=[.!?])\s+", (reply or "").strip())
+    while parts and parts[-1].endswith("?") and _OWN_ASK.search(parts[-1]):
+        parts = parts[:-1]
+    return " ".join(parts) or "Anything else you'd like to know about graphs?"  # the whole reply was that question
 
 
 _WISH = {
@@ -717,6 +742,7 @@ class PeopleService:
                         history = []
             else:
                 reply = "Sorry, my circuits got tangled on that one. Could you ask me again?"
+            reply = drop_own_ask(reply)
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
             enc.last = time.monotonic()
         if enc.consent is not False:
@@ -733,6 +759,8 @@ class PeopleService:
             elif enc.consent is None and enc.consent_asked and not enc.reasked and says_goodbye(text):
                 enc.closing = enc.reasked = True  # asked mid-way and left unanswered: once more, now that they are leaving
                 question = consent_question(name, leaving=True)
+            elif says_goodbye(text):
+                enc.closing = True  # they are leaving: nothing more to ask, also after a yes in the next turn
             elif not enc.closing:
                 question = self._next_question(enc, text)
             if question:
@@ -752,15 +780,18 @@ class PeopleService:
             return None
         p = self._record(enc)
         for key in ASK_ORDER:
+            if key == "enjoyed" and (enc.turns < ENJOYED_AFTER_TURNS or asks_something(text)):
+                continue
             if not p.get(key) and key not in enc.asked_about:
                 enc.asked_about.append(key)
                 return QUESTIONS[key].format(event=self.s.event_name)
         return None
 
     def _consent_due(self, enc: Encounter, text: str) -> bool:
-        """Ask for permission at the end: when they say goodbye, when they ask for material or a follow-up, or after
-        CONSENT_AFTER_TURNS answers (people walk off without a goodbye)."""
-        return says_goodbye(text) or any(explicit_wishes(text).values()) or enc.turns >= CONSENT_AFTER_TURNS
+        """Ask for permission at the end: when they say goodbye, when they ask for material or a follow-up, after
+        CONSENT_AFTER_TURNS answers once they stop asking questions, or after CONSENT_LATEST_TURNS answers."""
+        return (says_goodbye(text) or any(explicit_wishes(text).values()) or enc.turns >= CONSENT_LATEST_TURNS
+                or (enc.turns >= CONSENT_AFTER_TURNS and not asks_something(text)))
 
     def _learn(self, enc: Encounter, transcript: str, latest: str = "", confirmable_email: str = "") -> None:
         """Add what the visitor said about themselves to their record (consent given). Never raises: a missed fact is not an error.
