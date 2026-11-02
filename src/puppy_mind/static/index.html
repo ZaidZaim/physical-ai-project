@@ -118,9 +118,9 @@
   /* ---- booth: what visitors ask about and need (anonymous), graph first */
   #boothview { display:flex; flex-direction:column; background:var(--panel) }
   #pkpi { display:flex; gap:18px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
-  .kpi { display:flex; align-items:baseline; gap:8px } .kpi b { font:600 34px/1 var(--mono); color:var(--ink); transition:color .3s }
-  .kpi span { font:11px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) } .kpi.small b { font-size:22px }
-  .kpi.bump b { color:var(--new); animation:bump .7s ease-out } @keyframes bump { 0% { transform:scale(1) } 30% { transform:scale(1.25) } 100% { transform:scale(1) } }
+  .bkpi { display:flex; align-items:baseline; gap:8px } .bkpi b { font:600 34px/1 var(--mono); color:var(--ink); transition:color .3s }
+  .bkpi span { font:11px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute) } .bkpi.small b { font-size:22px }
+  .bkpi.bump b { color:var(--new); animation:bump .7s ease-out } @keyframes bump { 0% { transform:scale(1) } 30% { transform:scale(1.25) } 100% { transform:scale(1) } }
   #pfam { display:flex; gap:4px; align-items:flex-end; height:30px } #pfam div { display:flex; flex-direction:column; align-items:center; gap:2px; font:9px var(--mono); color:var(--mute); text-transform:uppercase; letter-spacing:.06em }
   #pfam i { display:block; width:30px; background:var(--reasoning); border-radius:2px 2px 0 0; min-height:2px }
   #pbody { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 340px }
@@ -242,9 +242,9 @@
     <div class="view" id="timelineview" hidden><div id="timeline"></div></div>
     <div class="view" id="boothview" hidden>
       <div id="pkpi">
-        <div class="kpi" id="pconvbox" title="Conversations at the booth (anonymous)"><b id="pconv">0</b><span>conversations</span></div>
-        <div class="kpi small"><b id="pq">0</b><span>questions</span></div>
-        <div class="kpi small"><b id="ptopics">0</b><span>topics</span></div>
+        <div class="bkpi" id="pconvbox" title="Conversations at the booth (anonymous)"><b id="pconv">0</b><span>conversations</span></div>
+        <div class="bkpi small"><b id="pq">0</b><span>questions</span></div>
+        <div class="bkpi small"><b id="ptopics">0</b><span>topics</span></div>
         <div id="pfam" title="How well visitors know Neo4j"></div>
         <span class="tag" id="plisten" title="The robot listens for its wake word only while this tab is open">robot not listening</span>
         <span class="spacer"></span>
