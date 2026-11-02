@@ -73,6 +73,14 @@ def test_lead_score_stages_and_explainability():
     assert lead_score({"role": "CTO", "wants_demo": True, "wants_follow_up": True, "email": "x", "use_case": "y", "company": "z"})[0] == 100
 
 
+def test_enjoyed_said_twice_is_kept_once_but_short_interests_stay():
+    # Yosef's real booth turns: each extraction re-phrased what he enjoyed
+    p = merge_person(None, {"enjoyed": ["keynotes on agentic ai and mcp tools"], "interests": ["neo4j", "neo4j aura"]}, "Yosef")
+    p = merge_person(p, {"enjoyed": ["Interesting keynotes on agentic AI and MCP tools", "interesting keynotes"]}, "Yosef")
+    assert p["enjoyed"] == ["interesting keynotes on agentic ai and mcp tools"]
+    assert p["interests"] == ["neo4j", "neo4j aura"]  # a short theme links visitors in the graph
+
+
 def test_nothing_is_saved_without_a_spoken_yes():
     s, mem = svc([[call("save_person_facts", name="Ana", company="Acme"), "I cannot save yet."],
                   [call("record_consent", granted=True), "ok"]])  # the visitor never said yes: the model is wrong

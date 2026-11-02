@@ -205,12 +205,23 @@ def lead_score(p: dict) -> tuple[int, str]:
     return score, "hot" if score >= 60 else "warm" if score >= 30 else "cold"
 
 
-def _clean_topics(items: Any) -> list[str]:
+def _clean_topics(items: Any, absorb: bool = False) -> list[str]:
+    """Lower-cased, de-duplicated topics. With `absorb`, a phrase inside a longer one is the same thing said twice
+    ("interesting keynotes" / "interesting keynotes on agentic ai"): only the longest is kept, where it first appeared."""
     out: list[str] = []
     for t in items or []:
         t = " ".join(str(t).lower().split())[:60]
-        if t and t not in out:
-            out.append(t)
+        if not t or t in out:
+            continue
+        if absorb:
+            if any(t in o for o in out):
+                continue
+            longer = [i for i, o in enumerate(out) if o in t]
+            if longer:
+                out[longer[0]] = t
+                out = [o for i, o in enumerate(out) if i not in longer[1:]]
+                continue
+        out.append(t)
     return out[:20]
 
 
@@ -230,7 +241,7 @@ def merge_person(existing: dict | None, facts: dict, name: str) -> dict:
         if facts.get(k) is not None:
             p[k] = bool(facts[k])
     for k in ("interests", "enjoyed"):
-        p[k] = _clean_topics(list(p.get(k) or []) + list(facts.get(k) or []))
+        p[k] = _clean_topics(list(p.get(k) or []) + list(facts.get(k) or []), absorb=k == "enjoyed")
     p["lead_score"], p["lead_stage"] = lead_score(p)
     return p
 

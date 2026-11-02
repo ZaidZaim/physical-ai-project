@@ -92,6 +92,11 @@ class PeopleGraph:
               MERGE (p)-[r:INTERESTED_IN]->(tp) ON CREATE SET r.since = datetime($ts)
             }
             CALL (p) {
+              WITH p WHERE size($enjoyed) > 0
+              MATCH (p)-[r:ENJOYED]->(old:Theme) WHERE NOT old.name IN $enjoyed
+              DELETE r
+            }
+            CALL (p) {
               UNWIND $enjoyed AS t
               MERGE (tp:Theme {name:t})
               MERGE (p)-[r:ENJOYED]->(tp) ON CREATE SET r.since = datetime($ts)
