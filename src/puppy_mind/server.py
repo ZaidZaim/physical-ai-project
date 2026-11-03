@@ -179,7 +179,7 @@ def ask(body: Ask):
     return brain.ask(body.question)
 
 
-ROBOT_FILES = {"puppy_drive.py", "puppy_streamer.py", "puppy_voice.py"}
+ROBOT_FILES = {"puppy_drive.py", "puppy_streamer.py", "puppy_voice.py", "start_voice_auto.sh", "puppy-voice.service"}
 
 
 @app.get("/robot/{name}")

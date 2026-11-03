@@ -291,3 +291,12 @@ def test_camera_analysis_pauses_while_a_visitor_talks(client):
     post("Thanks!", enc)
     assert not server.brain.booth.conversation_active()
     server.brain.perception = None
+
+
+def test_the_robot_can_download_its_boot_service_and_start_script(client):
+    # the robot starts its voice client by itself at boot: puppy-voice.service runs start_voice_auto.sh (fetched from the laptop)
+    for name in ("start_voice_auto.sh", "puppy-voice.service", "puppy_voice.py"):
+        r = client.get(f"/robot/{name}")
+        assert r.status_code == 200 and b"\r\n" not in r.content, name  # bash on the robot breaks on Windows line endings
+    assert b"ExecStart=/bin/bash /home/pi/start_voice_auto.sh" in client.get("/robot/puppy-voice.service").content
+    assert client.get("/robot/.env").status_code == 404 and client.get("/robot/server.py").status_code == 404

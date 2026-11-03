@@ -93,10 +93,22 @@ robot, boxing via `/api/gesture` with booth mode on did box.
 The WonderEcho Pro appears to the Pi as a USB audio device. `robot/puppy_voice.py` records with `arecord`, plays with `aplay`, and
 sends audio to the laptop; the Pi does no recognition or synthesis.
 
+The voice client starts by itself at boot: `puppy-voice.service` runs `robot/start_voice_auto.sh`, which finds the laptop running
+the app on the robot's current Wi-Fi (the address is remembered in `~/brain_url` and searched for again when it changes), fetches
+the latest `puppy_voice.py` from it, and keeps it running (retrying every 10 s until the app is up). The log `~/puppy_voice.log`
+starts empty at every boot, so what visitors said is kept no longer than the current day.
+
 ```bash
-# on the robot
-wget -qO ~/puppy_voice.py http://<laptop-ip>:8000/robot/puppy_voice.py && ~/start_voice.sh     # log: ~/puppy_voice.log
+# install once, on the robot
+wget -q http://<laptop-ip>:8000/robot/start_voice_auto.sh http://<laptop-ip>:8000/robot/puppy-voice.service
+sudo cp puppy-voice.service /etc/systemd/system/ && sudo systemctl enable --now puppy-voice
+sudo systemctl restart puppy-voice     # by hand, e.g. after updating the app
 ```
+
+**Wi-Fi on the robot.** Hiwonder's own `wifi.service` deletes every saved Wi-Fi at boot and knows only one network (its
+`wifi_conf.py`), falling back to the robot's own Wi-Fi `HW-<serial>` (192.168.149.1). It is disabled on this robot so
+NetworkManager keeps several networks (the phone hotspot first, the robot's own Wi-Fi as the last resort). Undo:
+`sudo systemctl enable wifi.service hw_wifi.service`. Switch the phone hotspot on before the robot.
 
 Laptop side: `.env` needs `OPENAI_API_KEY`. Optional: `EVENT_NAME`, `BOOTH_INFO`, `OPENAI_TTS_VOICE`, `GREET_COOLDOWN_S`,
 `PEOPLE_GREET=false` (never greet unprompted). The robot's log `~/puppy_voice.log` prints what it heard: clear it after a booth day.

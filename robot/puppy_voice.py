@@ -6,7 +6,8 @@ Stdlib only; uses ALSA's `arecord` and `aplay` (present on the Pi image). The Pi
 does the understanding (transcription, the Graph Wizard conversation, text-to-speech) and returns a WAV to play.
 
 Usage on the robot (it finds the WonderEcho Pro and measures the room noise by itself):
-  python3 puppy_voice.py --brain http://<laptop-ip>:8000
+  At boot it starts by itself: puppy-voice.service runs start_voice_auto.sh, which finds the laptop on the current Wi-Fi.
+  By hand: python3 puppy_voice.py --brain http://<laptop-ip>:8000
   python3 puppy_voice.py --brain http://<laptop-ip>:8000 --test-mic       # prints the loudness it hears
   Override if needed: --mic plughw:1,0 --speaker plughw:1,0 --threshold 600   (cards: arecord -l ; aplay -l)
 
