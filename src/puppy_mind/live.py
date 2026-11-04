@@ -35,7 +35,7 @@ import wave
 
 import numpy as np
 
-from .booth import TOOLS, says_goodbye
+from .booth import TOOLS, robot_says_goodbye, says_goodbye
 from .voice import fix_terms
 from .wizard import system_prompt
 
@@ -324,6 +324,8 @@ class LiveCall:
             return
         reply = self.published = turns[-1]["content"]
         heard = turns[-2]["content"] if len(turns) > 1 else ""
+        if len(turns) > 2 and robot_says_goodbye(reply) and not enc.closing:  # it said goodbye itself: the call ends after it
+            enc.closing = True
         self.booth._last_said = time.monotonic()
         self.booth._publish("converse", {"encounter_id": enc.id, "heard": heard, "reply": reply, "tools": [], "live": True})
         print("live: heard %r | said %r" % (heard[:160], reply[:200]), flush=True)

@@ -443,3 +443,12 @@ def test_the_wizard_knows_the_claw_machine_and_mentions_it_at_goodbye():
     assert "claw machine" in h.client.prompts[-1] and "Graph Wizard" in h.client.prompts[-1]
     h.turn("Thanks, bye!")
     assert "invite them to try the claw machine" in h.client.prompts[-1]
+
+
+def test_a_short_thanks_ends_the_conversation_but_not_one_with_a_question():
+    from puppy_mind.booth import robot_says_goodbye, says_goodbye
+    # seen at the booth: both left the call open until the Booth tab ended it
+    assert says_goodbye("Thank you, thank you, thank you") and says_goodbye("Thank you, thank you, thank you I'll try")
+    assert not says_goodbye("Thanks, how does GraphRAG work?") and not says_goodbye("Thanks! Can you wave?")
+    assert robot_says_goodbye("Bye! And good luck with that claw machine.")
+    assert not robot_says_goodbye("Good luck! What are you building?") and not robot_says_goodbye("GraphRAG uses graphs.")

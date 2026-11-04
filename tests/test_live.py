@@ -411,3 +411,14 @@ def test_the_pieces_of_one_sentence_open_one_session_not_one_each(monkeypatch):
         await asyncio.sleep(0.1)
     asyncio.run(go())
     assert len(opened) == 1
+
+
+def test_the_robots_own_goodbye_ends_the_call():
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    _ev(call, "input", 600, " Hey PuppyPi, how do I start with Aura?")
+    _ev(call, "output", 3000, " Try AuraDB Free and the GraphAcademy course.")
+    _ev(call, "input", 8000, " Great, that helps a lot, I will")
+    _ev(call, "output", 10000, " Awesome. Good luck, and try the claw machine!")
+    call.commit()
+    assert call.enc.closing and call.close_at is not None

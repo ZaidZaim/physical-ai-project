@@ -59,10 +59,23 @@ _THANKS_ONLY = re.compile(r"\W*(?:(?:ok(?:ay)?|great|cool|perfect|alright|all ri
 _END = re.compile(r"\b(stop( talking)?|end (the |this )?conversation|that'?s enough|we'?re done|i'?m done|no more questions)\b", re.I)
 
 
+_ANY_QUESTION = re.compile(r"\?|\b(what|why|how|when|where|which|who|can|could|would|should|tell me|explain|show me)\b", re.I)
+_ROBOT_BYE = re.compile(r"\b(bye|goodbye|see you|good luck|take care|enjoy the rest)\b", re.I)
+
+
 def says_goodbye(text: str) -> bool:
-    """The visitor is done: a goodbye, "I need to run", a plain "thanks" on its own, or "stop" / "end the conversation"."""
+    """The visitor is done: a goodbye, "I need to run", a plain "thanks" on its own, or "stop" / "end the conversation". A short
+    thanks with no question in it counts too: at the booth "Thank you, thank you, thank you" and "Thanks, I'll try" left the
+    conversation open until the Booth tab ended it."""
     t = (text or "").strip()  # "stop" ends it only as a short command: "how do I stop a running query?" is a question
-    return bool(_BYE.search(t) or _THANKS_ONLY.fullmatch(t) or (_END.search(t) and len(t.split()) <= 6))
+    short_thanks = re.search(r"\bthanks?\b|\bthank you\b", t, re.I) and len(t.split()) <= 10 and not _ANY_QUESTION.search(t)
+    return bool(_BYE.search(t) or _THANKS_ONLY.fullmatch(t) or short_thanks or (_END.search(t) and len(t.split()) <= 6))
+
+
+def robot_says_goodbye(reply: str) -> bool:
+    """The robot's own answer is a farewell ("Bye!", "Good luck!") and asks nothing: the conversation is over (GPT-Live calls)."""
+    r = (reply or "").strip()
+    return bool(_ROBOT_BYE.search(r)) and "?" not in r
 
 
 def asks_something(text: str) -> bool:
