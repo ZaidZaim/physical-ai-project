@@ -240,11 +240,12 @@ class LiveCall:
     async def on_event(self, m: dict) -> str | None:
         t, now = m.get("type"), time.monotonic()
         if t == "session.output_audio.delta":
-            pcm = louder_pcm(base64.b64decode(m.get("delta") or ""), self.s.voice_gain)
+            raw = base64.b64decode(m.get("delta") or "")
+            item = (louder_pcm(raw, self.s.voice_gain), pcm_rms(raw) > LOUD_OUT)  # talking or not: judged before the gain
             if self.confirmed:
-                await self.b.play(pcm)
+                await self.b.play(*item)
             else:
-                self.held.append(pcm)
+                self.held.append(item)
         elif t in ("session.input_transcript.delta", "session.output_transcript.delta"):
             user = t == "session.input_transcript.delta"
             last = self.pieces[-1][0] if self.pieces else 0.0
@@ -287,8 +288,8 @@ class LiveCall:
         self.brain.on_wake()  # look up at the visitor
         await self.b.tell({"type": "call", "open": True})
         held, self.held = self.held, []
-        for pcm in held:
-            await self.b.play(pcm)
+        for pcm, loud in held:
+            await self.b.play(pcm, loud)
 
     async def _tool(self, item: dict) -> None:
         name = item.get("name", "")
@@ -396,14 +397,15 @@ class LiveBridge:
         """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos)."""
         return time.monotonic() < self.audible_until + ECHO_TAIL_S or self.brain.drive.moving
 
-    async def play(self, pcm: bytes) -> None:
+    async def play(self, pcm: bytes, loud: bool | None = None) -> None:
+        """Send audio to the robot's speaker. loud: whether it is speech (the microphone is muted until it has played)."""
         if not pcm or self.ws is None:
             return
         for i in range(0, len(pcm), 32000):
             await self.ws.send_bytes(b"A" + pcm[i:i + 32000])
         now = time.monotonic()
         self.play_end = max(self.play_end, now) + len(pcm) / BPS
-        if pcm_rms(pcm) > LOUD_OUT:
+        if loud if loud is not None else pcm_rms(pcm) > LOUD_OUT:
             self.audible_until = self.play_end
 
     async def tell(self, msg: dict) -> None:
@@ -451,7 +453,12 @@ class LiveBridge:
                     elif kind in (b"M", b"S") or not call.confirmed:  # a probe hears the rest of the sentence as it is said
                         await call.mic(bytes(len(pcm)) if self.busy() else pcm)
                 elif kind in (b"S", b"U") and not self.busy() and self.brain.listening:
-                    asyncio.create_task(self._probe(pcm, ended=kind == b"U"))
+                    # self.call is set HERE, before the next frame is read: set inside the task, the next pieces of the same sentence
+                    # each opened a session of their own (seen at the booth: 3 to 4 per sentence, the wake word split between them)
+                    self.call = LiveCall(self, pcm)
+                    if kind == b"U":
+                        self.call.speech_end_at = time.monotonic()
+                    asyncio.create_task(self._probe(self.call))
         finally:
             ticker.cancel()
             if self.call is not None:
@@ -460,14 +467,14 @@ class LiveBridge:
                 self._renew_spare()  # closes the spare when it is ready
                 self.spare.cancel()
 
-    async def _probe(self, pcm: bytes, ended: bool = False) -> None:
+    async def _probe(self, call: LiveCall) -> None:
         """Someone speaks outside a call: open a GPT-Live session at once; it becomes a call if the wake word is in it."""
-        call = self.call = LiveCall(self, pcm)
-        if ended:
-            call.speech_end_at = time.monotonic()
+        print("live: someone speaks: listening for the wake word", flush=True)
         try:
             await call.run(await self._take_spare())
         finally:
+            if not call.confirmed:  # what a bystander said is never printed
+                print("live: no wake word (%s): dropped" % (call.closed_reason or "session ended"), flush=True)
             if self.call is call:
                 self.call = None
             if call.confirmed:

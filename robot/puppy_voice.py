@@ -357,6 +357,7 @@ class Voice:
             end_quiet = int(self.a.live_silence / CHUNK_S)
             pre = collections.deque(maxlen=int(0.3 / CHUNK_S))  # the start of the first word, from before it was loud enough
             streaming = False  # this sentence is being streamed (b"S"): GPT-Live hears it while it is said
+            report, peak = time.time() + 10, 0.0
             while True:
                 if state["error"] is not None:
                     if ws.close_code == 4001:
@@ -372,9 +373,16 @@ class Voice:
                 if time.time() < state["play_until"] + 0.5:  # a greeting or the end of a goodbye is playing: that is not a visitor
                     speech, quiet, started, voiced, streaming = bytearray(), 0, False, 0, False
                     continue
-                level = rms(buf)  # outside a call: only what someone says is sent, as one utterance (the laptop checks the wake word)
+                level = rms(buf)  # outside a call: only what someone says is sent (the laptop checks the wake word)
+                peak = max(peak, level)
+                if time.time() > report:  # what the microphone hears: the first thing to check when "Hey PuppyPi" is not heard
+                    print("mic: loudest %.0f in the last 10 s (speech counts above %.0f; room ~%.0f)" % (
+                        peak, max(self.a.threshold, floor * self.a.live_ratio), floor))
+                    report, peak = time.time() + 10, 0.0
                 floor = level if floor == 0 else (floor * 0.98 + level * 0.02 if not started else floor)
-                loud = level > max(self.a.threshold, floor * 3)
+                # GPT-Live decides whether it was the wake word, so speech may count more readily than in the classic mode: in the
+                # loud hall the room was ~2400 and a visitor close by 3800 to 7000, below the classic 3x the room.
+                loud = level > max(self.a.threshold, floor * self.a.live_ratio)
                 if loud:
                     if not started:
                         speech = bytearray(b"".join(pre))
@@ -390,6 +398,7 @@ class Voice:
                 elif voiced * CHUNK_S >= MIN_VOICE_S:  # real speech, not a click: stream it from its start
                     ws.send_bytes(b"S" + bytes(speech))
                     streaming = True
+                    print("someone is speaking: streaming it to the laptop")
                 if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
                     if streaming:
                         ws.send_bytes(b"E")
@@ -436,6 +445,8 @@ def main():
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")
     ap.add_argument("--classic", action="store_true", help="never use GPT-Live calls, even when the laptop offers them")
+    ap.add_argument("--live-ratio", type=float, default=1.7,
+                    help="GPT-Live mode: speech counts above this many times the room noise (the classic mode uses 3)")
     ap.add_argument("--live-silence", type=float, default=0.6,
                     help="GPT-Live mode: quiet that ends the wake sentence (the rest of the question streams into the call)")
     a = ap.parse_args()
