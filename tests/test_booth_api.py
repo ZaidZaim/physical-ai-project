@@ -132,19 +132,12 @@ def test_booth_controls_are_local_only(monkeypatch):
         assert c.post("/api/gesture", json={"name": "wave"}).status_code == 403
 
 
-def test_speak_here_endpoint_returns_wav_and_is_local_only(client, monkeypatch):
-    r = client.post("/api/voice/say", json={"text": "Hello there"})
-    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.endswith(b"Hello there")
-    with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
-        server.brain.voice = FakeVoice()
-        assert c.post("/api/voice/say", json={"text": "hi"}).status_code == 403
-
-
-def test_hold_to_talk_webm_reaches_transcription_with_its_format(client):
-    server.brain.booth.client = FakeChat([["Hi! What's your name?"]])
-    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"hello robot", "audio/webm")},
-                    data={"require_wake": "false"})  # Hold to talk needs no wake word
-    assert r.status_code == 200 and server.brain.voice.filenames[-1] == "speech.webm"
+def test_hold_to_talk_and_speak_here_are_gone(client):
+    # deprecated: every conversation goes through the robot (GPT-Live), and a recording must always carry the wake word
+    assert client.post("/api/voice/say", json={"text": "Hello there"}).status_code in (404, 405)
+    server.brain.booth.client = FakeChat([])  # the Wizard must not be called: no "Hey PuppyPi", no answer
+    r = client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + b"hello robot", "audio/wav")}, data={"require_wake": "false"})
+    assert r.status_code == 204 and "not addressed" in unquote(r.headers["x-heard"])
 
 
 def test_phrases_the_speech_model_invents_for_silence_never_reach_the_wizard(client):
@@ -155,7 +148,7 @@ def test_phrases_the_speech_model_invents_for_silence_never_reach_the_wizard(cli
     assert not heard_nothing("Hi, I'm Sam from a startup") and not heard_nothing("Thank you") and not heard_nothing("Yes")
     assert not heard_nothing("Docs are on neo4j.com")
     server.brain.booth.client = FakeChat([])  # the Wizard must not be called at all
-    r = client.post("/api/voice/turn", files={"file": ("speech.webm", bytes(64) + b"Thanks for watching!", "audio/webm")})
+    r = client.post("/api/voice/turn", files={"file": ("s.wav", bytes(64) + b"Thanks for watching!", "audio/wav")})
     assert r.status_code == 204 and "watching" in r.headers["x-heard"].lower()
 
 

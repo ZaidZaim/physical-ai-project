@@ -229,7 +229,7 @@ def test_the_booth_language_is_fixed_for_hearing_and_answering():
 
     calls = []
     client = NS(audio=NS(transcriptions=NS(create=lambda **kw: calls.append(kw) or NS(text="hello"))))
-    Voice(dataclasses.replace(S, voice_language="en"), client=client).transcribe(b"x", "s.webm")
+    Voice(dataclasses.replace(S, voice_language="en"), client=client).transcribe(b"x", "s.wav")
     assert calls[0]["language"] == "en"  # the speech model never guesses the language from a noisy clip
     assert "Always answer in English" in system_prompt("PuppyPi", "the event", "")
     assert "Always answer in German" in system_prompt("PuppyPi", "the event", "", "de")

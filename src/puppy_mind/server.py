@@ -417,10 +417,10 @@ def converse(body: Say, request: Request, x_brain_token: str | None = Header(Non
 
 
 @app.post("/api/voice/turn")
-def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None), require_wake: bool = Form(True),
+def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(None),
                x_brain_token: str | None = Header(None)):
-    """The robot (WAV) or the UI's Hold to talk (WebM) posts what its microphone heard; the reply comes back as WAV to play.
-    204 when nothing intelligible was said."""
+    """The robot (classic turns, LIVE_VOICE off) posts what its microphone heard as WAV; the reply comes back as WAV to play.
+    204 when nothing intelligible was said, or it was not addressed to the robot."""
     _robot_auth(x_brain_token)
     _need_voice()
     t0 = time.monotonic()
@@ -430,20 +430,20 @@ def voice_turn(file: UploadFile = File(...), encounter_id: str | None = Form(Non
     text = brain.voice.transcribe(audio, file.filename or "speech.wav")  # the extension tells the model the format
     t_heard = time.monotonic()
     if heard_nothing(text):  # silence, or a phrase the speech model invents for silence ("Thanks for watching!")
-        ask_again = brain.booth.unclear_reply(encounter_id) if (not require_wake or brain.listening) else None
+        ask_again = brain.booth.unclear_reply(encounter_id) if brain.listening else None
         if ask_again:  # in the middle of a conversation: never just go silent (the visitor would think it hung up)
             return Response(brain.voice.speak(ask_again), media_type="audio/wav",
                             headers={"X-Encounter": encounter_id, "X-Heard": quote("(unclear: %s)" % text[:100]), "X-Reply": quote(ask_again)})
         return Response(status_code=204, headers={"X-Heard": quote(text[:200])})
     waker = None
-    if require_wake:  # the robot's microphone hears the whole hall: answer only when addressed (Hold to talk sends require_wake=false)
-        if not brain.listening:
-            return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the Booth tab, or set LISTEN_ALWAYS=true)")})
-        ok, encounter_id = brain.booth.addressed(text, encounter_id)
-        if not ok:  # what bystanders said is not echoed anywhere
-            return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
-        if encounter_id is None:  # a new conversation: the trick and the look up happen while the reply is being prepared
-            waker = brain.on_wake()
+    # the robot's microphone hears the whole hall: answer only when addressed
+    if not brain.listening:
+        return Response(status_code=204, headers={"X-Heard": quote("(not listening: open the Booth tab, or set LISTEN_ALWAYS=true)")})
+    ok, encounter_id = brain.booth.addressed(text, encounter_id)
+    if not ok:  # what bystanders said is not echoed anywhere
+        return Response(status_code=204, headers={"X-Heard": quote("(not addressed to me: waiting for \"%s\")" % brain.s.wake_word)})
+    if encounter_id is None:  # a new conversation: the trick and the look up happen while the reply is being prepared
+        waker = brain.on_wake()
     r = brain.booth.turn(text, encounter_id, brain.place_info().get("name"))
     t_thought = time.monotonic()
     reply_audio = brain.voice.speak(r["reply"])
@@ -602,11 +602,3 @@ def booth_cheer(body: Cheer, request: Request, x_brain_token: str | None = Heade
         raise HTTPException(400, r["reason"])
     return r
 
-
-@app.post("/api/voice/say")
-def voice_say(body: Say, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
-    """Text -> WAV in the robot's voice, for the UI's 'Speak here' (testing without the robot's speaker). This machine only."""
-    _local_auth(request, x_brain_token, token)
-    if not brain.voice:
-        raise HTTPException(503, "OPENAI_API_KEY is not set")
-    return Response(brain.voice.speak(body.text[:1500]), media_type="audio/wav")

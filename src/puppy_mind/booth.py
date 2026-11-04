@@ -508,7 +508,7 @@ class BoothHost:
         enc.unclear_at = enc.last = now
         return "Sorry, I didn't catch that. Could you say it again?"
 
-    # ---- wake word (robot microphone only: Hold to talk and typing are addressed to the robot by definition)
+    # ---- wake word (robot microphone only: a typed /api/converse turn is addressed to the robot by definition)
     def end_conversations(self) -> int:
         """The Booth tab's "End conversation": every open conversation is over (the next visitor says the wake word)."""
         n = 0
