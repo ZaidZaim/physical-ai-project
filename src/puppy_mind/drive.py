@@ -80,13 +80,13 @@ class DriveState:
         `manual`: pressed in the Booth tab, so the big tricks are allowed and the gap is MANUAL_GAP_S instead of the cooldown that
         spaces out automatic tricks (the hourly limit still holds: servo heat and battery).
         `asked`: a visitor asked for it in the conversation: the same short gap (at the booth the 60 s cooldown refused the second
-        trick a visitor asked for), but never a big trick (those need space: buttons only)."""
+        trick a visitor asked for), and the big tricks too (push-up, moonwalk: wanted at the booth; keep space around the robot)."""
         quick = manual or asked
         with self._lock:
             now = time.monotonic()
             self._action_times = [t for t in self._action_times if now - t < 3600]
             reason = (
-                "unknown trick" if name not in TRICKS + (BIG_TRICKS if manual else ()) else
+                "unknown trick" if name not in TRICKS + (BIG_TRICKS if quick else ()) else
                 "booth mode is off" if not self.booth else
                 "a trick is already running" if now < self._action_until else
                 "the last trick is still settling" if quick and now < self._action_until + MANUAL_GAP_S else

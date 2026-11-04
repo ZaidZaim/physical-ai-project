@@ -144,7 +144,7 @@ the robot, then transcription, the chat model, and the whole reply synthesised b
   was transcribed separately first). Switching `LIVE_VOICE` off needs only an app restart: the robot falls back to the classic
   turns. `--classic` on the robot forces them.
 - Tricks a visitor asks for wait only for the previous trick (2 s), not the 60 s cooldown of unprompted tricks (that refused the
-  second trick at the booth). Push-ups and moonwalk stay Booth tab buttons only: they need space.
+  second trick at the booth). Visitors may ask for push-ups and the moonwalk too: keep space around the robot.
 - The call closes on goodbye, the Booth tab's End conversation, or `WAKE_WINDOW_S` of quiet. GPT-Live costs $0.05 per minute of
   call (billed per second), plus the backend model's tokens when it runs a tool.
 - Tricks, questions about the room and a new visitor go to GPT-Live's delegated backend (`LIVE_BACKEND_MODEL`, default `gpt-6-luna`)

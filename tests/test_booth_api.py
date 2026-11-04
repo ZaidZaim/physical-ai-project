@@ -298,7 +298,7 @@ def test_the_robot_can_download_its_boot_service_and_start_script(client):
     assert client.get("/robot/.env").status_code == 404 and client.get("/robot/server.py").status_code == 404
 
 
-def test_trick_buttons_play_one_after_another_and_the_big_ones_only_from_the_buttons(client):
+def test_trick_buttons_play_one_after_another_and_visitors_may_ask_for_the_big_ones(client):
     from puppy_mind.drive import BIG_TRICKS, MANUAL_GAP_S, TRICKS
 
     b = client.get("/api/booth").json()
@@ -313,13 +313,14 @@ def test_trick_buttons_play_one_after_another_and_the_big_ones_only_from_the_but
     drive._action_until -= MANUAL_GAP_S + 0.1
     drive._moving_until = 0
     assert client.post("/api/gesture", json={"name": "moonwalk"}).json()["ok"]  # no 60 s cooldown for buttons
-    # automatic tricks (the wake word, a visitor asking) keep the cooldown and never do the big ones
+    # unprompted tricks keep the cooldown and never do the big ones; a visitor may ask for push-ups (wanted at the booth)
     drive._action_until = drive._moving_until = 0
     assert drive.request_action("wave")["reason"] == "tricks are rate-limited"
     assert drive.request_action("push-up")["reason"] == "unknown trick"
+    assert drive.request_action("push-up", asked=True)["ok"]
     from puppy_mind.booth import TOOLS
     enum = next(t for t in TOOLS if t["function"]["name"] == "do_trick")["function"]["parameters"]["properties"]["name"]["enum"]
-    assert enum == list(TRICKS) and not set(enum) & set(BIG_TRICKS)
+    assert enum == list(TRICKS + BIG_TRICKS)
 
 
 def test_claw_machine_cheer_buttons(client):

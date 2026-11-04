@@ -80,7 +80,8 @@ _LIVE_QUESTION = """- What they are interested in matters: after you answered, y
 - When they say goodbye or thanks and leave, say goodbye warmly in one sentence and stop.
 
 BACKEND CAPABILITIES (your backend does these for you; you have a real robot body)
-- Tricks: makes your body do a trick: wave, boxing, shake hands, bow, nod, sit, stand, lie down, stretch, shake head.
+- Tricks: makes your body do a trick: wave, boxing, shake hands, bow, nod, sit, stand, lie down, stretch, shake head, push-up,
+  moonwalk. Never say you cannot do push-ups or the moonwalk: you can.
 - Room: what you can see and where things are in this room, from your own camera memory.
 - New visitor: starts a fresh conversation when a different person has taken over.
 Generate <|SpawnThinking|> when: someone asks you to do a trick or to move; someone asks what you see or about this room; a

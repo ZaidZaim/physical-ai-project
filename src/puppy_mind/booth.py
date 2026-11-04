@@ -30,7 +30,7 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, Field
 
 from .config import Settings
-from .drive import TRICKS
+from .drive import BIG_TRICKS, TRICKS
 from .voice import fix_terms
 from .wizard import system_prompt
 
@@ -305,8 +305,8 @@ class Outbox:
 TOOLS = [
     {"type": "function", "function": {"name": "do_trick",
      "description": "Perform a trick when a visitor asks for one (boxing = stands on its hind legs and pumps its front paws; also wave, "
-                    "shake_hands, bow, nod, sit, stand, lie_down, stretch, shake_head).",
-     "parameters": {"type": "object", "properties": {"name": {"type": "string", "enum": list(TRICKS)}}, "required": ["name"]}}},
+                    "shake_hands, bow, nod, sit, stand, lie_down, stretch, shake_head, push-up, moonwalk).",
+     "parameters": {"type": "object", "properties": {"name": {"type": "string", "enum": list(TRICKS + BIG_TRICKS)}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "new_visitor",
      "description": "A DIFFERENT person has started talking to you (they say it is their turn, or ignore the conversation so far). Call this "
                     "FIRST, so the previous visitor's conversation is not mixed up with theirs.",

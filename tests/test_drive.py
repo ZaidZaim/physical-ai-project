@@ -97,8 +97,8 @@ def test_tricks_need_booth_mode_never_run_while_moving_block_driving_and_are_rat
     assert not d.in_action and d.moving  # the camera still settles after a trick
     d._moving_until = 0
     assert d.request_action("wave")["reason"] == "tricks are rate-limited"
-    # a visitor asked for the next one: no cooldown, only the short gap after the last trick; big tricks stay buttons only
-    assert d.request_action("push-up", asked=True)["reason"] == "unknown trick"
+    # a visitor asked for the next one: no cooldown, only the short gap after the last trick (big tricks too)
+    assert d.request_action("push-up01", asked=True)["reason"] == "unknown trick"
     d._action_until -= 10  # the gap after the boxing has passed
     assert d.request_action("wave", asked=True)["ok"]
     d.action_done()
