@@ -91,10 +91,11 @@ class Settings:
     tts_model: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
     tts_voice: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
     # claw machine cheerleader: the robot calls people over to the booth's claw machine, cheers players on (Booth tab buttons) and the
-    # Wizard mentions it. CHEER_EVERY_S: how often it calls people over by itself when nobody talks to it (0 = only by button).
+    # Wizard mentions it. CHEER_EVERY_S: how often it calls people over by itself when nobody talks to it. 0 (the default) = only by
+    # button: at the booth, the robot speaking up on its own was unwanted.
     claw_machine: bool = _bool("CLAW_MACHINE", False)
     claw_prize: str = os.getenv("CLAW_PRIZE", "a Graph Wizard")
-    cheer_every_s: float = float(os.getenv("CHEER_EVERY_S", "150"))
+    cheer_every_s: float = float(os.getenv("CHEER_EVERY_S", "0"))
     # louder robot voice: the WonderEcho Pro's speaker is already at 100% and too quiet in a hall. 1 = as generated; higher raises the
     # quiet parts and softly limits the peaks (no clipping). 2.5 is clearly louder and still clean.
     voice_gain: float = float(os.getenv("VOICE_GAIN", "2.5"))

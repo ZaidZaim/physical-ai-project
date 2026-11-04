@@ -92,7 +92,7 @@ robot, boxing via `/api/gesture` with booth mode on did box.
 
 With `CLAW_MACHINE=true` the robot cheers for the booth's claw machine (prize: `CLAW_PRIZE`, default "a Graph Wizard"):
 
-- **By itself:** when nobody has talked to it for `CHEER_EVERY_S` (150 s; 0 = buttons only) and it is listening, it calls people
+- **By itself (off by default):** with `CHEER_EVERY_S` set (e.g. 150), when nobody has talked to it that long and it is listening, it calls people
   over ("Feeling lucky? Try the claw machine and win a Graph Wizard!"). It never does this during or just after a conversation.
 - **Booth tab buttons** (the "Claw machine" row): *Call people over*, *Someone is playing*, *They won!*, *So close* (try again).
   Each has several lines, and the same line never plays twice in a row. Cheering is words only: the robot does no trick.
