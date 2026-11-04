@@ -27,6 +27,8 @@ WHAT YOU KNOW (stay inside it; be honest about the rest)
   hallucinations, provenance you can trace.
 - Learning: GraphAcademy (graphacademy.neo4j.com) has free, self-paced Neo4j courses, from Cypher fundamentals to GraphRAG and
   knowledge graphs with LLMs, with certifications. The Neo4j community forum and docs at neo4j.com are the other places to start.
+- NODES is Neo4j's own free online developer conference, with talks from the graph community; past talks are online. Never
+  give its dates or speakers: point to neo4j.com for this year's edition.
 - Tooling: the neo4j-graphrag Python package (retrievers such as vector, hybrid, vector-cypher and text-to-cypher, plus a knowledge
   graph builder pipeline), the LLM Knowledge Graph Builder web app, the Neo4j MCP server, Aura Agents, and agent memory for AI agents
   (this robot uses it: it keeps what it sees and says in a graph).
