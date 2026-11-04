@@ -338,50 +338,87 @@ const REL_COLORS = { ON:'#e0a63a', INSIDE:'#d96ca0', NEXT_TO:'#4db3d6', NEAR:'#6
 const relColor = t => REL_COLORS[t] || '#8fa0b2';
 const hiddenRel = new Set();
 const LEGEND_MEM = $('#legend').innerHTML;
-/* Long-term view: a fixed, readable layout. Places sit on a ring; each place's objects form a ring around it. Everything else uses physics. */
+/* Long-term view: a fixed, readable layout. Places sit on a ring; each place's objects sit on rings around it, every object with
+   SLOT px of arc so the labels never touch, and the rings far enough apart (and staggered) that labels at the sides miss each other.
+   Objects linked by a fact (on, next to, near) are placed one after the other, so their links stay short. Everything else uses physics. */
+const SLOT = 112, RING_GAP = 104, FIRST_RING = 175;
+function ringPositions(ids, c) {
+  const pos = {}; let r = FIRST_RING, k = 0, ring = 0;
+  while (k < ids.length) {
+    const n = Math.min(ids.length - k, Math.max(6, Math.floor(2 * Math.PI * r / SLOT))), off = ring % 2 ? Math.PI / n : 0;
+    for (let j = 0; j < n; j++, k++) { const a = -Math.PI / 2 + off + j * 2 * Math.PI / n; pos[ids[k]] = { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) }; }
+    r += RING_GAP; ring++;
+  }
+  return { pos, rad: (ring ? r - RING_GAP : FIRST_RING) + 90 };
+}
+function linkedOrder(ids, g) {  // walk the fact links so neighbours on the ring are neighbours in the room
+  const set = new Set(ids), adj = {};
+  for (const e of g.edges) if (!NOLABEL.has(e.type) && set.has(e.source) && set.has(e.target)) {
+    (adj[e.source] = adj[e.source] || []).push(e.target); (adj[e.target] = adj[e.target] || []).push(e.source); }
+  const label = id => String((nodes.get(id) || {}).label || id), order = [], left = new Set(ids);
+  const byDegree = [...ids].sort((a, b) => (adj[b] || []).length - (adj[a] || []).length || label(a).localeCompare(label(b)));
+  const gone = id => (g.nodes.find(n => n.id === id) || {}).status === 'possibly_gone';
+  for (const s of [...byDegree.filter(id => !gone(id)), ...byDegree.filter(gone)]) {  // present objects first, the possibly gone outside
+    if (!left.has(s)) continue;
+    const queue = [s]; left.delete(s);
+    while (queue.length) { const cur = queue.shift(); order.push(cur);
+      for (const nb of (adj[cur] || []).sort()) if (left.has(nb) && gone(nb) === gone(s)) { left.delete(nb); queue.push(nb); } }
+  }
+  return order;
+}
 function applyLayout(g) {
   const fixed = lens === 'long' && !$('#namsent').checked;
-  net.setOptions({ physics: { enabled: !fixed }, edges: { smooth: fixed ? { type: 'continuous', roundness: .2 } : { type: 'dynamic' } } });
+  net.setOptions({ physics: { enabled: !fixed }, edges: { smooth: fixed ? { type: 'curvedCW', roundness: .12 } : { type: 'dynamic' } } });
   if (!fixed) return;
   const placeIds = g.nodes.filter(n => n.kind === 'Place').map(n => n.id);
   const byPlace = {};
   for (const n of g.nodes) if (n.kind === 'Object') (byPlace[n.place] = byPlace[n.place] || []).push(n.id);
-  // each place's objects form one ring, or two when there are many; `rad` is how much room the cluster needs
-  const rings = id => { const n = (byPlace[id.slice(4)] || []).length;
-    if (n <= 10) return { rings: [{ r: 66 + 4 * n, n }], rad: 66 + 4 * n + 44 };
-    const inner = Math.floor(n * .4); return { rings: [{ r: 82, n: inner }, { r: 150, n: n - inner }], rad: 150 + 44 }; };
-  const info = Object.fromEntries(placeIds.map(id => [id, rings(id)]));
+  const objsOf = id => linkedOrder(byPlace[id.slice(4)] || [], g);
+  const rad = Object.fromEntries(placeIds.map(id => [id, ringPositions(objsOf(id), { x: 0, y: 0 }).rad]));
   // neighbours stay neighbours: walk the learned map instead of sorting by name
   const adj = {}; for (const e of g.edges) if (e.type === 'ADJACENT_TO') { (adj[e.source] = adj[e.source] || []).push(e.target); (adj[e.target] = adj[e.target] || []).push(e.source); }
   const order = []; const left = new Set(placeIds.sort());
   while (left.size) { let cur = [...left].sort((a, b) => (adj[b] || []).length - (adj[a] || []).length)[0];
     while (cur && left.has(cur)) { order.push(cur); left.delete(cur); cur = (adj[cur] || []).filter(x => left.has(x)).sort()[0]; } }
-  const n = order.length, maxRad = Math.max(0, ...order.map(id => info[id].rad));
-  const R = n <= 1 ? 0 : n === 2 ? maxRad * 1.2 + 40 : Math.max(240, (2 * maxRad + 30) / (2 * Math.sin(Math.PI / n)));
+  const n = order.length, maxRad = Math.max(0, ...order.map(id => rad[id]));
+  const R = n <= 1 ? 0 : n === 2 ? maxRad * 1.05 : Math.max(240, (2 * maxRad + 30) / (2 * Math.sin(Math.PI / n)));
   const pos = {};
   order.forEach((id, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / Math.max(1, n); pos[id] = { x: R * Math.cos(a), y: R * Math.sin(a) }; });
-  for (const id of order) {
-    const c = pos[id], objs = (byPlace[id.slice(4)] || []).sort(); let k = 0;
-    for (const ring of info[id].rings) for (let j = 0; j < ring.n; j++, k++) { const a = j * 2 * Math.PI / ring.n + (ring.r > 100 ? .5 : .2); pos[objs[k]] = { x: c.x + ring.r * Math.cos(a), y: c.y + ring.r * Math.sin(a) }; }
-  }
-  for (const nd of g.nodes) if (nd.kind === 'Robot') { const e = g.edges.find(x => x.source === nd.id), c = e && pos[e.target]; if (c) pos[nd.id] = { x: c.x + 40, y: c.y - 40 }; }
+  for (const id of order) Object.assign(pos, ringPositions(objsOf(id), pos[id]).pos);
+  for (const nd of g.nodes) if (nd.kind === 'Robot') { const e = g.edges.find(x => x.source === nd.id), c = e && pos[e.target]; if (c) pos[nd.id] = { x: c.x, y: c.y + 105 }; }
   for (const [id, p] of Object.entries(pos)) if (nodes.get(id)) nodes.update({ id, x: p.x, y: p.y });
+}
+/* What the long-term map leaves out: people (they are not part of the room, and the booth keeps no one), and objects that are
+   possibly gone unless asked for (at a busy booth most things the camera once saw are gone again). */
+const PEOPLE = new Set(['person', 'people', 'man', 'woman', 'child']);
+let showGone = false, hiddenCount = { gone: 0, people: 0 };
+function visibleGraph(g) {
+  if (lens !== 'long') return g;
+  const people = g.nodes.filter(n => n.kind === 'Object' && PEOPLE.has(String(n.label).toLowerCase()));
+  const gone = g.nodes.filter(n => n.kind === 'Object' && n.status === 'possibly_gone' && !people.includes(n));
+  hiddenCount = { gone: gone.length, people: people.length };
+  const drop = new Set([...people, ...(showGone ? [] : gone)].map(n => n.id));
+  return { ...g, nodes: g.nodes.filter(n => !drop.has(n.id)), edges: g.edges.filter(e => !drop.has(e.source) && !drop.has(e.target)) };
 }
 let userMoved = false; net.on('dragStart', () => userMoved = true); net.on('zoom', e => { if (e.direction) userMoved = true; });
 let syncing = Promise.resolve();
 function syncGraph() {
   syncing = syncing.then(async () => {
     const asked = lens;
-    const g = await api('/api/graph?lens=' + asked + ($('#namsent').checked ? '&nams=true' : ''));
+    const g = visibleGraph(await api('/api/graph?lens=' + asked + ($('#namsent').checked ? '&nams=true' : '')));
     if (asked !== lens) return;                                // the user switched lens while this was loading
+    const quiet = lens === 'long' && !$('#namsent').checked;   // the fixed map: colour says the relationship, position says the place
     const seen = new Set();
     colorPlaces(g.nodes.filter(n => n.kind === 'Place').map(n => n.label));
     const relCount = {}; for (const e of g.edges) if (!NOLABEL.has(e.type)) relCount[e.type] = (relCount[e.type] || 0) + 1;
     const relHtml = Object.entries(relCount).map(([t, c]) => `<span class="rel${hiddenRel.has(t) ? ' off' : ''}" data-rel="${t}" title="click to show or hide"><u style="background:${relColor(t)}"></u>${esc(t.replace(/_/g, ' ').toLowerCase())} ${c}</span>`).join('');
-    $('#legend').innerHTML = lens === 'long' ? Object.entries(placeColors).map(([p, c]) => `<span><i style="background:${c}"></i>${esc(p)}</span>`).join('') + '<span><i style="background:var(--gone)"></i>possibly gone</span><span><i style="background:var(--ink)"></i>robot</span>' + (relHtml ? '<br>' + relHtml : '') : LEGEND_MEM;
+    $('#legend').innerHTML = lens === 'long' ? Object.entries(placeColors).map(([p, c]) => `<span><i style="background:${c}"></i>${esc(p)}</span>`).join('')
+      + `<span class="rel gonebtn${showGone ? '' : ' off'}" title="click to show or hide the objects the robot has not seen for a while"><i style="background:var(--gone)"></i>possibly gone ${hiddenCount.gone}</span>`
+      + '<span><i style="background:var(--ink)"></i>robot</span>' + (relHtml ? '<br>' + relHtml : '') : LEGEND_MEM;
     for (const n of g.nodes) {
-      seen.add(n.id); const b = baseOf(n);
-      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind, font:nodeFont(n), margin:10,
+      seen.add(n.id); const b = baseOf(n), gone = n.status === 'possibly_gone';
+      if (quiet && n.kind === 'Object') b.size = gone ? 6 : 9;
+      const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind, font: quiet && gone ? { color:css('--mute'), size:10, face:FONT } : nodeFont(n), margin:10,
         title:(n.in_nams ? 'also stored in NAMS' + (n.detail ? ': ' + n.detail : '') : n.source === 'nams' ? 'stored by NAMS' + (n.review ? ' (flagged: possible duplicate)' : '') + (n.detail ? ': ' + n.detail : '') : (n.detail || '')),
         shapeProperties:{ borderDashes: n.source === 'nams' ? [4, 3] : false }, borderWidth: n.source === 'nams' ? 3 : 2 };
       if (!nodes.get(n.id)) {                                  // newly appeared: grow in from nothing
@@ -397,15 +434,15 @@ function syncGraph() {
       const id = edgeId(e); eseen.add(id);
       if (!edges.get(id)) {
         const fact = !NOLABEL.has(e.type), base = fact ? relColor(e.type) : css('--mute');
-        edges.add({ id, from:e.source, to:e.target, label: fact ? e.type.replace(/_/g, ' ').toLowerCase() : '', title:e.type.replace(/_/g, ' ').toLowerCase(), dashes: SOFT.has(e.type) || e.type === 'POSSIBLY_MOVED_FROM', length:e.type === 'LOCATED_AT' ? 50 : (e.type === 'CURRENTLY_IN' ? 60 : 130),
-          _rel:e.type, _base:base, hidden: hiddenRel.has(e.type), font:{ size:9, color:base, face:FONT, strokeWidth:4, strokeColor:css('--canvas'), align:'middle' },
+        edges.add({ id, from:e.source, to:e.target, label: fact && !quiet ? e.type.replace(/_/g, ' ').toLowerCase() : '', title:e.type.replace(/_/g, ' ').toLowerCase(), dashes: SOFT.has(e.type) || e.type === 'POSSIBLY_MOVED_FROM', length:e.type === 'LOCATED_AT' ? 50 : (e.type === 'CURRENTLY_IN' ? 60 : 130),
+          _rel:e.type, _base:base, hidden: hiddenRel.has(e.type) || (quiet && e.type === 'LOCATED_AT'), font:{ size:9, color:base, face:FONT, strokeWidth:4, strokeColor:css('--canvas'), align:'middle' },
           color:{ color:base, opacity:SOFT.has(e.type) ? .35 : (e.type === 'LOCATED_AT' ? .45 : 1) }, width: fact ? 2.2 : 1 });
         if (fact && e.memory === 'long') flashEdge(id, css('--new'));
       }
     }
     for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, css('--bad')); setTimeout(() => edges.remove(id), 900); }
     applyLayout(g);
-    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} links`;
+    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} links` + (lens === 'long' && hiddenCount.people ? ` · ${hiddenCount.people} people not shown` : '');
     if (g.nodes.length !== window._lastNodeCount) {  // keep every node in view as the graph grows
       window._lastNodeCount = g.nodes.length;
       for (const ms of [900, 2600, 5000]) setTimeout(() => !userMoved && net.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } }), ms);
@@ -586,7 +623,9 @@ function paintLens() { document.querySelectorAll('.lens').forEach(b => b.classLi
 function setLens(l) { lens = l; userMoved = false; paintLens(); nodes.clear(); edges.clear(); window._lastNodeCount = -1; syncGraph(); }
 document.querySelectorAll('.lens').forEach(b => b.onclick = () => setLens(b.dataset.lens));
 $('#namsent').onchange = () => setLens(lens);
-$('#legend').addEventListener('click', e => { const t = e.target.closest('.rel'); if (!t) return; const r = t.dataset.rel; hiddenRel.has(r) ? hiddenRel.delete(r) : hiddenRel.add(r);
+$('#legend').addEventListener('click', e => { const t = e.target.closest('.rel'); if (!t) return;
+  if (t.classList.contains('gonebtn')) { showGone = !showGone; window._lastNodeCount = -1; syncGraph(); return; }
+  const r = t.dataset.rel; hiddenRel.has(r) ? hiddenRel.delete(r) : hiddenRel.add(r);
   edges.update(edges.get().filter(x => x._rel === r).map(x => ({ id:x.id, hidden:hiddenRel.has(r) }))); t.classList.toggle('off', hiddenRel.has(r)); });
 async function refreshSummary() {
   try {
