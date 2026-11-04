@@ -6,6 +6,10 @@
 cd ~ || exit 1
 LOG=~/puppy_voice.log
 if [ ! -f /tmp/puppy_voice_booted ]; then : > "$LOG"; touch /tmp/puppy_voice_booted; fi
+# Right after a boot the robot is still standing up: its servos would be measured as "room noise" and set the hearing threshold
+# far too high (seen: 4000 instead of ~800). Wait until it has been up for 90 s.
+UP=$(cut -d. -f1 /proc/uptime)
+if [ "$UP" -lt 90 ]; then echo "$(date +%T) waiting for the robot to finish standing up"; sleep $((90 - UP)); fi
 
 answers() { [ "$(timeout 3 curl -s -o /dev/null -w '%{http_code}' "$1/robot/puppy_voice.py" 2>/dev/null)" = "200" ]; }
 
