@@ -463,8 +463,9 @@ document.addEventListener('visibilitychange', () => {
 });
 function connect() {
   const es = liveES = new EventSource('/api/events');
+  // the page's own live feed to the app on this laptop (not NAMS: that has its own tag next to it)
   es.onopen = () => { $('#conn').textContent = 'live'; $('#dot').classList.add('on'); };
-  es.onerror = () => { $('#conn').textContent = 'reconnecting'; $('#dot').classList.remove('on'); };
+  es.onerror = () => { $('#conn').textContent = 'page reconnecting'; $('#dot').classList.remove('on'); };
   es.addEventListener('status', e => {
     const d = JSON.parse(e.data); $('#scan').classList.toggle('on', d.state === 'perceiving');
     $('#vstat').textContent = d.state === 'perceiving' ? 'analysing frame' : (/identical/.test(d.note || '') ? '' : (d.note || ''));
@@ -536,7 +537,8 @@ async function refreshStats() {
   if (h != null) { const want = -h, d = ((want - needleDeg + 180) % 360 + 360) % 360 - 180; needleDeg += d; }   // shortest way round: no spinning when the angle wraps past 0
   $('#needle').style.transform = `rotate(${needleDeg}deg)`; $('#needle').style.opacity = h == null ? .25 : 1;
   const ns = s.nams_status || {};
-  $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS key rejected' : (s.nams ? `NAMS ${ns.synced_observations || 0}` + (ns.failed ? ` · ${ns.failed} err` : '') : 'NAMS off');
+  $('#nams').textContent = ns.auth === 'invalid' ? 'NAMS key rejected' : (s.nams ? (ns.auth === 'ok' ? 'NAMS ok' : 'NAMS') + (ns.failed ? ` · ${ns.failed} err` : '') : 'NAMS off');
+  $('#nams').title = s.nams ? `NAMS (agent memory): ${ns.synced_observations || 0} sightings and ${ns.synced_conversations || 0} booth conversations copied` : 'NAMS is not configured';
   $('#nams').className = 'tag' + (ns.auth === 'invalid' ? ' bad' : (s.nams ? ' ok' : '')); $('#nams').title = ns.last_error || '';
   $('#k-places').textContent = s.stats.locations ?? 0; $('#k-objects').textContent = s.stats.objects; $('#k-sightings').textContent = s.stats.observations;
   $('#k-gone').textContent = s.stats.possibly_gone; $('#k-gone').className = s.stats.possibly_gone ? 'warn' : '';

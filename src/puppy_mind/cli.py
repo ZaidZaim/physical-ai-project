@@ -202,6 +202,8 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
 
     code = check(robot_ip)
     cam = camera_url(robot_ip, light=light) if code == 0 else None
+    if not cam:  # the robot is still off or booting: its camera comes up with it at the usual address
+        cam = f"http://{robot_ip}:8080/stream?topic=/usb_cam/image_raw" + ("&width=320&height=240&quality=50" if light else "")
     if combine:
         os.environ["DRIVE_COMBINE"] = "1"
 
@@ -225,8 +227,11 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
     elif s.openai_api_key:
         print(f"Frame analysis is ON: about one camera frame every {s.watch_interval_s:g}s is sent to OpenAI ({s.vision_model}) while the camera runs.")
     bridge = _open(robot_ip, 9090, 2.0)
-    if bridge:
-        os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
+    # Always: the app keeps retrying until the robot answers. Seen at the booth: the robot was rebooting when the app started, and
+    # tricks, driving and the camera stayed off until the app was restarted.
+    os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
+    if not bridge:
+        print(f"\n The robot's rosbridge (ws://{robot_ip}:9090) does not answer yet: the app keeps trying, so a booting robot is fine.")
     os.environ["CAMERA_SOURCE"] = cam or ""  # never fall back to a laptop webcam while testing the robot
     base = f"http://{laptop}:{port}"
     if bridge:
@@ -239,12 +244,9 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
 """)
     else:
         print(f"""
- The robot's rosbridge (port 9090) is NOT reachable, so keyboard driving needs a small script ON the robot:
-   open VNC/SSH, enter the docker container, then run puppy_drive.py (see docs/ROBOT_SETUP.md section 4a), e.g.
-     python3 -c "import urllib.request as u; u.urlretrieve('{base}/robot/puppy_drive.py','puppy_drive.py')"
-     python3 puppy_drive.py --brain {base} --dry-run
- Without that you still get the live camera. Hiwonder's phone app / handle can move the robot meanwhile.
- Camera: {cam or 'NOT FOUND'}
+ Driving, tricks and the camera start as soon as the robot is up (if its rosbridge never comes up, run puppy_drive.py
+ on the robot instead: docs/ROBOT_SETUP.md section 4a, {base}/robot/puppy_drive.py).
+ Camera: {cam}
 """)
     threading.Timer(2.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     uvicorn.run("puppy_mind.server:app", host="0.0.0.0", port=port)

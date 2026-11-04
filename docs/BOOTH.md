@@ -105,6 +105,9 @@ sudo cp puppy-voice.service /etc/systemd/system/ && sudo systemctl enable --now 
 sudo systemctl restart puppy-voice     # by hand, e.g. after updating the app
 ```
 
+**The place.** At a booth the place is fixed: set `DEFAULT_LOCATION=Conference hall` and `AUTO_PLACE=false` in `.env`, so the camera
+never guesses rooms ("Unnamed area 1", or the rooms of home) and every conversation is held at the booth.
+
 **Wi-Fi on the robot.** Hiwonder's own `wifi.service` deletes every saved Wi-Fi at boot and knows only one network (its
 `wifi_conf.py`), falling back to the robot's own Wi-Fi `HW-<serial>` (192.168.149.1). It is disabled on this robot so
 NetworkManager keeps several networks (the phone hotspot first, the robot's own Wi-Fi as the last resort). Undo:
