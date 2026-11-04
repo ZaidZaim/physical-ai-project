@@ -17,8 +17,8 @@ tab.
 2. **Wake word.** The robot answers only when addressed: a conversation starts with **"Hey PuppyPi"** (or as a direct reply to its
    greeting), and follow-ups need no wake word until it has been quiet for `WAKE_WINDOW_S`. After that, the next "Hey PuppyPi"
    starts a fresh conversation. It listens only while a browser has the Booth tab open.
-3. **Trick and look up.** On the wake word it plays `WAKE_ACTION` (boxing), then tilts nose-up by `ENGAGED_LOOK_UP_DEG` to look at
-   the visitor, and levels again once the conversation goes quiet. The app window prints `wake trick boxing: played` or why not.
+3. **Look up.** On the wake word it tilts nose-up by `ENGAGED_LOOK_UP_DEG` to look at the visitor, and levels again once the
+   conversation goes quiet. `WAKE_ACTION` can add a trick first (none by default: boxing on the wake word tipped the robot over).
 4. **Conversation.** Short spoken answers. Questions about the room go to the robot's own spatial memory, so it never guesses.
 5. **One question about their interests per answer, at the right moment** (chosen in code, not by the model): what they are working
    on, how well they know Neo4j, and near the end (from the 8th answer, never right after a question of theirs) what they enjoyed at

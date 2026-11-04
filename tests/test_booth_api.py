@@ -243,6 +243,9 @@ def test_with_listen_always_off_the_robot_listens_only_while_the_booth_tab_is_op
 def test_hey_puppypi_does_the_trick_then_looks_up_then_levels_when_quiet(client):
     import math
 
+    import dataclasses
+
+    server.brain.s = dataclasses.replace(server.brain.s, wake_action="boxing")  # none by default; WAKE_ACTION still works when set
     server.brain.booth.client = FakeChat([["Hi! What would you like to know?"]])
     client.post("/api/listen")
     assert server.brain.drive.current()["pitch"] == 0.0
