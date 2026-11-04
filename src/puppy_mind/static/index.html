@@ -292,8 +292,9 @@ const FONT = css('--mono');
 
 /* ---------- graph ---------- */
 const nodes = new vis.DataSet(), edges = new vis.DataSet();
+const BASE_PHYSICS = { enabled:true, solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-60, centralGravity:.035, springLength:90, springConstant:.1, damping:.6, avoidOverlap:.5 }, stabilization:false };
 const net = new vis.Network($('#graph'), { nodes, edges }, {
-  physics: { solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-60, centralGravity:.035, springLength:90, springConstant:.1, damping:.6, avoidOverlap:.5 }, stabilization:false },
+  physics: BASE_PHYSICS,
   nodes: { shape:'dot', borderWidth:2, font:{ color:css('--ink'), size:11, face:FONT } },
   edges: { arrows:{ to:{ scaleFactor:.6 } }, smooth:{ type:'dynamic' }, font:{ size:9, face:FONT, color:css('--mute'), strokeWidth:0, align:'middle' }, width:1.2 },
   interaction: { hover:true },
@@ -338,10 +339,13 @@ const REL_COLORS = { ON:'#e0a63a', INSIDE:'#d96ca0', NEXT_TO:'#4db3d6', NEAR:'#6
 const relColor = t => REL_COLORS[t] || '#8fa0b2';
 const hiddenRel = new Set();
 const LEGEND_MEM = $('#legend').innerHTML;
-/* Long-term view: a fixed, readable layout. Places sit on a ring; each place's objects sit on rings around it, every object with
+/* Long-term view: a fixed, readable layout.")
+end = t.index("let userMoved = false;")
+t = t[:start] + r'''/* Long-term view: a fixed, readable layout. Places sit on a ring; each place's objects sit on rings around it, every object with
    SLOT px of arc so the labels never touch, and the rings far enough apart (and staggered) that labels at the sides miss each other.
-   Objects linked by a fact (on, next to, near) are placed one after the other, so their links stay short. Everything else uses physics. */
-const SLOT = 112, RING_GAP = 104, FIRST_RING = 175;
+   Objects linked by a fact (on, next to, near) are placed one after the other, so their links stay short. Every object keeps a line to its place,
+   so the map stays one connected graph. Everything else uses physics. */
+const SLOT = 98, RING_GAP = 84, FIRST_RING = 150;
 function ringPositions(ids, c) {
   const pos = {}; let r = FIRST_RING, k = 0, ring = 0;
   while (k < ids.length) {
@@ -368,7 +372,7 @@ function linkedOrder(ids, g) {  // walk the fact links so neighbours on the ring
 }
 function applyLayout(g) {
   const fixed = lens === 'long' && !$('#namsent').checked;
-  net.setOptions({ physics: { enabled: !fixed }, edges: { smooth: fixed ? { type: 'curvedCW', roundness: .12 } : { type: 'dynamic' } } });
+  net.setOptions({ physics: fixed ? { enabled: false } : BASE_PHYSICS, edges: { smooth: fixed ? { type: 'continuous', roundness: .15 } : { type: 'dynamic' } } });
   if (!fixed) return;
   const placeIds = g.nodes.filter(n => n.kind === 'Place').map(n => n.id);
   const byPlace = {};
@@ -385,7 +389,7 @@ function applyLayout(g) {
   const pos = {};
   order.forEach((id, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / Math.max(1, n); pos[id] = { x: R * Math.cos(a), y: R * Math.sin(a) }; });
   for (const id of order) Object.assign(pos, ringPositions(objsOf(id), pos[id]).pos);
-  for (const nd of g.nodes) if (nd.kind === 'Robot') { const e = g.edges.find(x => x.source === nd.id), c = e && pos[e.target]; if (c) pos[nd.id] = { x: c.x, y: c.y + 105 }; }
+  for (const nd of g.nodes) if (nd.kind === 'Robot') { const e = g.edges.find(x => x.source === nd.id), c = e && pos[e.target]; if (c) pos[nd.id] = { x: c.x, y: c.y + 92 }; }
   for (const [id, p] of Object.entries(pos)) if (nodes.get(id)) nodes.update({ id, x: p.x, y: p.y });
 }
 /* What the long-term map leaves out: people (they are not part of the room, and the booth keeps no one), and objects that are
@@ -400,14 +404,16 @@ function visibleGraph(g) {
   const drop = new Set([...people, ...(showGone ? [] : gone)].map(n => n.id));
   return { ...g, nodes: g.nodes.filter(n => !drop.has(n.id)), edges: g.edges.filter(e => !drop.has(e.source) && !drop.has(e.target)) };
 }
-let userMoved = false; net.on('dragStart', () => userMoved = true); net.on('zoom', e => { if (e.direction) userMoved = true; });
+let userMoved = false;
+
+net.on('dragStart', () => userMoved = true); net.on('zoom', e => { if (e.direction) userMoved = true; });
 let syncing = Promise.resolve();
 function syncGraph() {
   syncing = syncing.then(async () => {
     const asked = lens;
     const g = visibleGraph(await api('/api/graph?lens=' + asked + ($('#namsent').checked ? '&nams=true' : '')));
     if (asked !== lens) return;                                // the user switched lens while this was loading
-    const quiet = lens === 'long' && !$('#namsent').checked;   // the fixed map: colour says the relationship, position says the place
+    const quiet = lens === 'long' && !$('#namsent').checked;   // the long-term map: place spokes in the place colour, facts stand out
     const seen = new Set();
     colorPlaces(g.nodes.filter(n => n.kind === 'Place').map(n => n.label));
     const relCount = {}; for (const e of g.edges) if (!NOLABEL.has(e.type)) relCount[e.type] = (relCount[e.type] || 0) + 1;
@@ -417,7 +423,7 @@ function syncGraph() {
       + '<span><i style="background:var(--ink)"></i>robot</span>' + (relHtml ? '<br>' + relHtml : '') : LEGEND_MEM;
     for (const n of g.nodes) {
       seen.add(n.id); const b = baseOf(n), gone = n.status === 'possibly_gone';
-      if (quiet && n.kind === 'Object') b.size = gone ? 6 : 9;
+      if (quiet && n.kind === 'Object') b.size = gone ? 7 : 11;
       const view = { id:n.id, label:nodeLabel(n), shape:b.shape, _bg:b.bg, color:{ background:b.bg, border:b.bg }, kind:n.kind, font: quiet && gone ? { color:css('--mute'), size:10, face:FONT } : nodeFont(n), margin:10,
         title:(n.in_nams ? 'also stored in NAMS' + (n.detail ? ': ' + n.detail : '') : n.source === 'nams' ? 'stored by NAMS' + (n.review ? ' (flagged: possible duplicate)' : '') + (n.detail ? ': ' + n.detail : '') : (n.detail || '')),
         shapeProperties:{ borderDashes: n.source === 'nams' ? [4, 3] : false }, borderWidth: n.source === 'nams' ? 3 : 2 };
@@ -433,10 +439,12 @@ function syncGraph() {
     for (const e of g.edges) {
       const id = edgeId(e); eseen.add(id);
       if (!edges.get(id)) {
-        const fact = !NOLABEL.has(e.type), base = fact ? relColor(e.type) : css('--mute');
-        edges.add({ id, from:e.source, to:e.target, label: fact && !quiet ? e.type.replace(/_/g, ' ').toLowerCase() : '', title:e.type.replace(/_/g, ' ').toLowerCase(), dashes: SOFT.has(e.type) || e.type === 'POSSIBLY_MOVED_FROM', length:e.type === 'LOCATED_AT' ? 50 : (e.type === 'CURRENTLY_IN' ? 60 : 130),
-          _rel:e.type, _base:base, hidden: hiddenRel.has(e.type) || (quiet && e.type === 'LOCATED_AT'), font:{ size:9, color:base, face:FONT, strokeWidth:4, strokeColor:css('--canvas'), align:'middle' },
-          color:{ color:base, opacity:SOFT.has(e.type) ? .35 : (e.type === 'LOCATED_AT' ? .45 : 1) }, width: fact ? 2.2 : 1 });
+        const fact = !NOLABEL.has(e.type), src = g.nodes.find(n => n.id === e.source) || {};
+        const spoke = quiet && e.type === 'LOCATED_AT', base = fact ? relColor(e.type) : (spoke && placeColors[src.place]) || css('--mute');
+        edges.add({ id, from:e.source, to:e.target, label: fact ? e.type.replace(/_/g, ' ').toLowerCase() : '', title:e.type.replace(/_/g, ' ').toLowerCase(), dashes: SOFT.has(e.type) || e.type === 'POSSIBLY_MOVED_FROM' || (spoke && src.status === 'possibly_gone'),
+          length: e.type === 'LOCATED_AT' ? (quiet ? 130 : 50) : (e.type === 'CURRENTLY_IN' ? 60 : (quiet ? 80 : 130)), arrows: spoke ? { to: { enabled: false } } : undefined,
+          _rel:e.type, _base:base, hidden: hiddenRel.has(e.type), font:{ size:9, color:base, face:FONT, strokeWidth:4, strokeColor:css('--canvas'), align:'middle' },
+          color:{ color:base, opacity:SOFT.has(e.type) ? .35 : (e.type === 'LOCATED_AT' ? (spoke ? .55 : .45) : 1) }, width: fact ? 2.4 : (spoke ? 1.4 : 1) });
         if (fact && e.memory === 'long') flashEdge(id, css('--new'));
       }
     }
