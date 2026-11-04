@@ -210,7 +210,7 @@ def test_a_conversation_ends_when_they_leave_and_what_they_enjoyed_is_asked_only
 
 
 def test_do_trick_tool_uses_the_rate_limited_gesture():
-    h, _ = host([[call("do_trick", name="boxing"), "Ta-da!"]], gesture_fn=lambda n: {"ok": False, "reason": "tricks are rate-limited"})
+    h, _ = host([[call("do_trick", name="boxing"), "Ta-da!"]], gesture_fn=lambda n, **kw: {"ok": False, "reason": "tricks are rate-limited"})
     r = h.turn("can you do boxing?")
     assert r["evidence"][0]["result"]["reason"] == "tricks are rate-limited"
 

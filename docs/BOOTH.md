@@ -133,12 +133,18 @@ Laptop side: `.env` needs `OPENAI_API_KEY`. Optional: `EVENT_NAME`, `BOOTH_INFO`
 `LIVE_VOICE=true` in `.env` makes the conversations GPT-Live calls (OpenAI `gpt-live-1`, a full-duplex voice model) instead of
 turn by turn. Measured: the classic turn needs about 5 to 7 s from the end of a question to the first sound (1.5 s of silence on
 the robot, then transcription, the chat model, and the whole reply synthesised before it plays); GPT-Live starts answering about
-1 to 1.5 s after the visitor stops (the first answer of a call about 2.5 s, since the wake word is checked first).
+1 to 1.5 s after the visitor stops, the first answer of a call included.
 
 - The robot asks the laptop at start (`/api/voice/mode`) and then keeps one WebSocket (`/api/voice/live`). Outside a call it still
-  sends only what someone said; the laptop checks it for "Hey PuppyPi" (transcription, the same wake check) and only then opens a
-  call. During the call the robot streams its microphone and plays the answer as it arrives. Switching `LIVE_VOICE` off needs only
-  an app restart: the robot falls back to the classic turns. `--classic` on the robot forces them.
+  sends only what someone says, but streamed from the start of the sentence (GPT-Live listens at real-time speed: a sentence sent
+  only once it ended cost its whole length again). Each sentence opens a GPT-Live session at once; nothing it says is played and
+  nothing is kept until its own transcript shows "Hey PuppyPi" (or an answer to a greeting). Without the wake word the session
+  closes about 2 s after the sentence (a fraction of a cent). With it, the call goes on: the robot streams its microphone and plays
+  the answer as it arrives. Measured: the first answer starts about 1.3 s after the visitor stops (2.4 to 4.5 s when the wake word
+  was transcribed separately first). Switching `LIVE_VOICE` off needs only an app restart: the robot falls back to the classic
+  turns. `--classic` on the robot forces them.
+- Tricks a visitor asks for wait only for the previous trick (2 s), not the 60 s cooldown of unprompted tricks (that refused the
+  second trick at the booth). Push-ups and moonwalk stay Booth tab buttons only: they need space.
 - The call closes on goodbye, the Booth tab's End conversation, or `WAKE_WINDOW_S` of quiet. GPT-Live costs $0.05 per minute of
   call (billed per second), plus the backend model's tokens when it runs a tool.
 - Tricks, questions about the room and a new visitor go to GPT-Live's delegated backend (`LIVE_BACKEND_MODEL`, default `gpt-6-luna`)

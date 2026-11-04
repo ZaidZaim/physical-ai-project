@@ -6,14 +6,19 @@ waiting for silence on the robot, then transcription, the chat model and the who
 How it runs:
 - The robot keeps one WebSocket to the laptop (/api/voice/live). Outside a call it sends only what someone said (one utterance per
   message, as before); during a call it streams its microphone, and it plays whatever audio comes back.
-- The laptop keeps the OpenAI key and the booth rules. It checks each utterance for "Hey PuppyPi" the cheap way (transcription and the
-  same wake check as before), and only then opens a GPT-Live call. The call closes on goodbye, the Booth tab's End conversation, or
-  WAKE_WINDOW_S of quiet: GPT-Live is billed per minute.
+- The laptop keeps the OpenAI key and the booth rules. Every utterance opens a GPT-Live session at once (on a connection kept ready),
+  but nothing it says is played and nothing is kept until GPT-Live's own live transcript shows the wake word ("Hey PuppyPi", or an
+  answer to a greeting): then the held answer plays and the call goes on. Otherwise the session is closed after a second or two
+  (billed per second: a fraction of a cent). Checking the wake word with a separate transcription first made every first answer
+  1 to 2 s slower (seen at the booth).
+- A call closes on goodbye, the Booth tab's End conversation, or WAKE_WINDOW_S of quiet: GPT-Live is billed per minute.
 - Tricks, questions about the room and a new visitor are function tools of GPT-Live's delegated backend (LIVE_BACKEND_MODEL).
 - The live transcripts go into the same Encounter as a classic conversation, so the anonymous booth notes are made the same way.
 - The robot's microphone hears its own speaker, so while it talks (and briefly after) silence is sent instead: no barge-in yet.
 
-Robot frames, binary: b"U" + PCM (one utterance, outside a call), b"M" + PCM (microphone stream, during a call). Laptop frames:
+Robot frames, binary: b"S" + PCM (someone is speaking, outside a call: streamed from the start of the sentence, since GPT-Live
+listens at real-time speed and a sentence sent only once it ended cost its whole length again), b"E" (that sentence ended),
+b"U" + PCM (a whole utterance at once: older robot clients), b"M" + PCM (microphone stream, during a call). Laptop frames:
 binary b"A" + PCM (play this), text {"type": "call", "open": bool} and {"type": "say", "text": ...}. PCM is mono 16-bit 16 kHz.
 """
 from __future__ import annotations
@@ -31,7 +36,7 @@ import wave
 import numpy as np
 
 from .booth import TOOLS, says_goodbye
-from .voice import fix_terms, heard_nothing
+from .voice import fix_terms
 from .wizard import system_prompt
 
 RATE = 16000
@@ -41,33 +46,38 @@ LOUD_OUT = 200.0            # output audio louder than this (RMS) is the robot t
 ECHO_TAIL_S = 0.6           # the microphone stays muted this long after the robot's last audible sound (its player buffers)
 BOT_TURN_GAP_S = 1.2        # no new transcript for this long: the turns so far are committed (GPT-Live sends no end-of-turn event)
 MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
+PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
+PROBE_AFTER_ANSWER_S = 0.7  # ... or this long after GPT-Live began answering it (its transcript of the sentence is complete by then)
+PROBE_MAX_S = 20.0          # ... and a long monologue without it after this long
+SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
+OVERLAP_MS = 100            # speech resumed within this of a scrap's end overlaps it (see merge_turns)
 
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
            "ask_world for anything about the room or what the robot can see, new_visitor when a different person has taken over. "
            "Reply with one short plain sentence the voice can say. Never ask for or keep personal data.")
 
 
-def _plain(s: str) -> str:
-    return " ".join("".join(c if c.isalnum() else " " for c in (s or "").lower()).split())
-
-
-def merge_turns(pieces: list[tuple[float, int, str, str]]) -> list[dict]:
-    """Transcript pieces (start_ms, n, role, text) -> turns. Ordered by start_ms, each run of one speaker is a turn. A scrap of at
-    most two words inside the other side's speech (the robot's "I'd" before the visitor's last word) joins its own speaker's next
-    turn, so the visitor's sentence stays whole. Sound labels such as "[hum]" are dropped."""
+def merge_turns(pieces: list[tuple]) -> list[dict]:
+    """Transcript pieces (start_ms, n, role, text[, end_ms]) -> turns. Ordered by start_ms, each run of one speaker is a turn.
+    A scrap of at most two words that OVERLAPS the other side's speech (the robot's "I'd" said over the visitor's last word) joins
+    its own speaker's next turn, so the visitor's sentence stays whole. A short answer in its own pause ("GenAI, please", "Okay")
+    stays a turn of its own. Sound labels such as "[hum]" are dropped."""
     runs: list[dict] = []
-    for _, _, role, text in sorted(pieces):
-        text = re.sub(r"\[[^\]]*\]", " ", text)
+    for p in sorted(pieces, key=lambda p: (p[0], p[1])):
+        start, role, text = p[0], p[2], re.sub(r"\[[^\]]*\]", " ", p[3])
+        end = p[4] if len(p) > 4 and p[4] is not None else start + 200
         if runs and runs[-1]["role"] == role:
             runs[-1]["content"] += text
+            runs[-1]["end"] = max(runs[-1]["end"], end)
         elif text.strip():
-            runs.append({"role": role, "content": text})
+            runs.append({"role": role, "content": text, "start": start, "end": end})
     changed = True
     while changed:
         changed = False
         for i in range(1, len(runs) - 1):
-            r = runs[i]
-            if len(r["content"].split()) <= 2 and runs[i - 1]["role"] == runs[i + 1]["role"] != r["role"]:
+            prev, r, nxt = runs[i - 1], runs[i], runs[i + 1]
+            overlaps = nxt["start"] < r["end"] + OVERLAP_MS  # the other side carries on while the scrap is still being said
+            if len(r["content"].split()) <= 2 and prev["role"] == nxt["role"] != r["role"] and overlaps:
                 later = next((x for x in runs[i + 2:] if x["role"] == r["role"]), None)
                 if later is not None:
                     later["content"] = r["content"] + " " + later["content"]
@@ -75,7 +85,8 @@ def merge_turns(pieces: list[tuple[float, int, str, str]]) -> list[dict]:
                     earlier = next((x for x in reversed(runs[:i - 1]) if x["role"] == r["role"]), None)
                     if earlier is not None:
                         earlier["content"] += " " + r["content"]
-                runs[i - 1]["content"] += runs[i + 1]["content"]
+                prev["content"] += nxt["content"]
+                prev["end"] = max(prev["end"], nxt["end"])
                 del runs[i:i + 2]
                 changed = True
                 break
@@ -131,35 +142,39 @@ async def openai_connect(s):
 
 
 class LiveCall:
-    """One GPT-Live conversation: opened by the wake word, closed on goodbye or quiet."""
+    """One GPT-Live session for one utterance onwards: a probe until the wake word shows in its transcript, then a call."""
 
-    def __init__(self, bridge: "LiveBridge", first_pcm: bytes, first_text: str):
+    def __init__(self, bridge: "LiveBridge", first_pcm: bytes):
         self.b, self.brain = bridge, bridge.brain
         self.s, self.booth = self.brain.s, self.brain.booth
-        self.enc = self.booth._encounter(None, self.brain.place_info().get("name"))
-        text = fix_terms(first_text)
-        self.enc.messages.append({"role": "user", "content": text})  # the wake utterance: the conversation is open from now on
-        self.enc.turns += 1
+        self.enc = None              # made when the wake word is confirmed: an utterance that was not for the robot leaves nothing
+        self.confirmed = False
+        self.held: list[bytes] = []  # GPT-Live's answer while unconfirmed: played at once on the wake word, else dropped
         self.first, self.pending, self.starting, self.open = first_pcm, bytearray(), True, True
-        self.wake_text, self.last_heard = text, text
-        # The transcript as GPT-Live sends it: pieces (start_ms, n, role, text) on one timeline for both sides. Their text arrives in
-        # bursts and the wake clip's transcript still arrives while the robot already answers, so turns are never cut by arrival:
-        # the pieces are ordered by start_ms and each run of one speaker is a turn (see turns()).
-        self.pieces: list[tuple[float, int, str, str]] = []
+        self.wake_text = self.last_heard = ""
+        # The transcript as GPT-Live sends it: pieces (start_ms, n, role, text, end_ms) on one timeline for both sides. Their text
+        # arrives in bursts and the first utterance's transcript still arrives while the robot already answers, so turns are never
+        # cut by arrival: the pieces are ordered by start_ms and each run of one speaker is a turn (see merge_turns).
+        self.pieces: list[tuple] = []
         self.published = ""   # the last robot turn shown / noted, so a turn is published again only when it grew
         self.committed_at = 0.0
         now = time.monotonic()
         self.opened = self.heard_at = self.bot_at = self.delta_at = now
+        self.started_at: float | None = None
+        self.answer_at: float | None = None
+        self.speech_end_at: float | None = None  # the robot said the sentence ended (b"E")
         self.close_at: float | None = None
         self.ws = None
         self.closed_reason = ""
 
     # ---- the OpenAI side
     def session_config(self) -> dict:
-        s, enc = self.s, self.enc
-        state = "\nSTATE OF THIS CONVERSATION\n- They just said your wake word: answer what they asked, or say hi if that was all."
-        if enc.greeted:
-            state += f"\n- You already greeted them out loud with: \"{enc.greeted}\" Do not greet again; carry on from there."
+        s = self.s
+        state = ("\nSTATE OF THIS CONVERSATION\n- Someone just said your wake word (or answered your greeting): answer what they asked, "
+                 "or say hi if that was all.")
+        g = self.booth._recent_greeting
+        if g and time.monotonic() - g[0] < 120:
+            state += f"\n- You already greeted them out loud with: \"{g[1]}\" Do not greet again; carry on from there."
         if s.claw_machine:
             state += f"\n- When they leave, invite them to try the claw machine to win {s.claw_prize}."
         return {
@@ -184,7 +199,7 @@ class LiveCall:
             await self.send({"type": "session.input_audio.append", "audio": base64.b64encode(pcm[:len(pcm) // 2 * 2]).decode()})
 
     async def run(self, ws=None) -> None:
-        """ws: a connection opened while the wake word was checked (saves about a second); else one is opened here."""
+        """ws: a connection kept ready (saves up to a second and a half); else one is opened here."""
         watch = None
         t0 = time.monotonic()
         try:
@@ -196,10 +211,10 @@ class LiveCall:
                     break
                 if m.get("type") == "error":
                     raise RuntimeError((m.get("error") or {}).get("message", "GPT-Live refused the session"))
-            print("live call open (%.1fs): %r" % (time.monotonic() - t0, self.last_heard), flush=True)
+            self.started_at = time.monotonic()
             self.starting = False
-            await self.mic(self.first)            # what they said with the wake word: answered first
-            if self.pending:                      # what they said while the call was opening
+            await self.mic(self.first)            # the utterance: GPT-Live transcribes it (the wake check) and answers it
+            if self.pending:                      # what was said while the session was opening
                 await self.mic(bytes(self.pending))
                 self.pending.clear()
             watch = asyncio.create_task(self._watch())
@@ -213,35 +228,47 @@ class LiveCall:
             self.open = False
             if watch:
                 watch.cancel()
-            self.commit()
-            self.enc.ended = True  # the next visitor says the wake word again
+            if self.confirmed:
+                self.commit()
+                self.enc.ended = True  # the next visitor says the wake word again
+                print("live call closed after %.0fs (%s)" % (time.monotonic() - self.opened, self.closed_reason or "connection ended"), flush=True)
             try:
                 await self.ws.close()
             except Exception:
                 pass
-            print("live call closed after %.0fs (%s)" % (time.monotonic() - self.opened, self.closed_reason or "connection ended"), flush=True)
 
     async def on_event(self, m: dict) -> str | None:
         t, now = m.get("type"), time.monotonic()
         if t == "session.output_audio.delta":
-            await self.b.play(louder_pcm(base64.b64decode(m.get("delta") or ""), self.s.voice_gain))
+            pcm = louder_pcm(base64.b64decode(m.get("delta") or ""), self.s.voice_gain)
+            if self.confirmed:
+                await self.b.play(pcm)
+            else:
+                self.held.append(pcm)
         elif t in ("session.input_transcript.delta", "session.output_transcript.delta"):
             user = t == "session.input_transcript.delta"
             last = self.pieces[-1][0] if self.pieces else 0.0
-            start = m.get("start_ms")
-            self.pieces.append((float(start) if start is not None else last + 1.0, len(self.pieces), "user" if user else "assistant", m.get("delta") or ""))
+            start, end = m.get("start_ms"), m.get("end_ms")
+            start = float(start) if start is not None else last + 1.0
+            self.pieces.append((start, len(self.pieces), "user" if user else "assistant", m.get("delta") or "",
+                                float(end) if end is not None else None))
             self.delta_at = now
             if user:
                 self.heard_at = now
             else:
                 self.bot_at = now
+                self.answer_at = self.answer_at or now
+            if not self.confirmed:
+                heard = " ".join(x["content"] for x in merge_turns(self.pieces) if x["role"] == "user")
+                if heard and self.booth.addressed(heard, None)[0]:
+                    await self.confirm(heard)
         elif t == "response.event":
             ev = m.get("event") or {}
             item = ev.get("item") or {}
             if ev.get("type") in ("response.created", "response.output_item.done", "response.failed", "error"):
                 print("live backend:", ev.get("type"), item.get("type") or "", item.get("name") or "", flush=True)
-            if ev.get("type") == "response.output_item.done" and item.get("type") == "function_call":
-                asyncio.create_task(self._tool(m.get("delegation_id"), item))
+            if ev.get("type") == "response.output_item.done" and item.get("type") == "function_call" and self.confirmed:
+                asyncio.create_task(self._tool(item))
         elif t == "error":
             err = m.get("error") or {}
             print("GPT-Live error:", err.get("code"), str(err.get("message"))[:200], flush=True)
@@ -249,7 +276,21 @@ class LiveCall:
             return "closed"
         return None
 
-    async def _tool(self, delegation_id: str | None, item: dict) -> None:
+    async def confirm(self, heard: str) -> None:
+        """The wake word (or an answer to a greeting) is in the transcript: this is a conversation. Play what is held, keep notes."""
+        self.confirmed = True
+        self.wake_text = self.last_heard = fix_terms(heard)
+        self.enc = self.booth._encounter(None, self.brain.place_info().get("name"))
+        self.enc.messages.append({"role": "user", "content": self.wake_text})  # the conversation is open from now on
+        self.enc.turns += 1
+        print("live: woken by %r (%.1fs after the session started)" % (self.wake_text, time.monotonic() - (self.started_at or self.opened)), flush=True)
+        self.brain.on_wake()  # look up at the visitor
+        await self.b.tell({"type": "call", "open": True})
+        held, self.held = self.held, []
+        for pcm in held:
+            await self.b.play(pcm)
+
+    async def _tool(self, item: dict) -> None:
         name = item.get("name", "")
         try:
             args = json.loads(item.get("arguments") or "{}")
@@ -264,7 +305,7 @@ class LiveCall:
     # ---- turns, rebuilt from the timeline
     def turns(self) -> list[dict]:
         out = merge_turns(self.pieces)
-        if not out or out[0]["role"] != "user":  # GPT-Live did not transcribe the wake clip (yet): what the wake check heard
+        if not out or out[0]["role"] != "user":  # GPT-Live did not transcribe the wake utterance (yet): what confirmed it
             out.insert(0, {"role": "user", "content": self.wake_text})
         return out
 
@@ -297,8 +338,14 @@ class LiveCall:
             self.close_at = time.monotonic() + 0.5  # once the goodbye has been played
 
     def tick(self) -> str | None:
-        """Housekeeping, about four times a second: finish a quiet robot turn; return a reason when the call should close."""
+        """Housekeeping, about four times a second: end a probe that was not for the robot, commit quiet turns, and return a
+        reason when the call should close."""
         now = time.monotonic()
+        if not self.confirmed:
+            if ((self.speech_end_at and now - self.speech_end_at > PROBE_AFTER_SPEECH_S)
+                    or (self.answer_at and now - self.answer_at > PROBE_AFTER_ANSWER_S) or now - self.opened > PROBE_MAX_S):
+                return "no wake word"
+            return None
         if self.pieces and self.delta_at > self.committed_at and now - self.delta_at > BOT_TURN_GAP_S:
             self.committed_at = now
             self.commit()
@@ -324,6 +371,7 @@ class LiveCall:
         if not self.open:
             return
         self.closed_reason = reason
+        self.held = []
         try:
             await self.send({"type": "session.close", "event_id": "close-" + uuid.uuid4().hex[:6]})
         except Exception:
@@ -339,9 +387,10 @@ class LiveBridge:
         self.brain = brain
         self.ws = None
         self.call: LiveCall | None = None
-        self.checking = False
         self.play_end = 0.0
         self.audible_until = 0.0
+        self.spare: asyncio.Task | None = None  # a GPT-Live connection kept ready for the next utterance
+        self.spare_at = 0.0
 
     def busy(self) -> bool:
         """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos)."""
@@ -361,8 +410,27 @@ class LiveBridge:
         if self.ws is not None:
             await self.ws.send_text(json.dumps(msg))
 
+    def _renew_spare(self) -> None:
+        old = self.spare
+        if old is not None:
+            old.add_done_callback(lambda f: (not f.cancelled() and f.exception() is None) and asyncio.ensure_future(f.result().close()))
+        self.spare, self.spare_at = asyncio.create_task(openai_connect(self.brain.s)), time.monotonic()
+
+    async def _take_spare(self):
+        """The ready connection (a fresh one is started for the next time); None if it failed, and the call opens its own."""
+        spare, self.spare = self.spare, None
+        self.spare, self.spare_at = asyncio.create_task(openai_connect(self.brain.s)), time.monotonic()
+        if spare is None:
+            return None
+        try:
+            ws = await spare
+            return ws if getattr(ws, "close_code", None) is None else None
+        except Exception:
+            return None
+
     async def serve(self, ws) -> None:
         self.ws = ws
+        self._renew_spare()
         ticker = asyncio.create_task(self._tick())
         try:
             while True:
@@ -374,61 +442,49 @@ class LiveBridge:
                     continue
                 kind, pcm = data[:1], data[1:]
                 call = self.call
-                if kind == b"M" and call is not None and call.open:
-                    await call.mic(bytes(len(pcm)) if self.busy() else pcm)
-                elif kind == b"U":
-                    if call is not None and call.starting:
+                if kind == b"E":
+                    if call is not None and not call.confirmed and call.speech_end_at is None:
+                        call.speech_end_at = time.monotonic()
+                elif call is not None and call.open:
+                    if call.starting:
                         call.pending += pcm
-                    elif call is None and not self.checking:
-                        self.checking = True
-                        asyncio.create_task(self._utterance(pcm))
+                    elif kind in (b"M", b"S") or not call.confirmed:  # a probe hears the rest of the sentence as it is said
+                        await call.mic(bytes(len(pcm)) if self.busy() else pcm)
+                elif kind in (b"S", b"U") and not self.busy() and self.brain.listening:
+                    asyncio.create_task(self._probe(pcm, ended=kind == b"U"))
         finally:
             ticker.cancel()
             if self.call is not None:
                 await self.call.close("the robot disconnected")
+            if self.spare is not None:
+                self._renew_spare()  # closes the spare when it is ready
+                self.spare.cancel()
 
-    async def _utterance(self, pcm: bytes) -> None:
-        """Outside a call: is this someone saying the wake word (or answering a greeting)? Then open a call."""
+    async def _probe(self, pcm: bytes, ended: bool = False) -> None:
+        """Someone speaks outside a call: open a GPT-Live session at once; it becomes a call if the wake word is in it."""
+        call = self.call = LiveCall(self, pcm)
+        if ended:
+            call.speech_end_at = time.monotonic()
         try:
-            if self.busy() or not self.brain.listening or not self.brain.voice:
-                return
-            warm = asyncio.create_task(openai_connect(self.brain.s))  # meanwhile: connected by the time we know
-            text = await asyncio.to_thread(self.brain.voice.transcribe, pcm_to_wav(pcm), "speech.wav")
-            ok = not heard_nothing(text) and self.brain.booth.addressed(text, None)[0]
-            if not ok:
-                warm.add_done_callback(lambda f: f.exception() is None and asyncio.ensure_future(f.result().close()))
-                return
-            print("live: woken by %r" % text, flush=True)
-            self.call = LiveCall(self, pcm, text)
-            self.brain.on_wake()  # look up at the visitor while the call opens
-            try:
-                ws = await warm
-            except Exception:
-                ws = None  # LiveCall.run opens its own
-            asyncio.create_task(self._run_call(self.call, ws))
-        except Exception as e:
-            print("live wake check failed:", e, flush=True)
-        finally:
-            self.checking = False
-
-    async def _run_call(self, call: LiveCall, ws=None) -> None:
-        await self.tell({"type": "call", "open": True})
-        try:
-            await call.run(ws)
+            await call.run(await self._take_spare())
         finally:
             if self.call is call:
                 self.call = None
-            try:
-                await self.tell({"type": "call", "open": False})
-            except Exception:
-                pass
+            if call.confirmed:
+                try:
+                    await self.tell({"type": "call", "open": False})
+                except Exception:
+                    pass
 
     async def _tick(self) -> None:
-        """Every second: the head-levelling clock the classic client's polls gave, and greetings or cheers waiting to be said."""
+        """Every second: the head-levelling clock the classic client's polls gave, greetings or cheers waiting to be said, and a
+        fresh ready connection now and then."""
         while True:
             await asyncio.sleep(1.0)
             try:
                 self.brain.booth_tick()
+                if self.call is None and time.monotonic() - self.spare_at > SPARE_MAX_AGE_S:
+                    self._renew_spare()
                 if self.call is None and not self.busy() and self.brain.voice:
                     it = self.brain.booth.outbox.next()
                     if it:

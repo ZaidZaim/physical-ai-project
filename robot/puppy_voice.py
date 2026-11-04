@@ -21,6 +21,7 @@ answer as it arrives, until the call ends. --classic forces the old turn by turn
 import argparse
 import array
 import base64
+import collections
 import io
 import json
 import os
@@ -321,8 +322,9 @@ class Voice:
                 raise LiveOff(str(e))
             raise
         print("GPT-Live: connected to", url)
+        # stderr: between sentences the stream pauses and aplay prints "underrun!!!" (harmless; it filled the log)
         player = subprocess.Popen(["aplay", "-q", "-D", self.a.speaker, "-t", "raw", "-f", "S16_LE", "-r", str(RATE), "-c", "1"],
-                                  stdin=subprocess.PIPE)
+                                  stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
         mic = subprocess.Popen(["arecord", "-q", "-D", self.a.mic, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
                                stdout=subprocess.PIPE)
         state = {"call": False, "play_until": 0.0, "error": None}
@@ -353,6 +355,8 @@ class Voice:
             self.measure(mic, n)
             floor, speech, quiet, started, voiced = 0.0, bytearray(), 0, False, 0
             end_quiet = int(self.a.live_silence / CHUNK_S)
+            pre = collections.deque(maxlen=int(0.3 / CHUNK_S))  # the start of the first word, from before it was loud enough
+            streaming = False  # this sentence is being streamed (b"S"): GPT-Live hears it while it is said
             while True:
                 if state["error"] is not None:
                     if ws.close_code == 4001:
@@ -363,25 +367,34 @@ class Voice:
                     raise SystemExit("microphone stopped: check --mic (arecord -l)")
                 if state["call"]:  # in a call: stream everything (the laptop mutes it while the robot talks)
                     ws.send_bytes(b"M" + buf)
-                    speech, quiet, started, voiced = bytearray(), 0, False, 0
+                    speech, quiet, started, voiced, streaming = bytearray(), 0, False, 0, False
                     continue
                 if time.time() < state["play_until"] + 0.5:  # a greeting or the end of a goodbye is playing: that is not a visitor
-                    speech, quiet, started, voiced = bytearray(), 0, False, 0
+                    speech, quiet, started, voiced, streaming = bytearray(), 0, False, 0, False
                     continue
                 level = rms(buf)  # outside a call: only what someone says is sent, as one utterance (the laptop checks the wake word)
                 floor = level if floor == 0 else (floor * 0.98 + level * 0.02 if not started else floor)
                 loud = level > max(self.a.threshold, floor * 3)
                 if loud:
+                    if not started:
+                        speech = bytearray(b"".join(pre))
                     started, quiet, voiced = True, 0, voiced + 1
                 elif started:
                     quiet += 1
-                if started:
-                    speech += buf
-                    if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
-                        pcm, loud_s = trim_tail(bytes(speech), quiet), voiced * CHUNK_S
-                        speech, quiet, started, voiced = bytearray(), 0, False, 0
-                        if loud_s >= MIN_VOICE_S:
-                            ws.send_bytes(b"U" + pcm)
+                if not started:
+                    pre.append(buf)
+                    continue
+                speech += buf
+                if streaming:
+                    ws.send_bytes(b"S" + buf)
+                elif voiced * CHUNK_S >= MIN_VOICE_S:  # real speech, not a click: stream it from its start
+                    ws.send_bytes(b"S" + bytes(speech))
+                    streaming = True
+                if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
+                    if streaming:
+                        ws.send_bytes(b"E")
+                    speech, quiet, started, voiced, streaming = bytearray(), 0, False, 0, False
+                    pre.clear()
         finally:
             for proc in (mic, player):
                 try:
@@ -423,7 +436,8 @@ def main():
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")
     ap.add_argument("--classic", action="store_true", help="never use GPT-Live calls, even when the laptop offers them")
-    ap.add_argument("--live-silence", type=float, default=0.8, help="GPT-Live mode: quiet that ends the wake sentence (the call itself needs none)")
+    ap.add_argument("--live-silence", type=float, default=0.6,
+                    help="GPT-Live mode: quiet that ends the wake sentence (the rest of the question streams into the call)")
     a = ap.parse_args()
     a.brain = a.brain.rstrip("/")
     for name, tool in (("mic", "arecord"), ("speaker", "aplay")):

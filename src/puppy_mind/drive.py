@@ -75,10 +75,13 @@ class DriveState:
         """Body pitch the robot should hold: slightly nose-up in booth mode (to see faces and badges), level otherwise."""
         return math.radians(self.look_up_deg) if self.booth else 0.0
 
-    def request_action(self, name: str, manual: bool = False) -> dict:
+    def request_action(self, name: str, manual: bool = False, asked: bool = False) -> dict:
         """Ask the robot to play a trick. Returns {ok, reason}. Never while moving, navigating or within the rate limits.
         `manual`: pressed in the Booth tab, so the big tricks are allowed and the gap is MANUAL_GAP_S instead of the cooldown that
-        spaces out automatic tricks (the hourly limit still holds: servo heat and battery)."""
+        spaces out automatic tricks (the hourly limit still holds: servo heat and battery).
+        `asked`: a visitor asked for it in the conversation: the same short gap (at the booth the 60 s cooldown refused the second
+        trick a visitor asked for), but never a big trick (those need space: buttons only)."""
+        quick = manual or asked
         with self._lock:
             now = time.monotonic()
             self._action_times = [t for t in self._action_times if now - t < 3600]
@@ -86,9 +89,9 @@ class DriveState:
                 "unknown trick" if name not in TRICKS + (BIG_TRICKS if manual else ()) else
                 "booth mode is off" if not self.booth else
                 "a trick is already running" if now < self._action_until else
-                "the last trick is still settling" if manual and now < self._action_until + MANUAL_GAP_S else
+                "the last trick is still settling" if quick and now < self._action_until + MANUAL_GAP_S else
                 "the robot is moving" if now < self._moving_until or self._auto else
-                "tricks are rate-limited" if not manual and self._action_times and now - self._action_times[-1] < self.gesture_cooldown_s else
+                "tricks are rate-limited" if not quick and self._action_times and now - self._action_times[-1] < self.gesture_cooldown_s else
                 "hourly trick limit reached" if len(self._action_times) >= self.max_gestures_per_hour else ""
             )
             if reason:

@@ -464,12 +464,12 @@ class Brain:
             self.drive.set_booth(True, self.s.idle_look_up_deg)
         self.booth.maybe_invite(self.listening and not self._engaged)  # the claw machine cheerleader, when nobody talks to the robot
 
-    def gesture(self, name: str, manual: bool = False) -> dict:
+    def gesture(self, name: str, manual: bool = False, asked: bool = False) -> dict:
         """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""
         if self.nav.state.get("active"):
             r = {"ok": False, "reason": "the robot is turning toward something"}
         else:
-            r = self.drive.request_action(name, manual)
+            r = self.drive.request_action(name, manual, asked)
         self.bus.publish("gesture", {"name": name, **r})
         return r
 

@@ -467,7 +467,7 @@ class BoothHost:
         if name == "do_trick":
             if not self.gesture_fn:
                 return {"done": False, "reason": "tricks are not available"}
-            return self.gesture_fn(a.get("name", ""))
+            return self.gesture_fn(a.get("name", ""), asked=True)  # a visitor asked: no 60 s cooldown, only the short gap
         if name == "new_visitor":
             with self._lock:
                 self.encounters.pop(enc.id, None)
