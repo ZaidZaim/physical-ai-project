@@ -263,7 +263,7 @@
       <div id="pbody">
         <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
           <div id="pempty" hidden>Nothing yet.<br>When a visitor says “Hey PuppyPi” and talks to the robot, the topics they ask about appear here: the more conversations raise a topic, the bigger it gets.</div>
-          <div id="plegend"><span style="color:var(--accent)">★</span> robot · <span style="color:var(--short)">■</span> conversation (its need) · <span style="color:var(--reasoning)">●</span> topic, size = conversations</div></div>
+          <div id="plegend"><span style="color:#F16667">●</span> robot · <span style="color:#4C8EDA">●</span> conversation · <span style="color:#8DCC93">●</span> topic, size = conversations</div></div>
         <aside id="pside" hidden></aside>
       </div>
     </div>
@@ -354,6 +354,28 @@ function neoView(n) {
     font:{ color:ink, size: k === 'Place' ? 13 : k === 'gone' ? 9 : (Math.max(...label.split(/\s/).map(s => s.length)) > 9 ? 10 : 11), face:NEO_FONT, multi:false }, margin:6, borderWidth:2,
     widthConstraint:{ minimum:d - 12, maximum:d - 12 }, shapeProperties:{ borderDashes: k === 'gone' ? [4, 3] : false } };
 }
+/* The shared force simulation: nodes repel and never overlap (rad = circle radius), links pull like springs of their own length.
+   P holds the start positions and gets the result; nodes in `known` were laid out before and move only a little. */
+function relax(ids, P, known, links, rad, fresh) {
+  const iters = fresh ? 400 : 160, hot = fresh ? 45 : 14;
+  for (let it = 0; it < iters; it++) {
+    const temp = hot * (1 - it / iters) + 1, F = Object.fromEntries(ids.map(id => [id, { x: 0, y: 0 }]));
+    for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++) {
+      const p = P[ids[a]], q = P[ids[b]]; let dx = p.x - q.x, dy = p.y - q.y; const d = Math.hypot(dx, dy) || .01, min = rad(ids[a]) + rad(ids[b]) + 30;
+      let f = 70000 / (d * d); if (d < min) f += (min - d) * 1.5;
+      dx /= d; dy /= d; F[ids[a]].x += dx * f; F[ids[a]].y += dy * f; F[ids[b]].x -= dx * f; F[ids[b]].y -= dy * f;
+    }
+    for (const [s, e, len] of links) {
+      const p = P[s], q = P[e]; let dx = q.x - p.x, dy = q.y - p.y; const d = Math.hypot(dx, dy) || .01, f = (d - len) * .06;
+      dx /= d; dy /= d; F[s].x += dx * f; F[s].y += dy * f; F[e].x -= dx * f; F[e].y -= dy * f;
+    }
+    for (const id of ids) {
+      const f = F[id]; f.x -= P[id].x * .003; f.y -= P[id].y * .003;
+      const m = Math.hypot(f.x, f.y) || 1, s = Math.min(m, known[id] ? temp * .5 : temp) / m; P[id].x += f.x * s; P[id].y += f.y * s;
+    }
+  }
+}
+const relInk = () => document.documentElement.dataset.theme === 'light' ? '#5b6472' : '#c3c8d1';  // relationship names, readable on either theme
 const laidOut = new Set();
 let layoutKey = '';
 function neoLayout(g) {
@@ -375,23 +397,7 @@ function neoLayout(g) {
   }
   const L = { LOCATED_AT: 200, ADJACENT_TO: 560, CURRENTLY_IN: 160 };
   const links = g.edges.filter(e => P[e.source] && P[e.target]).map(e => [e.source, e.target, L[e.type] || 160]);
-  const iters = fresh.length === ids.length ? 400 : 160, hot = fresh.length === ids.length ? 45 : 14;
-  for (let it = 0; it < iters; it++) {
-    const temp = hot * (1 - it / iters) + 1, F = Object.fromEntries(ids.map(id => [id, { x: 0, y: 0 }]));
-    for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++) {
-      const p = P[ids[a]], q = P[ids[b]]; let dx = p.x - q.x, dy = p.y - q.y; const d = Math.hypot(dx, dy) || .01, min = rad(ids[a]) + rad(ids[b]) + 30;
-      let f = 70000 / (d * d); if (d < min) f += (min - d) * 1.5;
-      dx /= d; dy /= d; F[ids[a]].x += dx * f; F[ids[a]].y += dy * f; F[ids[b]].x -= dx * f; F[ids[b]].y -= dy * f;
-    }
-    for (const [s, e, len] of links) {
-      const p = P[s], q = P[e]; let dx = q.x - p.x, dy = q.y - p.y; const d = Math.hypot(dx, dy) || .01, f = (d - len) * .06;
-      dx /= d; dy /= d; F[s].x += dx * f; F[s].y += dy * f; F[e].x -= dx * f; F[e].y -= dy * f;
-    }
-    for (const id of ids) {
-      const f = F[id]; f.x -= P[id].x * .003; f.y -= P[id].y * .003;
-      const m = Math.hypot(f.x, f.y) || 1, s = Math.min(m, known[id] ? temp * .5 : temp) / m; P[id].x += f.x * s; P[id].y += f.y * s;
-    }
-  }
+  relax(ids, P, known, links, rad, fresh.length === ids.length);
   for (const id of ids) { laidOut.add(id); nodes.update({ id, x: P[id].x, y: P[id].y }); }
   if (!userMoved) setTimeout(() => net.fit(), 650);  // after removed nodes have faded out (500 ms), or they stretch the view
 }
@@ -454,7 +460,7 @@ function syncGraph() {
           const grey = '#A5ABB6', gone = src.status === 'possibly_gone';
           edges.add({ id, from:e.source, to:e.target, label:e.type, title:e.type.replace(/_/g, ' ').toLowerCase(), dashes:gone,
             _rel:e.type, _base:grey, hidden:hiddenRel.has(e.type), arrows:{ to:{ enabled:true, scaleFactor:.5 } },
-            font:{ size:9, color:'#c3c8d1', face:NEO_FONT, strokeWidth:3, strokeColor:css('--canvas'), align:'middle' },
+            font:{ size:9, color:relInk(), face:NEO_FONT, strokeWidth:3, strokeColor:css('--canvas'), align:'middle' },
             color:{ color:grey, highlight:'#ffffff', hover:'#ffffff', opacity: gone ? .45 : .85 }, width: fact ? 1.8 : 1.3 });
         } else {
         const base = fact ? relColor(e.type) : css('--mute');
@@ -700,7 +706,8 @@ async function loadPlaces() {
 /* ---------- booth: what visitors ask about and need, graph first (anonymous: never who they are) ---------- */
 const PTOK = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('brain_token') || '';
 const papi = (p, o = {}) => api(p, { ...o, headers:{ ...(o.headers || {}), ...(PTOK ? { 'X-Brain-Token': PTOK } : {}) } });
-let boothNet = null, pNodes = null, pEdges = null, convCount = null;
+let boothNet = null, pNodes = null, pEdges = null, convCount = null, boothKey = '';
+const boothLaid = new Set();
 function countTo(el, to) {  // the counters count up instead of jumping
   const from = parseInt(el.textContent, 10) || 0;
   if (from === to) return;
@@ -730,25 +737,51 @@ async function drawBoothGraph() {  // the robot HOSTED each conversation, which 
   const g = await papi('/api/booth/graph'), C = { Robot:css('--accent'), Conversation:css('--short'), Topic:css('--reasoning') };
   $('#pempty').hidden = g.nodes.length > 1;
   if (g.nodes.length <= 1) g.nodes = [];  // only the robot: draw nothing, or its star sits under the "Nothing yet" text
-  const N = g.nodes.map(n => n.kind === 'Topic'
-    ? { id:n.id, label:n.label, shape:'dot', size:9 + 6 * Math.sqrt(n.count), color:{ background:C.Topic, border:C.Topic, highlight:{ background:C.Topic, border:css('--ink') } },
-        font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') }, title:`${n.label}: ${n.count} conversation${n.count === 1 ? '' : 's'}` }
-    : n.kind === 'Robot'
-    ? { id:n.id, label:n.label, shape:'star', size:22, color:{ background:C.Robot, border:C.Robot }, font:{ size:13, color:css('--ink'), face:FONT, strokeWidth:4, strokeColor:css('--panel') } }
-    : { id:n.id, label:n.label, shape:'box', margin:7, color:{ background:C.Conversation, border:C.Conversation }, font:{ size:11, color:'#fff', face:FONT },
-        widthConstraint:{ maximum:170 }, title:[n.title || n.label, n.familiarity && 'knows Neo4j: ' + n.familiarity, n.ts && n.ts.slice(5, 16).replace('T', ' ')].filter(Boolean).join('\n') });
-  const L = { HOSTED:'hosted', DISCUSSED:'discussed', ENJOYED:'enjoyed' };
-  const E = g.edges.map(e => ({ id:`${e.source}|${e.type}|${e.target}`, from:e.source, to:e.target, label:L[e.type], dashes:e.type === 'ENJOYED',
-    arrows:{ to:{ enabled:true, scaleFactor:.45 } }, color:{ color:css('--mute'), opacity:.6 }, font:{ size:9, color:css('--mute'), strokeWidth:0, face:FONT, align:'middle' } }));
+  /* the Neo4j Browser look, like the long-term map: circles with the name inside (a topic grows with its conversations), grey arrows
+     named after the relationship, a layout computed here that holds still and only makes room for what is new */
+  const BN = { Robot:['#F16667', '#EB2728', '#fff'], Conversation:['#4C8EDA', '#2870C2', '#fff'], Topic:['#8DCC93', '#5DB665', '#2A2C34'] };
+  const diam = n => n.kind === 'Topic' ? Math.min(112, 58 + 12 * Math.sqrt(n.count || 1)) : n.kind === 'Robot' ? 66 : 80;  // 'conversation' fits on one line
+  const D = Object.fromEntries(g.nodes.map(n => [n.id, diam(n)]));
+  const N = g.nodes.map(n => { const [bg, border, ink] = BN[n.kind] || BN.Topic, d = D[n.id];
+    return { id:n.id, label: n.kind === 'Conversation' ? String(n.label || '').replace(/^conversation /, 'conversation\n') : n.label,
+      shape:'circle', margin:6, borderWidth:2, widthConstraint:{ minimum:d - 12, maximum:d - 12 },
+      color:{ background:bg, border, highlight:{ background:bg, border:'#ffffff' }, hover:{ background:bg, border:'#ffffff' } },
+      font:{ size: n.kind === 'Topic' ? 12 : n.kind === 'Conversation' ? 10 : 11, color:ink, face:NEO_FONT },
+      title: n.kind === 'Topic' ? `${n.label}: ${n.count} conversation${n.count === 1 ? '' : 's'}`
+        : n.kind === 'Conversation' ? [n.title || n.label, n.familiarity && 'knows Neo4j: ' + n.familiarity, n.ts && n.ts.slice(5, 16).replace('T', ' ')].filter(Boolean).join('\n') : undefined }; });
+  const E = g.edges.map(e => ({ id:`${e.source}|${e.type}|${e.target}`, from:e.source, to:e.target, label:e.type, dashes:e.type === 'ENJOYED',
+    arrows:{ to:{ enabled:true, scaleFactor:.5 } }, color:{ color:'#A5ABB6', highlight:'#ffffff', hover:'#ffffff', opacity:.85 }, width:1.5,
+    font:{ size:9, color:relInk(), strokeWidth:3, strokeColor:css('--panel'), face:NEO_FONT, align:'middle' } }));
+  // where everything sits: the robot in the middle, conversations around it, each topic beyond the conversations that discussed it
+  const ids = N.map(n => n.id), key = ids.slice().sort().join('|') + '#' + E.length;
+  if (key !== boothKey) {
+    boothKey = key;
+    const known = Object.fromEntries(ids.filter(id => boothLaid.has(id) && boothNet && pNodes.get(id)).map(id => [id, boothNet.getPositions([id])[id]]).filter(([, p]) => p));
+    const P = { ...known }, fresh = ids.filter(id => !known[id]);
+    let ci = 0;
+    for (const n of g.nodes.filter(n => n.kind !== 'Topic').sort((x, y) => String(x.ts || '').localeCompare(String(y.ts || '')))) if (!P[n.id]) {
+      if (n.kind === 'Robot') { P[n.id] = { x: 0, y: 0 }; continue; }
+      const i = ++ci + Object.keys(known).length, r = 190 + 40 * Math.sqrt(i), ang = i * 2.39996; P[n.id] = { x: r * Math.cos(ang), y: r * Math.sin(ang) };
+    }
+    let ti = 0;
+    for (const n of g.nodes.filter(n => n.kind === 'Topic')) if (!P[n.id]) {
+      const from = g.edges.filter(e => e.target === n.id && P[e.source]).map(e => P[e.source]), j = ++ti;
+      const c = from.length ? { x: from.reduce((s, p) => s + p.x, 0) / from.length, y: from.reduce((s, p) => s + p.y, 0) / from.length } : { x: 300 * Math.cos(j), y: 300 * Math.sin(j) };
+      const len = Math.hypot(c.x, c.y) || 1; P[n.id] = { x: c.x + 170 * c.x / len + 25 * Math.cos(j * 2.4), y: c.y + 170 * c.y / len + 25 * Math.sin(j * 2.4) };
+    }
+    const LEN = { HOSTED: 200, DISCUSSED: 175, ENJOYED: 175 };
+    relax(ids, P, known, g.edges.filter(e => P[e.source] && P[e.target]).map(e => [e.source, e.target, LEN[e.type] || 175]), id => D[id] / 2, fresh.length === ids.length);
+    for (const n of N) { n.x = P[n.id].x; n.y = P[n.id].y; boothLaid.add(n.id); }
+    setTimeout(() => boothNet && boothNet.fit(), 650);
+  }
   if (!boothNet) {
     pNodes = new vis.DataSet(N); pEdges = new vis.DataSet(E);
-    boothNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ solver:'forceAtlas2Based', forceAtlas2Based:{ gravitationalConstant:-80, springLength:120, avoidOverlap:.7 }, stabilization:{ iterations:180 } }, interaction:{ hover:true, tooltipDelay:120 } });
-    boothNet.once('stabilizationIterationsDone', () => boothNet.fit({ animation:true }));
+    boothNet = new vis.Network($('#pnet'), { nodes:pNodes, edges:pEdges }, { physics:{ enabled:false }, edges:{ smooth:{ enabled:false } }, interaction:{ hover:true, tooltipDelay:120 } });
     boothNet.on('click', p => showBoothNode(p.nodes[0]));
   } else {  // update in place: the graph grows instead of re-shuffling
     const nid = new Set(N.map(n => n.id)), eid = new Set(E.map(e => e.id));
     pNodes.remove(pNodes.getIds().filter(i => !nid.has(i))); pEdges.remove(pEdges.getIds().filter(i => !eid.has(i)));
-    pNodes.update(N); pEdges.update(E);
+    pNodes.update(N.map(n => n.x === undefined ? (({ x, y, ...rest }) => rest)(n) : n)); pEdges.update(E);
   }
   boothData = g;
   if (boothSel) showBoothNode(boothSel);
