@@ -519,7 +519,7 @@ function connect() {
   es.addEventListener('greeting', e => { const d = JSON.parse(e.data);
     if (d.skipped) { log('miss', `person in view, not greeted: ${esc(d.reason || 'nobody to greet')}${d.people !== undefined ? ` (${d.people} seen, ${d.engaged} close and turned to the robot)` : ''}`); return; }
     log('new', `greeted ${d.kind === 'group' ? 'a group' : 'someone'} (${d.people} in view): “${esc(d.text)}”${d.trick ? (d.trick.ok ? ' + ' + esc(d.trick.action) : ' (no trick: ' + esc(d.trick.reason) + ')') : ''}`); });
-  es.addEventListener('cheer', e => { const d = JSON.parse(e.data); log('new', `cheer (${esc(d.kind)}): “${esc(d.text)}”${d.trick && d.trick.ok ? ' + ' + esc(d.trick.action) : ''}`); });
+  es.addEventListener('cheer', e => { const d = JSON.parse(e.data); log('new', `cheer (${esc(d.kind)}): “${esc(d.text)}”`); });
   es.addEventListener('gesture', e => { const d = JSON.parse(e.data); log(d.ok ? 'ask' : 'miss', d.ok ? `trick: ${esc(d.name)}` : `trick ${esc(d.name)} skipped: ${esc(d.reason)}`); });
   es.addEventListener('converse', e => { const d = JSON.parse(e.data); log('ask', `booth chat (${esc(d.tools.join(' → ') || 'no tools')}): “${esc(d.reply)}”`); });
   es.addEventListener('booth', e => { const d = JSON.parse(e.data); log(d.event === 'saved' ? 'new' : 'miss', `booth note ${esc(d.event)}${d.topics && d.topics.length ? ': ' + esc(d.topics.join(', ')) : ''}`); if (!$('#boothview').hidden) loadBooth().catch(() => {}); });

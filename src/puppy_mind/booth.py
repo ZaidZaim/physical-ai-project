@@ -334,7 +334,6 @@ CHEERS = {
         "Ooh, nearly! Next time it's yours!",
     ],
 }
-CHEER_TRICK = {"invite": "wave", "won": "boxing"}  # a trick with the words (skipped when one is not allowed right now)
 
 
 class BoothHost:
@@ -364,8 +363,8 @@ class BoothHost:
         self._cheer_used: dict[str, list[int]] = {}
 
     # ---- the claw machine cheerleader
-    def cheer(self, kind: str, manual: bool = True) -> dict:
-        """Say one of the CHEERS lines of `kind` (never the same one twice in a row), with its trick if one is allowed now."""
+    def cheer(self, kind: str) -> dict:
+        """Say one of the CHEERS lines of `kind` (never the same one twice in a row). Words only: no trick while cheering."""
         lines = CHEERS.get(kind)
         if not lines:
             return {"ok": False, "reason": f"unknown cheer {kind!r}"}
@@ -376,9 +375,8 @@ class BoothHost:
         text = lines[i].format(prize=self.s.claw_prize)
         self.outbox.say(text, kind="cheer")
         self._last_said = time.monotonic()
-        trick = self.gesture_fn(CHEER_TRICK[kind], manual) if (self.gesture_fn and kind in CHEER_TRICK) else None
-        self._publish("cheer", {"kind": kind, "text": text, "trick": trick})
-        return {"ok": True, "text": text, "trick": trick}
+        self._publish("cheer", {"kind": kind, "text": text})
+        return {"ok": True, "text": text}
 
     def maybe_invite(self, listening: bool) -> bool:
         """On every robot poll: call people over to the claw machine when nobody has talked to the robot for CHEER_EVERY_S."""
@@ -387,7 +385,7 @@ class BoothHost:
             return False
         if self.conversation_active() or any(now - e.last < 60 for e in list(self.encounters.values())) or self.outbox._items:
             return False
-        self.cheer("invite", manual=False)
+        self.cheer("invite")
         return True
 
     def _booth_info(self) -> str:

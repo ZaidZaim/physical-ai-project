@@ -396,7 +396,7 @@ def test_the_robot_voice_is_made_louder_without_clipping():
 CLAW = dataclasses.replace(S, claw_machine=True, claw_prize="a Graph Wizard", cheer_every_s=100)
 
 
-def test_cheer_says_a_line_with_the_prize_never_the_same_twice_in_a_row_and_waves_on_invite():
+def test_cheer_says_a_line_with_the_prize_never_the_same_twice_in_a_row_and_plays_no_trick():
     from puppy_mind.booth import CHEERS
     tricks = []
     h, _ = host([], gesture_fn=lambda n, manual=False: tricks.append((n, manual)) or {"ok": True, "action": n})
@@ -408,11 +408,9 @@ def test_cheer_says_a_line_with_the_prize_never_the_same_twice_in_a_row_and_wave
         assert r["ok"] and said[-1]["kind"] == "cheer" and said[-1]["text"] == r["text"]
     assert all(a["text"] != b["text"] for a, b in zip(said, said[1:]))
     assert any("Graph Wizard" in s["text"] for s in said) and "{prize}" not in "".join(s["text"] for s in said)
-    assert tricks[0] == ("wave", True)
-    h.cheer("playing")
-    assert len(tricks) == 8  # cheering a player on is words only: no trick next to the claw machine's player
-    h.cheer("won")
-    assert tricks[-1][0] == "boxing"
+    for kind in ("playing", "won", "almost"):
+        assert "trick" not in h.cheer(kind)
+    assert tricks == []  # cheering is words only: no animation
     assert not h.cheer("dance")["ok"] and set(CHEERS) == {"invite", "playing", "won", "almost"}
 
 

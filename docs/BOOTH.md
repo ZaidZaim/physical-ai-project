@@ -93,9 +93,9 @@ robot, boxing via `/api/gesture` with booth mode on did box.
 With `CLAW_MACHINE=true` the robot cheers for the booth's claw machine (prize: `CLAW_PRIZE`, default "a Graph Wizard"):
 
 - **By itself:** when nobody has talked to it for `CHEER_EVERY_S` (150 s; 0 = buttons only) and it is listening, it calls people
-  over ("Feeling lucky? Try the claw machine and win a Graph Wizard!") and waves. It never does this during or just after a conversation.
-- **Booth tab buttons** (the "Claw machine" row): *Call people over* (with a wave), *Someone is playing* (words only),
-  *They won!* (with boxing), *So close* (try again). Each has several lines, and the same line never plays twice in a row.
+  over ("Feeling lucky? Try the claw machine and win a Graph Wizard!"). It never does this during or just after a conversation.
+- **Booth tab buttons** (the "Claw machine" row): *Call people over*, *Someone is playing*, *They won!*, *So close* (try again).
+  Each has several lines, and the same line never plays twice in a row. Cheering is words only: the robot does no trick.
 - **The Wizard** knows about the claw machine: it mentions it when visitors ask what to do, and invites them to play at goodbye.
 
 The lines are in `CHEERS` in `booth.py`. Nothing about the players is stored.
