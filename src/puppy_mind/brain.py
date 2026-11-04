@@ -463,12 +463,12 @@ class Brain:
         elif self.listening and not self.drive.booth:  # LISTEN_ALWAYS without the tab: tricks and the head tilt need booth mode
             self.drive.set_booth(True, self.s.idle_look_up_deg)
 
-    def gesture(self, name: str) -> dict:
+    def gesture(self, name: str, manual: bool = False) -> dict:
         """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""
         if self.nav.state.get("active"):
             r = {"ok": False, "reason": "the robot is turning toward something"}
         else:
-            r = self.drive.request_action(name)
+            r = self.drive.request_action(name, manual)
         self.bus.publish("gesture", {"name": name, **r})
         return r
 

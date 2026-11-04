@@ -141,6 +141,9 @@
   .q { padding:6px 14px; border-top:1px solid var(--line); font-size:12px; color:var(--ink) } .q::before { content:"? "; color:var(--accent); font-weight:600 }
   .q.joy::before { content:"♥ "; color:var(--new) } .q.tagq { color:var(--reasoning); font-family:var(--mono) } .q.tagq::before { content:"" }
   .privacy { padding:10px 14px 14px; color:var(--mute); font-size:11px; line-height:1.5 }
+  #ptricks { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:7px 16px; border-bottom:1px solid var(--line) }
+  #ptricks .lbl { font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute); margin-right:4px }
+  #ptricks button.big { border-style:dashed } #ptricks button:disabled { opacity:.45; cursor:wait }
 </style>
 </head>
 <body>
@@ -253,6 +256,7 @@
         <button class="sm" id="pend" hidden title="End the conversation: the next visitor starts with the wake word">End conversation</button>
         <span class="spacer"></span>
       </div>
+      <div id="ptricks" title="Make the robot do a trick (it waits for the previous one to finish)"><span class="lbl">Tricks</span></div>
       <div id="pbody">
         <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
           <div id="pempty" hidden>Nothing yet.<br>When a visitor says “Hey PuppyPi” and talks to the robot, the topics they ask about appear here: the more conversations raise a topic, the bigger it gets.</div>
@@ -639,6 +643,7 @@ function toast(text) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 4500);
 }
 async function loadBooth() {
+  drawTricks().catch(() => {});
   const d = await papi('/api/booth/insights');
   if (convCount !== null && d.conversations > convCount) {  // a new conversation: count up and say what it was about
     $('#pconvbox').classList.remove('bump'); void $('#pconvbox').offsetWidth; $('#pconvbox').classList.add('bump');
@@ -708,6 +713,27 @@ function showListen(st) {
 async function listenPing() {
   if ($('#boothview').hidden || document.hidden) return listenStop();
   try { showListen(await papi('/api/listen', { method:'POST' })); } catch (e) { showListen({ state:'off' }); }
+}
+/* Trick buttons: one per action group the app allows; the big ones (dashed) need room around the robot and ask first */
+const TRICK_LABEL = { boxing:'Boxing', wave:'Wave', shake_hands:'Shake hands', bow:'Bow', nod:'Nod', sit:'Sit', stand:'Stand',
+  lie_down:'Lie down', stretch:'Stretch', shake_head:'Shake head', 'push-up':'Push-ups', moonwalk:'Moonwalk' };
+let tricksDrawn = false;
+async function drawTricks() {
+  if (tricksDrawn) return;
+  const b = await papi('/api/booth'), big = new Set(b.big_tricks || []);
+  $('#ptricks').insertAdjacentHTML('beforeend', [...b.tricks, ...(b.big_tricks || [])].map(n =>
+    `<button class="sm${big.has(n) ? ' big' : ''}" data-trick="${esc(n)}"${big.has(n) ? ' title="Needs space around the robot"' : ''}>${esc(TRICK_LABEL[n] || n)}</button>`).join(''));
+  document.querySelectorAll('#ptricks button').forEach(btn => btn.onclick = async () => {
+    const n = btn.dataset.trick, label = btn.textContent;
+    if (btn.classList.contains('big') && !confirm(`${label} needs free space around the robot, and it must not stand near a table edge. Go?`)) return;
+    document.querySelectorAll('#ptricks button').forEach(x => x.disabled = true);
+    try {
+      const r = await papi('/api/gesture', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ name:n }) });
+      toast(r.ok ? `${label}!` : `${label} not now: ${r.reason}`);
+    } catch (e) { toast(`${label} failed: ${e.message || e}`); }
+    setTimeout(() => document.querySelectorAll('#ptricks button').forEach(x => x.disabled = false), 1500);
+  });
+  tricksDrawn = true;
 }
 $('#pend').onclick = async () => { try { showListen(await papi('/api/booth/end', { method:'POST' })); } catch (e) {} };
 function listenStart() { if (!listenTimer) { listenPing(); listenTimer = setInterval(listenPing, 5000); } }

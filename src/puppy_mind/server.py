@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .brain import Brain
-from .drive import TRICKS
+from .drive import BIG_TRICKS, TRICKS
 from .voice import heard_nothing
 from .scenario import _scene
 from .sources import open_source
@@ -532,7 +532,7 @@ class Trick(BaseModel):
 def booth_get():
     st = brain.drive.status()
     return {"on": st["booth"], "look_up_deg": st["look_up_deg"], "in_action": st["in_action"], "greet_action": brain.s.greet_action,
-            "tricks": list(TRICKS)}
+            "tricks": list(TRICKS), "big_tricks": list(BIG_TRICKS)}
 
 
 @app.post("/api/booth")
@@ -546,8 +546,11 @@ def booth_set(body: Booth, request: Request, x_brain_token: str | None = Header(
 
 @app.post("/api/gesture")
 def gesture(body: Trick, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """A trick button in the Booth tab (the person pressing it sees the robot): booth mode comes on if it was off."""
     _local_auth(request, x_brain_token, token)
-    return brain.gesture(body.name)
+    if not brain.drive.booth:
+        brain.drive.set_booth(True, brain.s.idle_look_up_deg)
+    return brain.gesture(body.name, manual=True)
 
 
 @app.post("/api/voice/say")

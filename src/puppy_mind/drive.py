@@ -21,8 +21,11 @@ import time
 DEADMAN_S = 0.4
 SETTLE_S = 2.0  # after motion stops, the camera is still settling / viewpoint just changed
 # Hiwonder's stock action groups (ros2 branch, large_models/action.py), run by /puppy_control/runActionGroup as "<name>.d6ac".
-# Only the friendly, on-the-spot ones: no push-ups, kicks or moonwalk at a crowded booth.
-TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod")
+# The friendly, on-the-spot ones (a visitor may ask for these too). All are action groups on the robot.
+TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod", "sit", "stand", "lie_down", "stretch", "shake_head")
+# These need room around the robot: only from the Booth tab's buttons (the person pressing sees the space), never on request.
+BIG_TRICKS = ("push-up", "moonwalk")
+MANUAL_GAP_S = 2.0  # a trick from the buttons waits only for the previous one to finish (plus this), not GESTURE_COOLDOWN_S
 MAX_LOOK_UP_DEG = 30.0  # Hiwonder's pose node rejects |pitch| > 31 deg; its own "look down" pose is -15 deg
 
 
@@ -72,17 +75,20 @@ class DriveState:
         """Body pitch the robot should hold: slightly nose-up in booth mode (to see faces and badges), level otherwise."""
         return math.radians(self.look_up_deg) if self.booth else 0.0
 
-    def request_action(self, name: str) -> dict:
-        """Ask the robot to play a trick. Returns {ok, reason}. Never while moving, navigating or within the rate limits."""
+    def request_action(self, name: str, manual: bool = False) -> dict:
+        """Ask the robot to play a trick. Returns {ok, reason}. Never while moving, navigating or within the rate limits.
+        `manual`: pressed in the Booth tab, so the big tricks are allowed and the gap is MANUAL_GAP_S instead of the cooldown that
+        spaces out automatic tricks (the hourly limit still holds: servo heat and battery)."""
         with self._lock:
             now = time.monotonic()
             self._action_times = [t for t in self._action_times if now - t < 3600]
             reason = (
-                "unknown trick" if name not in TRICKS else
+                "unknown trick" if name not in TRICKS + (BIG_TRICKS if manual else ()) else
                 "booth mode is off" if not self.booth else
                 "a trick is already running" if now < self._action_until else
+                "the last trick is still settling" if manual and now < self._action_until + MANUAL_GAP_S else
                 "the robot is moving" if now < self._moving_until or self._auto else
-                "tricks are rate-limited" if self._action_times and now - self._action_times[-1] < self.gesture_cooldown_s else
+                "tricks are rate-limited" if not manual and self._action_times and now - self._action_times[-1] < self.gesture_cooldown_s else
                 "hourly trick limit reached" if len(self._action_times) >= self.max_gestures_per_hour else ""
             )
             if reason:

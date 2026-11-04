@@ -117,7 +117,7 @@ def test_voice_endpoints_need_the_robot_token_when_one_is_set(client):
 def test_booth_mode_and_tricks_endpoints(client):
     b = client.get("/api/booth").json()
     assert b["on"] is False and "boxing" in b["tricks"]
-    assert client.post("/api/gesture", json={"name": "boxing"}).json()["reason"] == "booth mode is off"
+    assert server.brain.drive.request_action("boxing")["reason"] == "booth mode is off"  # automatic tricks need booth mode
     b = client.post("/api/booth", json={"on": True, "look_up_deg": 12}).json()
     assert b["on"] is True and b["look_up_deg"] == 12
     assert client.get("/api/drive/cmd").json()["pitch"] > 0
@@ -300,3 +300,27 @@ def test_the_robot_can_download_its_boot_service_and_start_script(client):
         assert r.status_code == 200 and b"\r\n" not in r.content, name  # bash on the robot breaks on Windows line endings
     assert b"ExecStart=/bin/bash /home/pi/start_voice_auto.sh" in client.get("/robot/puppy-voice.service").content
     assert client.get("/robot/.env").status_code == 404 and client.get("/robot/server.py").status_code == 404
+
+
+def test_trick_buttons_play_one_after_another_and_the_big_ones_only_from_the_buttons(client):
+    from puppy_mind.drive import BIG_TRICKS, MANUAL_GAP_S, TRICKS
+
+    b = client.get("/api/booth").json()
+    assert {"sit", "stand", "lie_down", "stretch", "shake_head"} <= set(b["tricks"]) and set(b["big_tricks"]) == set(BIG_TRICKS)
+    drive = server.brain.drive
+    drive.set_booth(False)
+    r = client.post("/api/gesture", json={"name": "sit"}).json()
+    assert r["ok"] and drive.booth  # a button turns booth mode on (it used to say "booth mode is off")
+    assert client.post("/api/gesture", json={"name": "wave"}).json()["reason"] == "a trick is already running"
+    drive.action_done()  # the robot reports the trick finished
+    assert client.post("/api/gesture", json={"name": "wave"}).json()["reason"] == "the last trick is still settling"
+    drive._action_until -= MANUAL_GAP_S + 0.1
+    drive._moving_until = 0
+    assert client.post("/api/gesture", json={"name": "moonwalk"}).json()["ok"]  # no 60 s cooldown for buttons
+    # automatic tricks (the wake word, a visitor asking) keep the cooldown and never do the big ones
+    drive._action_until = drive._moving_until = 0
+    assert drive.request_action("wave")["reason"] == "tricks are rate-limited"
+    assert drive.request_action("push-up")["reason"] == "unknown trick"
+    from puppy_mind.booth import TOOLS
+    enum = next(t for t in TOOLS if t["function"]["name"] == "do_trick")["function"]["parameters"]["properties"]["name"]["enum"]
+    assert enum == list(TRICKS) and not set(enum) & set(BIG_TRICKS)
