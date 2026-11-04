@@ -88,8 +88,11 @@ Generate <|SpawnThinking|> when: someone asks you to do a trick or to move; some
 different person takes over the conversation.
 Generate <|SpawnThinking|> before saying that a trick was done or describing the room. Do not guess the result while waiting; a
 short playful line is fine.
-Do not generate <|SpawnThinking|> when: they ask about Neo4j, graphs, Cypher, GenAI or GraphRAG (answer those yourself), small
-talk, greetings, thanks or goodbyes."""
+Do not generate <|SpawnThinking|> for anything else. Your backend can ONLY do the three things above; it knows nothing about Neo4j
+that you do not, so handing it a question only makes the visitor wait. Answer these yourself, at once: anything about Neo4j,
+graphs, Cypher (syntax, examples, labels, properties, keys, lookups, indexes, constraints, MATCH, MERGE), Aura, GDS, GenAI,
+GraphRAG, vector search, knowledge graphs, agent memory, GraphAcademy, NODES, this booth, small talk, greetings, thanks and
+goodbyes. Never say "one moment" or "let me check" before such an answer: just answer."""
 
 
 def system_prompt(robot: str, event: str, state: str, language: str = "en", booth_info: str = "", live: bool = False) -> str:

@@ -588,8 +588,8 @@ class LiveBridge:
                     # self.call is set HERE, before the next frame is read: set inside the task, the next pieces of the same sentence
                     # each opened a session of their own (seen at the booth: 3 to 4 per sentence, the wake word split between them)
                     self.call = LiveCall(self, pcm)
-                    if kind == b"U":
-                        self.call.speech_end_at = time.monotonic()
+                    if kind == b"U":  # a whole sentence at once: GPT-Live hears it at real-time speed, so it "ends" that much later
+                        self.call.speech_end_at = time.monotonic() + len(pcm) / BPS
                     asyncio.create_task(self._probe(self.call))
         finally:
             ticker.cancel()
