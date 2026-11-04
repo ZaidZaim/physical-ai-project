@@ -52,6 +52,35 @@ def heard_nothing(text: str) -> bool:
             or echoes_the_hint(text))
 
 
+def louder(wav: bytes, gain: float) -> bytes:
+    """The speech, louder for a small speaker: normalised to full scale, then a soft limiter (tanh) raises the quiet parts and rounds
+    the peaks off instead of clipping them. `gain` <= 1 or anything that is not 16-bit PCM WAV comes back unchanged."""
+    if gain <= 1.0:
+        return wav
+    import io
+    import wave
+
+    import numpy as np
+
+    try:
+        with wave.open(io.BytesIO(wav)) as w:
+            params, frames = w.getparams(), w.readframes(w.getnframes())
+        if params.sampwidth != 2 or not frames:
+            return wav
+        x = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+        x /= max(float(np.abs(x).max()), 1e-3)
+        y = np.tanh(gain * x) / np.tanh(gain) * 0.97
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(params.nchannels)
+            w.setsampwidth(2)
+            w.setframerate(params.framerate)
+            w.writeframes((y * 32767).astype("<i2").tobytes())
+        return out.getvalue()
+    except Exception:
+        return wav  # never lose the reply over the volume
+
+
 class Voice:
     def __init__(self, s: Settings, client=None):
         self.s = s
@@ -67,6 +96,6 @@ class Voice:
         return fix_terms((getattr(r, "text", "") or "").strip())
 
     def speak(self, text: str) -> bytes:
-        """WAV bytes, so the robot can play them with plain `aplay`."""
+        """WAV bytes, so the robot can play them with plain `aplay` (made louder by VOICE_GAIN for its small speaker)."""
         r = self.client.audio.speech.create(model=self.s.tts_model, voice=self.s.tts_voice, input=text[:1500], response_format="wav")
-        return r.content if hasattr(r, "content") else r.read()
+        return louder(r.content if hasattr(r, "content") else r.read(), self.s.voice_gain)

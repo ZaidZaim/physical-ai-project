@@ -89,6 +89,9 @@ class Settings:
     stt_model: str = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")  # 2-3x faster than whisper-1 in tests
     tts_model: str = os.getenv("OPENAI_TTS_MODEL", "tts-1")
     tts_voice: str = os.getenv("OPENAI_TTS_VOICE", "alloy")
+    # louder robot voice: the WonderEcho Pro's speaker is already at 100% and too quiet in a hall. 1 = as generated; higher raises the
+    # quiet parts and softly limits the peaks (no clipping). 2.5 is clearly louder and still clean.
+    voice_gain: float = float(os.getenv("VOICE_GAIN", "2.5"))
     # the booth language: speech is transcribed as this language (ISO 639-1) and the Wizard always answers in it. Without it the speech
     # model guesses per recording, and a short noisy clip can come out as another language, which the Wizard then answers in.
     voice_language: str = os.getenv("VOICE_LANGUAGE", "en")

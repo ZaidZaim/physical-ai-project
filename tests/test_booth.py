@@ -364,3 +364,29 @@ def test_a_note_keeps_only_what_the_visitor_actually_said():
     h.turn("What is a graph?")
     [c] = mem.list_conversations()
     assert c["topics"] == ["knowledge graphs", "graphs"] and c["need"] is None and c["questions"] == ["what is a graph"]
+
+
+def test_the_robot_voice_is_made_louder_without_clipping():
+    # the WonderEcho Pro's speaker is already at 100% and too quiet in a conference hall
+    import io
+    import math
+    import wave
+
+    from puppy_mind.voice import louder
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(24000)
+        w.writeframes(b"".join(int(6000 * math.sin(i / 7) * (0.2 if i < 12000 else 1)).to_bytes(2, "little", signed=True)
+                               for i in range(24000)))
+    quiet = buf.getvalue()
+
+    def rms_peak(wav):
+        with wave.open(io.BytesIO(wav)) as w:
+            s = [int.from_bytes(w.readframes(1), "little", signed=True) for _ in range(w.getnframes())]
+        return math.sqrt(sum(v * v for v in s) / len(s)), max(abs(v) for v in s)
+
+    loud = louder(quiet, 2.5)
+    (r0, p0), (r1, p1) = rms_peak(quiet), rms_peak(loud)
+    assert r1 > 3 * r0 and p1 <= 32767 * 0.97 + 1  # much louder, never clipped
+    assert louder(quiet, 1.0) == quiet and louder(b"not a wav", 2.5) == b"not a wav"
