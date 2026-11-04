@@ -143,7 +143,9 @@
   .privacy { padding:10px 14px 14px; color:var(--mute); font-size:11px; line-height:1.5 }
   #ptricks { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:7px 16px; border-bottom:1px solid var(--line) }
   #ptricks .lbl { font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute); margin-right:4px }
-  #ptricks button.big { border-style:dashed } #ptricks button:disabled { opacity:.45; cursor:wait }
+  #ptricks button.big { border-style:dashed }
+  #pclaw { display:flex; gap:6px; flex-wrap:wrap; align-items:center; padding:7px 16px; border-bottom:1px solid var(--line) }
+  #pclaw[hidden] { display:none } #pclaw .lbl { font:10px var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--mute); margin-right:4px } #ptricks button:disabled { opacity:.45; cursor:wait }
 </style>
 </head>
 <body>
@@ -257,6 +259,7 @@
         <span class="spacer"></span>
       </div>
       <div id="ptricks" title="Make the robot do a trick (it waits for the previous one to finish)"><span class="lbl">Tricks</span></div>
+      <div id="pclaw" hidden title="The robot as the claw machine's cheerleader"><span class="lbl">Claw machine</span></div>
       <div id="pbody">
         <div id="pnetwrap"><div id="pnet"></div><div id="ptoast" hidden></div>
           <div id="pempty" hidden>Nothing yet.<br>When a visitor says “Hey PuppyPi” and talks to the robot, the topics they ask about appear here: the more conversations raise a topic, the bigger it gets.</div>
@@ -516,6 +519,7 @@ function connect() {
   es.addEventListener('greeting', e => { const d = JSON.parse(e.data);
     if (d.skipped) { log('miss', `person in view, not greeted: ${esc(d.reason || 'nobody to greet')}${d.people !== undefined ? ` (${d.people} seen, ${d.engaged} close and turned to the robot)` : ''}`); return; }
     log('new', `greeted ${d.kind === 'group' ? 'a group' : 'someone'} (${d.people} in view): “${esc(d.text)}”${d.trick ? (d.trick.ok ? ' + ' + esc(d.trick.action) : ' (no trick: ' + esc(d.trick.reason) + ')') : ''}`); });
+  es.addEventListener('cheer', e => { const d = JSON.parse(e.data); log('new', `cheer (${esc(d.kind)}): “${esc(d.text)}”${d.trick && d.trick.ok ? ' + ' + esc(d.trick.action) : ''}`); });
   es.addEventListener('gesture', e => { const d = JSON.parse(e.data); log(d.ok ? 'ask' : 'miss', d.ok ? `trick: ${esc(d.name)}` : `trick ${esc(d.name)} skipped: ${esc(d.reason)}`); });
   es.addEventListener('converse', e => { const d = JSON.parse(e.data); log('ask', `booth chat (${esc(d.tools.join(' → ') || 'no tools')}): “${esc(d.reply)}”`); });
   es.addEventListener('booth', e => { const d = JSON.parse(e.data); log(d.event === 'saved' ? 'new' : 'miss', `booth note ${esc(d.event)}${d.topics && d.topics.length ? ': ' + esc(d.topics.join(', ')) : ''}`); if (!$('#boothview').hidden) loadBooth().catch(() => {}); });
@@ -735,6 +739,16 @@ async function drawTricks() {
     } catch (e) { toast(`${label} failed: ${e.message || e}`); }
     setTimeout(() => document.querySelectorAll('#ptricks button').forEach(x => x.disabled = false), 1500);
   });
+  if (b.claw_machine) {  // the claw machine cheerleader
+    const CL = { invite:'Call people over', playing:'Someone is playing', won:'They won!', almost:'So close' };
+    $('#pclaw').insertAdjacentHTML('beforeend', b.cheers.map(k => `<button class="sm" data-cheer="${esc(k)}">${esc(CL[k] || k)}</button>`).join('')
+      + `<span class="lbl" style="margin-left:8px">prize: ${esc(b.claw_prize)}</span>`);
+    $('#pclaw').hidden = false;
+    document.querySelectorAll('#pclaw button').forEach(btn => btn.onclick = async () => {
+      try { const r = await papi('/api/booth/cheer', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ kind:btn.dataset.cheer }) }); toast(`PuppyPi: “${r.text}”`); }
+      catch (e) { toast('Could not cheer: ' + (e.message || e)); }
+    });
+  }
   tricksDrawn = true;
 }
 $('#pend').onclick = async () => { try { showListen(await papi('/api/booth/end', { method:'POST' })); } catch (e) {} };

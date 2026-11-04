@@ -304,6 +304,39 @@ TOOLS = [
 ]
 
 
+# The claw machine cheerleader (CLAW_MACHINE): what the robot says to draw people to the booth's claw machine. Short, spoken, varied;
+# {prize} is CLAW_PRIZE. "invite" also plays by itself every CHEER_EVERY_S when nobody talks to the robot; the rest are Booth tab buttons.
+CHEERS = {
+    "invite": [
+        "Hey there! Feeling lucky? Try the claw machine and win {prize}!",
+        "Step right up! One claw, one shot, and {prize} could be yours. Who's next?",
+        "Psst! The claw machine is waiting for you. Grab {prize} and take a little graph magic home!",
+        "Nodes, relationships, and a claw machine full of prizes. Come and win {prize}!",
+        "I'm PuppyPi, and my friends in the claw machine want to go home with you. Try to win {prize}!",
+        "Who wants {prize}? The claw machine is right here. Give it a go!",
+    ],
+    "playing": [
+        "Go, go, go! You've got this!",
+        "Steady... steady... a little to the left... you can do it!",
+        "The whole booth is cheering for you! Grab that prize!",
+        "Focus like a graph query: find the shortest path to that prize!",
+        "Easy now... nice and slow... this is your moment!",
+    ],
+    "won": [
+        "Yes! We have a winner! Enjoy {prize}!",
+        "Woohoo! That's one happy prize going home with you!",
+        "Amazing! You just found the shortest path to {prize}!",
+        "A winner! Give them a round of applause!",
+    ],
+    "almost": [
+        "So close! The prize is playing hard to get. Give it another try!",
+        "Almost! Even the best queries need a second run. Try again!",
+        "Ooh, nearly! Next time it's yours!",
+    ],
+}
+CHEER_TRICK = {"invite": "wave", "won": "boxing"}  # a trick with the words (skipped when one is not allowed right now)
+
+
 class BoothHost:
     def __init__(self, s: Settings, mem, *, client=None, agent=None, bus=None, look_fn: Callable[[bytes], list[dict]] | None = None,
                  gesture_fn: Callable[[str], dict] | None = None, extract_fn: Callable[[str], dict] | None = None):
@@ -327,6 +360,43 @@ class BoothHost:
         self.write_in_background = True
         self._writes: queue.Queue = queue.Queue()
         self._writer: threading.Thread | None = None
+        self._last_said = time.monotonic()  # the robot last spoke (a reply, a greeting, a cheer): the next invite waits CHEER_EVERY_S
+        self._cheer_used: dict[str, list[int]] = {}
+
+    # ---- the claw machine cheerleader
+    def cheer(self, kind: str, manual: bool = True) -> dict:
+        """Say one of the CHEERS lines of `kind` (never the same one twice in a row), with its trick if one is allowed now."""
+        lines = CHEERS.get(kind)
+        if not lines:
+            return {"ok": False, "reason": f"unknown cheer {kind!r}"}
+        used = self._cheer_used.setdefault(kind, [])
+        fresh = [i for i in range(len(lines)) if i not in used] or list(range(len(lines)))
+        i = fresh[int(time.monotonic() * 1000) % len(fresh)]
+        self._cheer_used[kind] = (used + [i])[-(len(lines) - 1):] if len(lines) > 1 else []
+        text = lines[i].format(prize=self.s.claw_prize)
+        self.outbox.say(text, kind="cheer")
+        self._last_said = time.monotonic()
+        trick = self.gesture_fn(CHEER_TRICK[kind], manual) if (self.gesture_fn and kind in CHEER_TRICK) else None
+        self._publish("cheer", {"kind": kind, "text": text, "trick": trick})
+        return {"ok": True, "text": text, "trick": trick}
+
+    def maybe_invite(self, listening: bool) -> bool:
+        """On every robot poll: call people over to the claw machine when nobody has talked to the robot for CHEER_EVERY_S."""
+        s, now = self.s, time.monotonic()
+        if not (s.claw_machine and s.cheer_every_s > 0 and listening) or now - self._last_said < s.cheer_every_s:
+            return False
+        if self.conversation_active() or any(now - e.last < 60 for e in list(self.encounters.values())) or self.outbox._items:
+            return False
+        self.cheer("invite", manual=False)
+        return True
+
+    def _booth_info(self) -> str:
+        info = self.s.booth_info.strip()
+        if self.s.claw_machine:
+            claw = (f"There is a claw machine at the booth: visitors can try to win {self.s.claw_prize}. Mention it with enthusiasm "
+                    "when they ask what to do or when they are about to leave.")
+            info = f"{info} {claw}".strip()
+        return info
 
     # ---- plumbing
     def _publish(self, kind: str, data: dict) -> None:
@@ -352,7 +422,8 @@ class BoothHost:
     def _state(self, enc: Encounter) -> str:
         lines = ["", "STATE OF THIS CONVERSATION"]
         if enc.closing:
-            lines.append("- They are leaving: thank them warmly and say goodbye, no questions.")
+            lines.append("- They are leaving: thank them warmly" + (f", invite them to try the claw machine to win {self.s.claw_prize}"
+                         if self.s.claw_machine else "") + " and say goodbye, no questions.")
         else:
             lines.append("- Do NOT end with a question of your own about them: one question about their interests is added after your answer.")
         if enc.greeted:
@@ -468,7 +539,7 @@ class BoothHost:
             if self.extract_fn and self.learn_in_background:  # note what this conversation is about while the reply is prepared
                 learner = threading.Thread(target=self._learn, args=(enc, start_id, *self._transcript(enc, text)), daemon=True)
                 learner.start()
-            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language, self.s.booth_info)
+            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language, self._booth_info())
             history = enc.messages[-12:]
             msgs: list[dict] = [{"role": "system", "content": sysmsg}, *history, {"role": "user", "content": text}]
             trace: list[dict] = []
@@ -490,7 +561,7 @@ class BoothHost:
                     msgs.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(res, default=str)[:6000]})
                     if tc.function.name == "new_visitor":  # forget the previous visitor's conversation, in this turn too
                         msgs = [{"role": "system", "content": system_prompt(self.s.robot_name, self.s.event_name, self._state(enc),
-                                                                            self.s.voice_language, self.s.booth_info)},
+                                                                            self.s.voice_language, self._booth_info())},
                                 *msgs[1 + len(history):]]
                         history = []
             else:
@@ -504,7 +575,7 @@ class BoothHost:
                 else:
                     learner.start()
             enc.messages += [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]
-            enc.last = time.monotonic()
+            enc.last = self._last_said = time.monotonic()
         if learner is not None:  # started beside the reply: wait for it, so the question below never asks what they just said
             learner.join(timeout=2)  # not longer: on a slow network the note may take 10 s; it is saved when it is done
         if enc.closing:
@@ -621,6 +692,7 @@ class BoothHost:
             self._greeted_at = now
             self._greet_times.append(now)
             self._recent_greeting = (now, text)
+            self._last_said = now
             self.outbox.say(text)
             trick = self.gesture_fn(self.s.greet_action) if (self.gesture_fn and self.s.greet_action) else None
             self._publish("greeting", {"text": text, "kind": kind, "people": len(people), "trick": trick})

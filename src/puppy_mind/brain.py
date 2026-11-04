@@ -462,6 +462,7 @@ class Brain:
             self.drive.set_booth(False, self.s.idle_look_up_deg)
         elif self.listening and not self.drive.booth:  # LISTEN_ALWAYS without the tab: tricks and the head tilt need booth mode
             self.drive.set_booth(True, self.s.idle_look_up_deg)
+        self.booth.maybe_invite(self.listening and not self._engaged)  # the claw machine cheerleader, when nobody talks to the robot
 
     def gesture(self, name: str, manual: bool = False) -> dict:
         """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""

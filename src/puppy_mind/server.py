@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .brain import Brain
+from .booth import CHEERS
 from .drive import BIG_TRICKS, TRICKS
 from .voice import heard_nothing
 from .scenario import _scene
@@ -528,11 +529,16 @@ class Trick(BaseModel):
     name: str
 
 
+class Cheer(BaseModel):
+    kind: str
+
+
 @app.get("/api/booth")
 def booth_get():
     st = brain.drive.status()
     return {"on": st["booth"], "look_up_deg": st["look_up_deg"], "in_action": st["in_action"], "greet_action": brain.s.greet_action,
-            "tricks": list(TRICKS), "big_tricks": list(BIG_TRICKS)}
+            "tricks": list(TRICKS), "big_tricks": list(BIG_TRICKS), "claw_machine": brain.s.claw_machine,
+            "cheers": list(CHEERS), "claw_prize": brain.s.claw_prize}
 
 
 @app.post("/api/booth")
@@ -551,6 +557,18 @@ def gesture(body: Trick, request: Request, x_brain_token: str | None = Header(No
     if not brain.drive.booth:
         brain.drive.set_booth(True, brain.s.idle_look_up_deg)
     return brain.gesture(body.name, manual=True)
+
+
+@app.post("/api/booth/cheer")
+def booth_cheer(body: Cheer, request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The claw machine buttons in the Booth tab: the robot calls people over, cheers a player on, celebrates or consoles."""
+    _local_auth(request, x_brain_token, token)
+    if not brain.drive.booth:
+        brain.drive.set_booth(True, brain.s.idle_look_up_deg)
+    r = brain.booth.cheer(body.kind)
+    if not r["ok"]:
+        raise HTTPException(400, r["reason"])
+    return r
 
 
 @app.post("/api/voice/say")

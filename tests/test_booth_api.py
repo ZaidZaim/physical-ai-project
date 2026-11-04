@@ -324,3 +324,13 @@ def test_trick_buttons_play_one_after_another_and_the_big_ones_only_from_the_but
     from puppy_mind.booth import TOOLS
     enum = next(t for t in TOOLS if t["function"]["name"] == "do_trick")["function"]["parameters"]["properties"]["name"]["enum"]
     assert enum == list(TRICKS) and not set(enum) & set(BIG_TRICKS)
+
+
+def test_claw_machine_cheer_buttons(client):
+    b = client.get("/api/booth").json()
+    assert set(b["cheers"]) == {"invite", "playing", "won", "almost"} and "claw_prize" in b
+    r = client.post("/api/booth/cheer", json={"kind": "almost"}).json()
+    assert r["ok"] and r["text"]
+    assert server.brain.drive.booth  # a cheer turns booth mode on, so the invite's wave can play
+    assert client.get("/api/voice/next").content.startswith(b"RIFFfake-wav:")
+    assert client.post("/api/booth/cheer", json={"kind": "nope"}).status_code == 400

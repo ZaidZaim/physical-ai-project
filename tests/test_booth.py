@@ -390,3 +390,58 @@ def test_the_robot_voice_is_made_louder_without_clipping():
     (r0, p0), (r1, p1) = rms_peak(quiet), rms_peak(loud)
     assert r1 > 3 * r0 and p1 <= 32767 * 0.97 + 1  # much louder, never clipped
     assert louder(quiet, 1.0) == quiet and louder(b"not a wav", 2.5) == b"not a wav"
+
+
+# ---- the claw machine cheerleader
+CLAW = dataclasses.replace(S, claw_machine=True, claw_prize="a Graph Wizard", cheer_every_s=100)
+
+
+def test_cheer_says_a_line_with_the_prize_never_the_same_twice_in_a_row_and_waves_on_invite():
+    from puppy_mind.booth import CHEERS
+    tricks = []
+    h, _ = host([], gesture_fn=lambda n, manual=False: tricks.append((n, manual)) or {"ok": True, "action": n})
+    h.s = CLAW
+    said = []
+    for _ in range(8):
+        r = h.cheer("invite")
+        said.append(h.outbox.next())
+        assert r["ok"] and said[-1]["kind"] == "cheer" and said[-1]["text"] == r["text"]
+    assert all(a["text"] != b["text"] for a, b in zip(said, said[1:]))
+    assert any("Graph Wizard" in s["text"] for s in said) and "{prize}" not in "".join(s["text"] for s in said)
+    assert tricks[0] == ("wave", True)
+    h.cheer("playing")
+    assert len(tricks) == 8  # cheering a player on is words only: no trick next to the claw machine's player
+    h.cheer("won")
+    assert tricks[-1][0] == "boxing"
+    assert not h.cheer("dance")["ok"] and set(CHEERS) == {"invite", "playing", "won", "almost"}
+
+
+def test_the_robot_calls_people_over_only_when_nobody_talks_to_it_for_a_while():
+    h, _ = host([["Hi! Welcome to the booth."]])
+    h.s = CLAW
+    assert not h.maybe_invite(listening=True)  # it just started: waits CHEER_EVERY_S first
+    h._last_said -= 101
+    assert not h.maybe_invite(listening=False)  # not listening (no tab, LISTEN_ALWAYS off): stays quiet
+    assert h.maybe_invite(listening=True) and h.outbox._items[0]["kind"] == "cheer"
+    assert not h.maybe_invite(listening=True)  # the invite is still waiting to be played
+    h.outbox.next()
+    h._last_said -= 101
+    h.turn("Hey PuppyPi, hello")  # someone talks to it: no invite in the middle of a conversation
+    h.outbox._items.clear()
+    h._last_said -= 101
+    assert not h.maybe_invite(listening=True)
+    h.s = dataclasses.replace(CLAW, claw_machine=False)
+    for e in h.encounters.values():
+        e.last -= 1000
+    assert not h.maybe_invite(listening=True)  # switched off
+    h.s = dataclasses.replace(CLAW, cheer_every_s=0)
+    assert not h.maybe_invite(listening=True)  # 0 = only by button
+
+
+def test_the_wizard_knows_the_claw_machine_and_mentions_it_at_goodbye():
+    h, _ = host([["Hi!"], ["Thanks for stopping by!"]])
+    h.s = CLAW
+    h.turn("Hey PuppyPi, what can I do here?")
+    assert "claw machine" in h.client.prompts[-1] and "Graph Wizard" in h.client.prompts[-1]
+    h.turn("Thanks, bye!")
+    assert "invite them to try the claw machine" in h.client.prompts[-1]
