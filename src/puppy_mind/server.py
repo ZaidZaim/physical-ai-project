@@ -475,6 +475,38 @@ def listen(request: Request, x_brain_token: str | None = Header(None), token: st
     return brain.listen_ping()
 
 
+def _live_on() -> bool:
+    return bool(brain.s.live_voice and brain.voice and brain.s.openai_api_key)
+
+
+@app.get("/api/voice/mode")
+def voice_mode(x_brain_token: str | None = Header(None)):
+    """Asked by the robot when its voice client starts: stream to /api/voice/live (GPT-Live) or use the classic turns."""
+    _robot_auth(x_brain_token)
+    return {"live": _live_on(), "model": brain.s.live_model if _live_on() else None}
+
+
+@app.websocket("/api/voice/live")
+async def voice_live(ws: WebSocket, token: str = ""):
+    """The robot's microphone and speaker for GPT-Live calls (see live.py). Same token rule as the other robot endpoints."""
+    tok = ws.headers.get("x-brain-token") or token
+    await ws.accept()
+    if brain.s.brain_token and not secrets.compare_digest(tok or "", brain.s.brain_token):
+        await ws.close(code=4401)
+        return
+    if not _live_on():
+        await ws.close(code=4001)  # LIVE_VOICE is off: the robot falls back to the classic turns
+        return
+    from .live import LiveBridge
+
+    print("robot voice connected for GPT-Live calls", flush=True)
+    try:
+        await LiveBridge(brain).serve(ws)
+    except WebSocketDisconnect:
+        pass
+    print("robot voice disconnected", flush=True)
+
+
 @app.get("/api/voice/next")
 def voice_next(x_brain_token: str | None = Header(None)):
     """Polled by the robot: a greeting it should say (WAV), or 204."""

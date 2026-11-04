@@ -68,6 +68,29 @@ BOOTH = """BOOTH RULES
 LANGUAGES = {"en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian", "nl": "Dutch", "pt": "Portuguese"}
 
 
-def system_prompt(robot: str, event: str, state: str, language: str = "en", booth_info: str = "") -> str:
-    return (WIZARD + "\n" + BOOTH).format(robot=robot, event=event, state=state, language=LANGUAGES.get(language, language or "English"),
-                                         booth_info=booth_info.strip() or "nothing was given: refer them to the Neo4j staff")
+_ADDED_QUESTION = """- What they are interested in matters: one question about their interests (what they are working on, how well they know Neo4j,
+  what they enjoyed at {event}) is added automatically at the end of your reply, at the right moment. Never ask these yourself.
+  Answer their question briefly first; while they keep asking, just answer."""
+_LIVE_QUESTION = """- What they are interested in matters: after you answered, you may end with ONE short question about their interests (what
+  they are working on, how well they know Neo4j, what they enjoyed at {event}), never the same one twice and never while they keep
+  asking. Never ask anything personal.
+- This is a live voice call: you hear the visitor directly and speak directly. Keep it snappy.
+- When they say goodbye or thanks and leave, say goodbye warmly in one sentence and stop.
+
+BACKEND CAPABILITIES (your backend does these for you; you have a real robot body)
+- Tricks: makes your body do a trick: wave, boxing, shake hands, bow, nod, sit, stand, lie down, stretch, shake head.
+- Room: what you can see and where things are in this room, from your own camera memory.
+- New visitor: starts a fresh conversation when a different person has taken over.
+Generate <|SpawnThinking|> when: someone asks you to do a trick or to move; someone asks what you see or about this room; a
+different person takes over the conversation.
+Generate <|SpawnThinking|> before saying that a trick was done or describing the room. Do not guess the result while waiting; a
+short playful line is fine.
+Do not generate <|SpawnThinking|> when: they ask about Neo4j, graphs, Cypher, GenAI or GraphRAG (answer those yourself), small
+talk, greetings, thanks or goodbyes."""
+
+
+def system_prompt(robot: str, event: str, state: str, language: str = "en", booth_info: str = "", live: bool = False) -> str:
+    """The Wizard's instructions. live=True: for a GPT-Live call (it asks its own interest question; tools go through delegation)."""
+    booth = BOOTH.replace(_ADDED_QUESTION, _LIVE_QUESTION) if live else BOOTH
+    return (WIZARD + "\n" + booth).format(robot=robot, event=event, state=state, language=LANGUAGES.get(language, language or "English"),
+                                          booth_info=booth_info.strip() or "nothing was given: refer them to the Neo4j staff")

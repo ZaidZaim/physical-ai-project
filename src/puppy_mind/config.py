@@ -96,6 +96,13 @@ class Settings:
     claw_machine: bool = _bool("CLAW_MACHINE", False)
     claw_prize: str = os.getenv("CLAW_PRIZE", "a Graph Wizard")
     cheer_every_s: float = float(os.getenv("CHEER_EVERY_S", "0"))
+    # GPT-Live (OpenAI gpt-live-1): the conversation as one full-duplex voice stream instead of record, transcribe, chat, speak. Measured
+    # at about 1 s from the end of a question to the first sound, against 5 to 7 s. The robot asks /api/voice/mode at start and
+    # streams to /api/voice/live when this is on; the wake word is still checked on the laptop before a call opens (billed per minute).
+    live_voice: bool = _bool("LIVE_VOICE", False)
+    live_model: str = os.getenv("LIVE_MODEL", "gpt-live-1")
+    live_voice_name: str = os.getenv("LIVE_VOICE_NAME", "marin")
+    live_backend_model: str = os.getenv("LIVE_BACKEND_MODEL", "gpt-6-luna")  # runs the tools (tricks, questions about the room)
     # louder robot voice: the WonderEcho Pro's speaker is already at 100% and too quiet in a hall. 1 = as generated; higher raises the
     # quiet parts and softly limits the peaks (no clipping). 2.5 is clearly louder and still clean.
     voice_gain: float = float(os.getenv("VOICE_GAIN", "2.5"))

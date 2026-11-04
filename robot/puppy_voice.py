@@ -13,12 +13,20 @@ Usage on the robot (it finds the WonderEcho Pro and measures the room noise by i
 
 The robot only speaks when the brain tells it to (a greeting, or the answer to someone who just spoke) and it never listens while it
 is talking. Audio leaves the robot only when someone speaks: nothing is recorded to disk.
+
+GPT-Live (when the laptop has LIVE_VOICE=true; asked at start): the same, but over one WebSocket. Outside a conversation the robot
+still sends only what someone said; once the laptop has opened a call (after "Hey PuppyPi") it streams the microphone and plays the
+answer as it arrives, until the call ends. --classic forces the old turn by turn mode.
 """
 import argparse
 import array
+import base64
 import io
 import json
+import os
 import re
+import socket
+import struct
 import subprocess
 import threading
 import time
@@ -99,6 +107,112 @@ def get(brain, path, token):
     if token:
         req.add_header("X-Brain-Token", token)
     return urllib.request.urlopen(req, timeout=30)
+
+
+class MiniWS:
+    """A minimal WebSocket client (ws:// only, stdlib): the Pi image has no websocket package and the voice client stays stdlib only."""
+
+    def __init__(self, url, headers=None, timeout=10.0):
+        u = urllib.parse.urlparse(url)
+        host, port = u.hostname, u.port or 80
+        path = (u.path or "/") + ("?" + u.query if u.query else "")
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        key = base64.b64encode(os.urandom(16)).decode()
+        req = ("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+               "Sec-WebSocket-Version: 13\r\n" % (path, host, port, key))
+        for k, v in (headers or {}).items():
+            req += "%s: %s\r\n" % (k, v)
+        self.sock.sendall((req + "\r\n").encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("the laptop closed the connection during the handshake")
+            resp += chunk
+        head, self.buf = resp.split(b"\r\n\r\n", 1)
+        status = head.split(b"\r\n")[0].decode(errors="ignore")
+        if " 101 " not in status + " ":
+            raise ConnectionError("no WebSocket: " + status)
+        self.sock.settimeout(None)
+        self.lock = threading.Lock()
+        self.close_code = None
+
+    @staticmethod
+    def _mask(data, mask):
+        if not data:
+            return data
+        m = (mask * (len(data) // 4 + 1))[:len(data)]
+        return (int.from_bytes(data, "big") ^ int.from_bytes(m, "big")).to_bytes(len(data), "big")
+
+    def _send(self, opcode, data):
+        n = len(data)
+        head = bytes([0x80 | opcode])
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        mask = os.urandom(4)
+        with self.lock:
+            self.sock.sendall(head + mask + self._mask(data, mask))
+
+    def send_bytes(self, data):
+        self._send(0x2, data)
+
+    def send_text(self, text):
+        self._send(0x1, text.encode())
+
+    def _read(self, n):
+        while len(self.buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("the laptop closed the connection")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def recv(self):
+        """(opcode, payload) of the next whole message: 1 text, 2 binary. Answers pings; raises ConnectionError on close."""
+        parts, first_op = [], None
+        while True:
+            b1, b2 = self._read(2)
+            op, n = b1 & 0x0F, b2 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            mask = self._read(4) if b2 & 0x80 else None
+            data = self._read(n)
+            if mask:
+                data = self._mask(data, mask)
+            if op == 0x9:
+                self._send(0xA, data)
+                continue
+            if op == 0xA:
+                continue
+            if op == 0x8:
+                self.close_code = struct.unpack(">H", data[:2])[0] if len(data) >= 2 else 1005
+                raise ConnectionError("closed by the laptop (%s)" % self.close_code)
+            if op != 0x0:
+                first_op = op
+            parts.append(data)
+            if b1 & 0x80:
+                return first_op, b"".join(parts)
+
+    def close(self):
+        try:
+            self._send(0x8, struct.pack(">H", 1000))
+        except Exception:
+            pass
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+class LiveOff(Exception):
+    """The laptop does not do GPT-Live calls (LIVE_VOICE is off): use the classic turns."""
 
 
 class Voice:
@@ -183,6 +297,99 @@ class Voice:
                         print("thinking...")
                         threading.Thread(target=self.turn, args=(pcm,), daemon=True).start()
 
+    def measure(self, mic, n):
+        """The speech threshold from two quiet seconds of room noise (unless --threshold was given)."""
+        if self.a.threshold is not None:
+            return
+        print("Measuring room noise for 2 seconds: please stay quiet...")
+        levels = []
+        for _ in range(int(2.0 / CHUNK_S)):
+            b = mic.stdout.read(n)
+            if not b or len(b) < n:
+                raise SystemExit("microphone stopped: check --mic (arecord -l)")
+            levels.append(rms(b))
+        self.a.threshold = auto_threshold(levels)
+        print("Speech threshold set to %.0f (room noise ~%.0f). Ready: say Hey PuppyPi!" % (self.a.threshold, max(levels) if levels else 0))
+
+    def live(self):
+        """GPT-Live mode: one WebSocket to the laptop. Raises LiveOff when the laptop says it is not doing live calls."""
+        url = "ws" + self.a.brain[len("http"):] + "/api/voice/live"
+        try:
+            ws = MiniWS(url, {"X-Brain-Token": self.a.token} if self.a.token else None)
+        except ConnectionError as e:
+            if "404" in str(e) or "403" in str(e):
+                raise LiveOff(str(e))
+            raise
+        print("GPT-Live: connected to", url)
+        player = subprocess.Popen(["aplay", "-q", "-D", self.a.speaker, "-t", "raw", "-f", "S16_LE", "-r", str(RATE), "-c", "1"],
+                                  stdin=subprocess.PIPE)
+        mic = subprocess.Popen(["arecord", "-q", "-D", self.a.mic, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
+                               stdout=subprocess.PIPE)
+        state = {"call": False, "play_until": 0.0, "error": None}
+
+        def receive():
+            try:
+                while True:
+                    op, data = ws.recv()
+                    if op == 2 and data[:1] == b"A":
+                        pcm = data[1:]
+                        player.stdin.write(pcm)
+                        player.stdin.flush()
+                        if rms(pcm[:len(pcm) // 2 * 2]) > 200:
+                            state["play_until"] = max(state["play_until"], time.time()) + len(pcm) / (RATE * 2.0)
+                    elif op == 1:
+                        m = json.loads(data.decode())
+                        if m.get("type") == "call":
+                            state["call"] = bool(m.get("open"))
+                            print("call", "open: talking to GPT-Live" if state["call"] else "closed: say Hey PuppyPi to start again")
+                        elif m.get("type") == "say":
+                            print("say:", m.get("text", ""))
+            except Exception as e:
+                state["error"] = e
+
+        threading.Thread(target=receive, daemon=True).start()
+        n = int(RATE * CHUNK_S) * 2
+        try:
+            self.measure(mic, n)
+            floor, speech, quiet, started, voiced = 0.0, bytearray(), 0, False, 0
+            end_quiet = int(self.a.live_silence / CHUNK_S)
+            while True:
+                if state["error"] is not None:
+                    if ws.close_code == 4001:
+                        raise LiveOff("the laptop has LIVE_VOICE off")
+                    raise ConnectionError(str(state["error"]))
+                buf = mic.stdout.read(n)
+                if not buf or len(buf) < n:
+                    raise SystemExit("microphone stopped: check --mic (arecord -l)")
+                if state["call"]:  # in a call: stream everything (the laptop mutes it while the robot talks)
+                    ws.send_bytes(b"M" + buf)
+                    speech, quiet, started, voiced = bytearray(), 0, False, 0
+                    continue
+                if time.time() < state["play_until"] + 0.5:  # a greeting or the end of a goodbye is playing: that is not a visitor
+                    speech, quiet, started, voiced = bytearray(), 0, False, 0
+                    continue
+                level = rms(buf)  # outside a call: only what someone says is sent, as one utterance (the laptop checks the wake word)
+                floor = level if floor == 0 else (floor * 0.98 + level * 0.02 if not started else floor)
+                loud = level > max(self.a.threshold, floor * 3)
+                if loud:
+                    started, quiet, voiced = True, 0, voiced + 1
+                elif started:
+                    quiet += 1
+                if started:
+                    speech += buf
+                    if quiet >= end_quiet or len(speech) > RATE * 2 * self.a.max_s:
+                        pcm, loud_s = trim_tail(bytes(speech), quiet), voiced * CHUNK_S
+                        speech, quiet, started, voiced = bytearray(), 0, False, 0
+                        if loud_s >= MIN_VOICE_S:
+                            ws.send_bytes(b"U" + pcm)
+        finally:
+            for proc in (mic, player):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            ws.close()
+
     def turn(self, pcm):
         if time.time() - self.last_turn > self.a.forget_after:
             self.encounter = None  # a new person: the brain starts a fresh conversation (and asks for consent again)
@@ -215,6 +422,8 @@ def main():
     ap.add_argument("--max-s", type=float, default=15.0, help="longest single utterance")
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")
+    ap.add_argument("--classic", action="store_true", help="never use GPT-Live calls, even when the laptop offers them")
+    ap.add_argument("--live-silence", type=float, default=0.8, help="GPT-Live mode: quiet that ends the wake sentence (the call itself needs none)")
     a = ap.parse_args()
     a.brain = a.brain.rstrip("/")
     for name, tool in (("mic", "arecord"), ("speaker", "aplay")):
@@ -228,6 +437,21 @@ def main():
     except Exception as e:
         raise SystemExit("cannot reach the laptop at %s (%s): is the app running there, and does the Windows Firewall allow port 8000?" % (a.brain, e))
     v = Voice(a)
+    live = False
+    if not a.test_mic and not a.classic:
+        try:
+            live = bool(json.loads(get(a.brain, "/api/voice/mode", a.token).read().decode()).get("live"))
+        except Exception:
+            live = False  # an older laptop app: no /api/voice/mode
+    while live:
+        try:
+            v.live()
+        except LiveOff as e:
+            print("GPT-Live is off on the laptop (%s): classic turns" % e)
+            live = False
+        except (ConnectionError, OSError) as e:
+            print("GPT-Live connection lost (%s): reconnecting in 3 s" % e)
+            time.sleep(3)
     if not a.test_mic:
         threading.Thread(target=v.greetings, daemon=True).start()
     v.listen()

@@ -128,6 +128,27 @@ NetworkManager keeps several networks (the phone hotspot first, the robot's own 
 Laptop side: `.env` needs `OPENAI_API_KEY`. Optional: `EVENT_NAME`, `BOOTH_INFO`, `OPENAI_TTS_VOICE`, `GREET_COOLDOWN_S`,
 `PEOPLE_GREET=false` (never greet unprompted). The robot's log `~/puppy_voice.log` prints what it heard: clear it after a booth day.
 
+## GPT-Live: faster conversations
+
+`LIVE_VOICE=true` in `.env` makes the conversations GPT-Live calls (OpenAI `gpt-live-1`, a full-duplex voice model) instead of
+turn by turn. Measured: the classic turn needs about 5 to 7 s from the end of a question to the first sound (1.5 s of silence on
+the robot, then transcription, the chat model, and the whole reply synthesised before it plays); GPT-Live starts answering about
+1 to 1.5 s after the visitor stops (the first answer of a call about 2.5 s, since the wake word is checked first).
+
+- The robot asks the laptop at start (`/api/voice/mode`) and then keeps one WebSocket (`/api/voice/live`). Outside a call it still
+  sends only what someone said; the laptop checks it for "Hey PuppyPi" (transcription, the same wake check) and only then opens a
+  call. During the call the robot streams its microphone and plays the answer as it arrives. Switching `LIVE_VOICE` off needs only
+  an app restart: the robot falls back to the classic turns. `--classic` on the robot forces them.
+- The call closes on goodbye, the Booth tab's End conversation, or `WAKE_WINDOW_S` of quiet. GPT-Live costs $0.05 per minute of
+  call (billed per second), plus the backend model's tokens when it runs a tool.
+- Tricks, questions about the room and a new visitor go to GPT-Live's delegated backend (`LIVE_BACKEND_MODEL`, default `gpt-6-luna`)
+  as the same tools (`do_trick`, `ask_world`, `new_visitor`). The instructions say when to delegate with GPT-Live's
+  `<|SpawnThinking|>` token; without that it answered "I can only wave in spirit".
+- The booth rules and the anonymous notes are the same: the live transcript (ordered by its timestamps, since the text arrives in
+  bursts) fills the conversation, and the notes are extracted from it as before.
+- The robot's microphone hears its own speaker, so the laptop sends silence while the robot talks: visitors cannot interrupt it
+  yet. Settings: `LIVE_MODEL`, `LIVE_VOICE_NAME` (default `marin`), `LIVE_BACKEND_MODEL`. Code: `live.py`.
+
 ## Not built (on purpose)
 
 - **On-robot wake word.** "Hey PuppyPi" is checked on the laptop after transcription, so hall audio is still sent for transcription
