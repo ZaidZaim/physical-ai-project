@@ -152,6 +152,10 @@ the robot, then transcription, the chat model, and the whole reply synthesised b
   `<|SpawnThinking|>` token; without that it answered "I can only wave in spirit".
 - The booth rules and the anonymous notes are the same: the live transcript (ordered by its timestamps, since the text arrives in
   bursts) fills the conversation, and the notes are extracted from it as before.
+- Everything the robot says on its own (the camera greeting, the claw machine cheers and invites) is spoken by GPT-Live too, in the
+  same voice as the calls: a short session told to say exactly that line (measured: word for word, first sound about 1.8 s). GPT-Live
+  only speaks while audio flows in, so silence is streamed to it meanwhile. If it cannot start within 6 s, the classic voice says
+  the line instead; if a visitor speaks while a line is still being prepared, the line gives way to their conversation.
 - The robot's microphone hears its own speaker, so the laptop sends silence while the robot talks: visitors cannot interrupt it
   yet. Settings: `LIVE_MODEL`, `LIVE_VOICE_NAME` (default `marin`), `LIVE_BACKEND_MODEL`. Code: `live.py`.
 

@@ -15,6 +15,8 @@ How it runs:
 - Tricks, questions about the room and a new visitor are function tools of GPT-Live's delegated backend (LIVE_BACKEND_MODEL).
 - The live transcripts go into the same Encounter as a classic conversation, so the anonymous booth notes are made the same way.
 - The robot's microphone hears its own speaker, so while it talks (and briefly after) silence is sent instead: no barge-in yet.
+- What the robot says on its own (the camera greeting, the claw machine cheers and invites) is spoken by GPT-Live too, in the same
+  voice as the calls: a short session told to say exactly that line (LiveBridge.say). If that fails, the classic voice says it.
 
 Robot frames, binary: b"S" + PCM (someone is speaking, outside a call: streamed from the start of the sentence, since GPT-Live
 listens at real-time speed and a sentence sent only once it ended cost its whole length again), b"E" (that sentence ended),
@@ -52,9 +54,27 @@ PROBE_MAX_S = 20.0          # ... and a long monologue without it after this lon
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
 OVERLAP_MS = 100            # speech resumed within this of a scrap's end overlaps it (see merge_turns)
 
+SAY_INSTRUCTIONS = ("You are {robot}, a friendly robot dog at the Neo4j booth, and right now you are only the voice for one line, "
+                    "not in a conversation. When you get a line, say it out loud exactly as written, word for word, warm and lively, "
+                    "then stop. Add nothing, answer nothing, ask nothing.")
+SAY_SETUP_S = 6.0           # connecting and starting a line's session: longer, and the classic voice says it instead
+SAY_TIMEOUT_S = 15.0        # speaking a line, counted once its session has started
+SAY_DONE_QUIET_S = 0.8      # the line is over once its words were all said and the voice has been quiet this long
+
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
            "ask_world for anything about the room or what the robot can see, new_visitor when a different person has taken over. "
            "Reply with one short plain sentence the voice can say. Never ask for or keep personal data.")
+
+
+def _plain(s: str) -> str:
+    """Lowercase words only: to compare what GPT-Live said with the line it was given."""
+    return " ".join("".join(c if c.isalnum() else " " for c in (s or "").lower()).split())
+
+
+def _says_all(said: str, line: str) -> bool:
+    """Every word of `line` is in `said`, in order (GPT-Live may add a word or two, or say "Graph Wizard." for "Graph Wizard!")."""
+    words, heard = _plain(line).split(), iter(_plain(said).split())
+    return bool(words) and all(w in heard for w in words)  # `in` on an iterator moves it on: the words must come in order
 
 
 def merge_turns(pieces: list[tuple]) -> list[dict]:
@@ -390,14 +410,124 @@ class LiveBridge:
         self.brain = brain
         self.ws = None
         self.call: LiveCall | None = None
+        self.saying: asyncio.Task | None = None  # a greeting or cheer being spoken by GPT-Live
+        self.last_said = ""
         self.play_end = 0.0
         self.audible_until = 0.0
         self.spare: asyncio.Task | None = None  # a GPT-Live connection kept ready for the next utterance
         self.spare_at = 0.0
 
     def busy(self) -> bool:
-        """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos)."""
+        """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos). A line still being prepared
+        does not count: a visitor who speaks first is heard, and the line gives way (see say)."""
         return time.monotonic() < self.audible_until + ECHO_TAIL_S or self.brain.drive.moving
+
+    async def _say_setup(self, text: str):
+        """A GPT-Live session ready to say `text`: connected, started, the line handed over."""
+        s = self.brain.s
+        ws = await self._take_spare() or await openai_connect(s)
+        try:
+            await ws.send(json.dumps({"type": "session.start", "event_id": "say", "session": {
+                "model": s.live_model, "instructions": SAY_INSTRUCTIONS.format(robot=s.robot_name),
+                "audio": {"format": {"type": "audio/pcm", "rate": RATE}, "output": {"voice": s.live_voice_name}}}}))
+            while True:
+                m = json.loads(await ws.recv())
+                if m.get("type") == "session.started":
+                    break
+                if m.get("type") == "error":
+                    raise RuntimeError((m.get("error") or {}).get("message", "GPT-Live refused the session"))
+            await ws.send(json.dumps({"type": "session.commentary.append", "event_id": "say-" + uuid.uuid4().hex[:8],
+                                      "delegation_id": None, "content": text}))
+            return ws
+        except BaseException:
+            self._close_later(ws)
+            raise
+
+    def _close_later(self, ws) -> None:
+        """End a session without waiting for it (busy() must clear as soon as the line has played)."""
+        async def close():
+            try:
+                await asyncio.wait_for(ws.send(json.dumps({"type": "session.close", "event_id": "say-close"})), 2)
+                await asyncio.wait_for(ws.close(), 3)
+            except BaseException:
+                pass
+        asyncio.ensure_future(close())
+
+    async def say(self, text: str) -> str:
+        """Speak one line in GPT-Live's voice (the voice of the calls) on the robot's speaker. Returns "said", "skipped" (a visitor
+        spoke before any of it played: the conversation goes first) or "failed" (nothing was heard: the classic voice says it)."""
+        s, ws, feeder = self.brain.s, None, None
+        heard, played, t0 = False, False, time.monotonic()
+        try:
+            try:  # connecting and starting have their own short limit: a slow link falls back to the classic voice at once
+                ws = await asyncio.wait_for(self._say_setup(text), SAY_SETUP_S)
+            except asyncio.TimeoutError:
+                print("live say: GPT-Live took over %.0fs to start" % SAY_SETUP_S, flush=True)
+                return "failed"
+
+            async def silence():  # GPT-Live runs on its input stream: with no audio coming in it never speaks (measured)
+                chunk = base64.b64encode(bytes(BPS // 50)).decode()
+                while True:
+                    await ws.send(json.dumps({"type": "session.input_audio.append", "audio": chunk}))
+                    await asyncio.sleep(0.02)
+            feeder = asyncio.create_task(silence())
+            said, first_loud, last_loud, done_at = "", None, None, None
+            longest = 2.0 + 0.45 * len(text.split())  # a generous estimate of how long the line takes to say
+            started = time.monotonic()  # the speaking limits count from here, not from the connection
+            while time.monotonic() - started < SAY_TIMEOUT_S:
+                now = time.monotonic()
+                if not played and self.call is not None:
+                    return "skipped"  # a visitor spoke while the line was being prepared: their conversation goes first
+                if done_at is None and heard and _says_all(said, text):
+                    done_at = now  # every word of the line is in the transcript (its audio may still be arriving)
+                if done_at is not None and last_loud is not None and now - last_loud > SAY_DONE_QUIET_S:
+                    break  # the first pause after the last word: the line is over
+                if first_loud is not None and now - first_loud > longest:
+                    break  # it carries on past the line without a pause: stop there
+                if heard and last_loud is not None and now - last_loud > 2.5:
+                    break  # it stopped early (it reworded the line): what was said is what it said
+                try:
+                    m = json.loads(await asyncio.wait_for(ws.recv(), 0.25))
+                except asyncio.TimeoutError:
+                    continue
+                kind = m.get("type")
+                if kind == "session.output_audio.delta":
+                    raw = base64.b64decode(m.get("delta") or "")
+                    loud = pcm_rms(raw) > LOUD_OUT
+                    if loud and not played and self.call is not None:
+                        return "skipped"
+                    await self.play(louder_pcm(raw, s.voice_gain), loud)  # every chunk of the line plays, to its last word
+                    if loud:
+                        played = heard = True
+                        last_loud = time.monotonic()
+                        first_loud = first_loud or last_loud
+                elif kind == "session.output_transcript.delta":
+                    said += m.get("delta") or ""
+                elif kind == "session.closed":
+                    break
+                elif kind == "error":
+                    err = m.get("error") or {}
+                    print("GPT-Live error while speaking:", err.get("code"), str(err.get("message"))[:160], flush=True)
+            self.last_said = said.strip()
+            print("live say (%.1fs): %r" % (time.monotonic() - t0, self.last_said[:120] or "(nothing)"), flush=True)
+        except Exception as e:
+            print("live say failed:", type(e).__name__, str(e)[:160], flush=True)
+        finally:
+            if feeder is not None:
+                feeder.cancel()
+            if ws is not None:
+                self._close_later(ws)
+        return "said" if heard else "failed"
+
+    async def _say_item(self, text: str) -> None:
+        """A greeting or cheer from the outbox: GPT-Live's voice, or the classic voice if GPT-Live could not say it."""
+        try:
+            await self.tell({"type": "say", "text": text})
+            if await self.say(text) == "failed" and self.brain.voice and self.call is None:
+                wav = await asyncio.to_thread(self.brain.voice.speak, text)
+                await self.play(wav_to_pcm16k(wav), True)
+        except Exception as e:  # the robot went away mid-line: nothing to say it to
+            print("live say:", type(e).__name__, str(e)[:120], flush=True)
 
     async def play(self, pcm: bytes, loud: bool | None = None) -> None:
         """Send audio to the robot's speaker. loud: whether it is speech (the microphone is muted until it has played)."""
@@ -494,11 +624,9 @@ class LiveBridge:
                 self.brain.booth_tick()
                 if self.call is None and time.monotonic() - self.spare_at > SPARE_MAX_AGE_S:
                     self._renew_spare()
-                if self.call is None and not self.busy() and self.brain.voice:
+                if self.call is None and not self.busy() and (self.saying is None or self.saying.done()):
                     it = self.brain.booth.outbox.next()
-                    if it:
-                        wav = await asyncio.to_thread(self.brain.voice.speak, it["text"])
-                        await self.tell({"type": "say", "text": it["text"]})
-                        await self.play(wav_to_pcm16k(wav))
+                    if it:  # spoken beside this clock (a line takes a few seconds), never two at once (busy() while it runs)
+                        self.saying = asyncio.create_task(self._say_item(it["text"]))
             except Exception as e:
                 print("live tick:", e, flush=True)

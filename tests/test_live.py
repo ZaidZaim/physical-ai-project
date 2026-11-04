@@ -9,6 +9,7 @@ import base64
 import dataclasses
 
 import importlib.util
+import json
 
 import io
 
@@ -422,3 +423,111 @@ def test_the_robots_own_goodbye_ends_the_call():
     _ev(call, "output", 10000, " Awesome. Good luck, and try the claw machine!")
     call.commit()
     assert call.enc.closing and call.close_at is not None
+
+
+class FakeOpenAI:
+    """A GPT-Live socket that answers session.start and then, once input audio flows, says `words` as audio and transcript."""
+
+    def __init__(self, words, fail=False, transcript_first=False, hang=False):
+        self.words, self.fail, self.sent, self.queue = words, fail, [], []
+        self.transcript_first, self.hang = transcript_first, hang
+
+    async def send(self, raw):
+        m = json.loads(raw)
+        self.sent.append(m["type"])
+        if m["type"] == "session.start" and not self.hang:
+            self.queue.append({"type": "error", "error": {"message": "no"}} if self.fail else {"type": "session.started"})
+        if m["type"] == "session.input_audio.append" and self.sent.count("session.input_audio.append") == 3:
+            loud = base64.b64encode((np.ones(800) * 3000).astype("<i2").tobytes()).decode()
+            words = self.words.split()
+            if self.transcript_first:  # the whole transcript before any of the audio (GPT-Live's text runs ahead in bursts)
+                self.queue += [{"type": "session.output_transcript.delta", "delta": " " + w} for w in words]
+                self.queue += [{"type": "session.output_audio.delta", "delta": loud} for _ in words]
+            else:
+                for w in words:
+                    self.queue += [{"type": "session.output_audio.delta", "delta": loud}, {"type": "session.output_transcript.delta", "delta": " " + w}]
+
+    async def recv(self):
+        while not self.queue:
+            await asyncio.sleep(0.01)
+        return json.dumps(self.queue.pop(0))
+
+    async def close(self):
+        pass
+
+
+class Robot:
+    def __init__(self):
+        self.audio, self.texts = [], []
+
+    async def send_bytes(self, b):
+        self.audio.append(b)
+
+    async def send_text(self, s):
+        self.texts.append(json.loads(s))
+
+
+def _bridge(monkeypatch, fake, classic=None):
+    from puppy_mind import live
+
+    async def connect(s):
+        return fake
+    monkeypatch.setattr(live, "openai_connect", connect)
+    voice = type("V", (), {"speak": lambda self, text: classic.append(text) or _wav()})() if classic is not None else None
+    brain = type("B", (), {"s": S, "voice": voice, "drive": type("D", (), {"moving": False})()})()
+    bridge = live.LiveBridge(brain)
+    bridge.ws = Robot()
+    return bridge
+
+
+def _wav():
+    b = io.BytesIO()
+    with wave.open(b, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000); w.writeframes(bytes(4800))
+    return b.getvalue()
+
+
+def test_a_cheer_is_spoken_by_gpt_live_word_for_word(monkeypatch):
+    fake = FakeOpenAI("Go go go you got this")
+    bridge = _bridge(monkeypatch, fake)
+    async def go():
+        r = await bridge.say("Go, go, go! You've got this!")
+        await asyncio.sleep(0.05)  # the session is closed in the background
+        return r
+    assert asyncio.run(go()) == "said"
+    assert len(bridge.ws.audio) == 6 and "session.commentary.append" in fake.sent and "session.input_audio.append" in fake.sent
+    assert fake.sent[-1] == "session.close" and bridge.audible_until > 0  # the microphone stays muted while it plays
+
+
+def test_a_line_whose_transcript_runs_ahead_of_its_audio_is_still_played_to_its_last_word(monkeypatch):
+    # found in review: the transcript looked complete after the first chunk and the rest of the line was dropped
+    words = "Who wants a Graph Wizard Give it a go"
+    bridge = _bridge(monkeypatch, FakeOpenAI(words, transcript_first=True))
+    assert asyncio.run(bridge.say("Who wants a Graph Wizard? Give it a go!")) == "said"
+    assert len(bridge.ws.audio) == len(words.split())  # one loud chunk per word, every one played
+
+
+def test_a_slow_gpt_live_start_falls_back_to_the_classic_voice_quickly(monkeypatch):
+    from puppy_mind import live
+    monkeypatch.setattr(live, "SAY_SETUP_S", 0.3)
+    classic = []
+    bridge = _bridge(monkeypatch, FakeOpenAI("", hang=True), classic)
+    t0 = __import__("time").monotonic()
+    asyncio.run(bridge._say_item("Step right up!"))
+    assert classic == ["Step right up!"] and __import__("time").monotonic() - t0 < 2
+
+
+def test_the_classic_voice_says_it_when_gpt_live_cannot(monkeypatch):
+    classic = []
+    bridge = _bridge(monkeypatch, FakeOpenAI("", fail=True), classic)
+    asyncio.run(bridge._say_item("So close! Give it another try!"))
+    assert classic == ["So close! Give it another try!"] and bridge.ws.audio
+    assert bridge.ws.texts == [{"type": "say", "text": "So close! Give it another try!"}]
+
+
+def test_a_visitor_who_speaks_while_a_line_is_prepared_goes_first(monkeypatch):
+    # found in review: the cheer's setup counted as busy, so "Hey PuppyPi" in that second was thrown away
+    bridge = _bridge(monkeypatch, FakeOpenAI("Step right up"), classic=[])
+    assert not bridge.busy()
+    bridge.call = object()  # a visitor's wake check opened meanwhile
+    assert asyncio.run(bridge.say("Step right up!")) == "skipped" and not bridge.ws.audio
