@@ -49,7 +49,8 @@ ECHO_TAIL_S = 0.6           # the microphone stays muted this long after the rob
 BOT_TURN_GAP_S = 1.2        # no new transcript for this long: the turns so far are committed (GPT-Live sends no end-of-turn event)
 MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
 PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
-PROBE_AFTER_ANSWER_S = 0.7  # ... or this long after GPT-Live began answering it (its transcript of the sentence is complete by then)
+PROBE_AFTER_ANSWER_S = 2.0  # ... or this long after GPT-Live began answering it (at the booth its transcript of "Hey, Puppy"
+                            # came more than 0.7 s after the answer began: the call was dropped while the robot said "Hi there")
 PROBE_MAX_S = 20.0          # ... and a long monologue without it after this long
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
 class LiveUsage:
@@ -307,7 +308,7 @@ class LiveCall:
             else:
                 self.bot_at = now
                 self.answer_at = self.answer_at or now
-            if not self.confirmed:
+            if not self.confirmed and not self.closed_reason:  # a session already being closed is never confirmed after all
                 heard = " ".join(x["content"] for x in merge_turns(self.pieces) if x["role"] == "user")
                 # only "Hey PuppyPi" opens a call: right after a camera greeting any sentence used to count as an answer to it,
                 # and in the busy hall bystanders' chatter ("to have ...") opened calls nobody had asked for

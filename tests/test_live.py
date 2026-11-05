@@ -595,3 +595,13 @@ def test_visitors_may_interrupt_only_with_barge_in_on_and_the_robots_echo_cancel
     assert not bridge.mute_mic()
     bridge.robot_aec = False
     assert bridge.mute_mic()
+
+
+def test_a_probe_that_is_already_closing_is_not_confirmed_late():
+    # seen at the booth: the wake word arrived after the check had given up; the call opened, said "Hi there" and closed at once
+    booth, _ = _booth()
+    bridge = FakeBridge(booth)
+    call = LiveCall(bridge, b"\x00\x00" * 1600)
+    call.closed_reason = "no wake word"
+    _ev(call, "input", 600, " Hey, PuppyPi")
+    assert not call.confirmed and not bridge.told
