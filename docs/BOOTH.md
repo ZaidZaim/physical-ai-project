@@ -99,7 +99,7 @@ a flat floor with about a metre clear in front of the robot, and a hand near it.
 | You say | PuppyPi does | How |
 |---|---|---|
 | "Come here!" / "Come closer" | walks toward you (the way it faces) for about 1.5 s | `move forward` |
-| "Faster!" / "Run!" | the next walk at sprint speed (30 cm/s; the firmware ignores anything above 35) | `move ... speed sprint` |
+| "Faster!" / "Run!" | the next walk at sprint speed (15 cm/s, the fastest that walks straight: at 20-30 it veered off course) | `move ... speed sprint` |
 | "Step to the left" | can't: says its legs only go forward and back, and offers to turn instead (no sideways hip joint) | `move turn_left` |
 | "Sit." / "Pay attention." | sits, and **stays** sitting | `do_trick sit` |
 | "Stand up." | stands back up | `do_trick stand` |

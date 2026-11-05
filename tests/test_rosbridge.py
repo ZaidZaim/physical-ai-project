@@ -6,7 +6,7 @@ import time
 from websockets.sync.server import serve
 
 from puppy_mind.drive import DriveState
-from puppy_mind.rosbridge import FIRMWARE_MAX_X, RosbridgeDriver, velocity
+from puppy_mind.rosbridge import FIRMWARE_MAX_X, HeadingHold, RosbridgeDriver, velocity
 
 
 class FakeBridge:
@@ -155,15 +155,15 @@ def test_imu_yaw_rate_reaches_the_heading_tracker_and_integrates_to_degrees():
             time.sleep(0.05)
         assert d.imu_samples >= 4
         sub = [m for m in fb.msgs if m["op"] == "subscribe"][0]
-        assert sub["topic"] == "/ros_robot_controller/imu_raw" and sub["type"] == "sensor_msgs/Imu" and sub["throttle_rate"] == 50
+        assert sub["topic"] == "/ros_robot_controller/imu_raw" and sub["type"] == "sensor_msgs/Imu" and sub["throttle_rate"] == 10
         assert tracker.value() is not None  # data is fresh
     finally:
         d.close(); fb.close()
 
 
-def test_without_an_imu_callback_the_driver_never_subscribes():
+def test_without_an_imu_callback_or_heading_hold_the_driver_never_subscribes():
     fb, drive = FakeBridge(), DriveState()
-    d = run(drive, fb)
+    d = run(drive, fb, hold_heading=False)
     try:
         time.sleep(0.2)
         assert not [m for m in fb.msgs if m["op"] == "subscribe" and "imu" in m["topic"]]
@@ -265,7 +265,7 @@ def test_sprint_only_speeds_up_walking_straight_and_y_is_never_sent(monkeypatch)
         drive.arm(True)
         drive.set_speed(4)
         _hold(drive, 1, 0, 0)
-        assert any(abs(v["x"] - 30.0) < 1e-6 for v in fb.vels())  # sprint
+        assert any(abs(v["x"] - 15.0) < 1e-6 for v in fb.vels())  # sprint
         _hold(drive, 0, 0, 1)
         assert max(abs(v["yaw_rate"]) for v in fb.vels()) <= 0.436 + 1e-9  # turning never sprints
         _hold(drive, 0, 1, 0)  # a stray sideways value (old UI) must not reach the robot: the firmware drops the whole command
@@ -281,3 +281,80 @@ def test_velocity_never_breaks_the_firmware_rules():
                 for yaw in (-1, 0, 1):
                     v = velocity({"x": x, "y": y, "yaw": yaw, "speed": level}, 12.0, 99.0, 0.436)
                     assert v["y"] == 0.0 and abs(v["x"]) <= 35.0 and abs(v["yaw"]) <= 0.436
+
+
+def _sprint(h, drift, seconds=4.0, rock_deg=12.0, phase=1.0, delay=0.2, eff=0.8):
+    """A simulated sprint: a steady pull, the body rocking +-rock_deg twice a second, a 100 Hz gyro, steering that takes `delay` s
+    to act at `eff` of what was asked. Returns how far off course (deg) the walk ended, and how many steering changes were sent."""
+    import math
+
+    t, course, applied, pending, last, msgs = 0.0, 0.0, 0.0, [], None, 0
+    while t < seconds:
+        cmd = h.correction(True, key=(4, True), now=t)
+        if cmd != last:
+            last, msgs = cmd, msgs + 1
+            pending.append((t + delay, cmd))
+        while pending and pending[0][0] <= t:
+            applied = pending.pop(0)[1]
+        rate = drift + eff * applied
+        course += rate * 0.01
+        rock = math.radians(rock_deg) * 4 * math.pi * math.cos(4 * math.pi * t + phase)
+        h.feed(rate + rock, still=False, now=t)
+        t += 0.01
+    h.correction(False, now=t)
+    return math.degrees(course), msgs
+
+
+def test_heading_hold_learns_the_steady_pull_and_ignores_the_stride_rocking():
+    for drift in (-0.15, 0.08):  # veering right (seen at the robot), and left
+        h = HeadingHold()
+        ends = [_sprint(h, drift, phase=p)[0] for p in (0.3, 1.7, 2.9, 4.4)]
+        unheld = abs(drift) * 4 * 57.3
+        assert abs(ends[0]) < unheld  # the first walk already helps while it learns
+        assert all(abs(e) < 6 for e in ends[1:]), ends  # then it holds the line, whatever the stride phase
+        assert (h.trim[(4, True)] > 0) == (drift < 0)  # it learned to steer against the pull
+
+
+def test_heading_hold_does_not_chase_rocking_on_a_straight_walking_dog():
+    h = HeadingHold()
+    for p in (0.0, 1.5, 3.0):
+        end, msgs = _sprint(h, 0.0, phase=p)
+        assert abs(end) < 3 and msgs <= 3  # no drift: no steering back and forth
+
+
+def test_heading_hold_learns_the_gyro_offset_while_standing():
+    h = HeadingHold()
+    for i in range(50):
+        h.feed(0.01, still=True, now=i * 0.05)
+    assert abs(h.bias - 0.01) < 0.005
+    assert h.correction(False) == 0.0 and not h.active
+
+
+def test_learned_trim_survives_a_restart(tmp_path):
+    f = str(tmp_path / "trim.json")
+    h = HeadingHold(f)
+    for p in (0.3, 1.7):
+        _sprint(h, -0.15, phase=p)
+    learned = h.trim[(4, True)]
+    again = HeadingHold(f)
+    assert abs(again.trim[(4, True)] - learned) < 1e-3
+    assert abs(_sprint(again, -0.15, phase=2.2)[0]) < 6  # the first sprint after a restart is already straight
+    assert HeadingHold(str(tmp_path / "missing.json")).trim == {}
+
+
+def test_heading_hold_is_off_unless_asked_for(monkeypatch):
+    # at the robot, steering on top of a 30 cm/s sprint made the dog nearly flip: it must be opt-in
+    monkeypatch.delenv("DRIVE_HOLD_HEADING", raising=False)
+    assert RosbridgeDriver("ws://127.0.0.1:1", DriveState()).hold.steer is False  # measures drift, never steers
+    monkeypatch.setenv("DRIVE_HOLD_HEADING", "1")
+    assert RosbridgeDriver("ws://127.0.0.1:1", DriveState()).hold.steer is True
+    monkeypatch.delenv("DRIVE_SPRINT_X", raising=False)
+    assert RosbridgeDriver("ws://127.0.0.1:1", DriveState()).sprint_x == 15.0
+
+
+def test_measuring_only_never_steers_but_reports_the_drift(capsys):
+    h = HeadingHold(steer=False)
+    end, msgs = _sprint(h, -0.15)
+    assert end < -25 and msgs == 1  # it went where it went: nothing was sent but the zero at the start
+    out = capsys.readouterr().out
+    assert "walk drift: speed 4 forward" in out and "(right)" in out and "not steered" in out

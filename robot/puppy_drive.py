@@ -185,7 +185,7 @@ def main():
     ap.add_argument("--hz", type=float, default=10.0)
     ap.add_argument("--gait", choices=list(GAITS), default="stock")
     ap.add_argument("--max-x", type=float, default=12.0, help="cm/s at speed level 3")
-    ap.add_argument("--sprint-x", type=float, default=30.0, help="cm/s forward/back at speed level 4 (sprint, at most 35)")
+    ap.add_argument("--sprint-x", type=float, default=15.0, help="cm/s forward/back at speed level 4 (sprint, at most 35)")
     ap.add_argument("--max-yaw", type=float, default=YAW_LIMIT, help="rad/s at speed level 3 (capped at 0.436)")
     ap.add_argument("--invert-yaw", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print commands, publish nothing")
