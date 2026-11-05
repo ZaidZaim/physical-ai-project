@@ -493,6 +493,15 @@ def _live_on() -> bool:
     return bool(brain.s.live_voice and brain.voice and brain.s.openai_api_key)
 
 
+@app.get("/api/voice/usage")
+def voice_usage(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """GPT-Live minutes and approximate cost since the app started (the Booth tab shows it)."""
+    _local_auth(request, x_brain_token, token)
+    from .live import USAGE
+
+    return {"live": _live_on(), **USAGE.report(brain.s.live_price_per_min)}
+
+
 @app.get("/api/voice/mode")
 def voice_mode(x_brain_token: str | None = Header(None)):
     """Asked by the robot when its voice client starts: stream to /api/voice/live (GPT-Live) or use the classic turns."""

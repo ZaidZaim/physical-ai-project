@@ -52,6 +52,30 @@ PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is c
 PROBE_AFTER_ANSWER_S = 0.7  # ... or this long after GPT-Live began answering it (its transcript of the sentence is complete by then)
 PROBE_MAX_S = 20.0          # ... and a long monologue without it after this long
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
+class LiveUsage:
+    """What GPT-Live has cost since the app started: session seconds of conversations, of wake-word checks (every sentence the
+    robot hears opens a short session) and of lines it spoke on its own. Billed per second of session; the backend model's tokens
+    for tricks and room questions are extra and not counted here."""
+
+    def __init__(self):
+        from datetime import datetime, timezone
+        self.since = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.seconds = {"calls": 0.0, "checks": 0.0, "lines": 0.0}
+        self.count = {"calls": 0, "checks": 0, "lines": 0}
+
+    def add(self, kind: str, seconds: float) -> None:
+        self.seconds[kind] += max(0.0, seconds)
+        self.count[kind] += 1
+
+    def report(self, price_per_min: float) -> dict:
+        minutes = sum(self.seconds.values()) / 60
+        return {"since": self.since, "minutes": round(minutes, 2), "usd": round(minutes * price_per_min, 2),
+                "price_per_min": price_per_min, "count": dict(self.count),
+                "minutes_by_kind": {k: round(v / 60, 2) for k, v in self.seconds.items()}}
+
+
+USAGE = LiveUsage()  # one per app run (shown in the Booth tab)
+
 OVERLAP_MS = 100            # speech resumed within this of a scrap's end overlaps it (see merge_turns)
 
 SAY_INSTRUCTIONS = ("You are {robot}, a friendly robot dog at the Neo4j booth, and right now you are only the voice for one line, "
@@ -250,6 +274,8 @@ class LiveCall:
             self.open = False
             if watch:
                 watch.cancel()
+            if self.started_at is not None:
+                USAGE.add("calls" if self.confirmed else "checks", time.monotonic() - self.started_at)
             if self.confirmed:
                 self.commit()
                 self.enc.ended = True  # the next visitor says the wake word again
@@ -461,7 +487,7 @@ class LiveBridge:
         """Speak one line in GPT-Live's voice (the voice of the calls) on the robot's speaker. Returns "said", "skipped" (a visitor
         spoke before any of it played: the conversation goes first) or "failed" (nothing was heard: the classic voice says it)."""
         s, ws, feeder = self.brain.s, None, None
-        heard, played, t0 = False, False, time.monotonic()
+        heard, played, t0, started = False, False, time.monotonic(), None
         try:
             try:  # connecting and starting have their own short limit: a slow link falls back to the classic voice at once
                 ws = await asyncio.wait_for(self._say_setup(text), SAY_SETUP_S)
@@ -477,7 +503,7 @@ class LiveBridge:
             feeder = asyncio.create_task(silence())
             said, first_loud, last_loud, done_at = "", None, None, None
             longest = 2.0 + 0.45 * len(text.split())  # a generous estimate of how long the line takes to say
-            started = time.monotonic()  # the speaking limits count from here, not from the connection
+            started = time.monotonic()  # the speaking limits count from here, not from the connection (and the billing)
             while time.monotonic() - started < SAY_TIMEOUT_S:
                 now = time.monotonic()
                 if not played and self.call is not None:
@@ -521,6 +547,8 @@ class LiveBridge:
                 feeder.cancel()
             if ws is not None:
                 self._close_later(ws)
+            if started is not None:
+                USAGE.add("lines", time.monotonic() - started)
         return "said" if heard else "failed"
 
     async def _say_item(self, text: str) -> None:

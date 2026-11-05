@@ -78,6 +78,8 @@ _LIVE_QUESTION = """- What they are interested in matters: after you answered, y
   asking. Never ask anything personal.
 - This is a live voice call: you hear the visitor directly and speak directly. Keep it snappy.
 - When they say goodbye or thanks and leave, say goodbye warmly in one sentence and stop.
+- The booth is loud and other people talk nearby. Only respond to the person talking to you. Do not treat a cough, music, laughter
+  or a nearby conversation as a new request; if you only caught fragments, ask them to come a bit closer and say it again.
 
 BACKEND CAPABILITIES (your backend does these for you; you have a real robot body)
 - Tricks: makes your body do a trick: wave, boxing, shake hands, bow, nod, sit, stand, lie down, stretch, shake head, push-up,

@@ -255,6 +255,7 @@
         <div class="bkpi small"><b id="ptopics">0</b><span>topics</span></div>
         <div id="pfam" title="How well visitors know Neo4j"></div>
         <span class="tag" id="plisten" title="Whether the robot listens for its wake word, or is in a conversation">robot not listening</span>
+        <span class="tag" id="pcost" hidden title="GPT-Live since the app started: billed per second of session">GPT-Live</span>
         <button class="sm" id="pend" hidden title="End the conversation: the next visitor starts with the wake word">End conversation</button>
         <span class="spacer"></span>
       </div>
@@ -750,6 +751,13 @@ async function loadBooth() {
   const F = { none:'new', curious:'curious', user:'user', expert:'expert' }, fmax = Math.max(1, ...Object.values(d.familiarity));
   $('#pfam').innerHTML = Object.entries(F).map(([k, lbl]) => `<div title="${d.familiarity[k]} ${lbl}"><i style="height:${2 + 20 * d.familiarity[k] / fmax}px"></i>${lbl}</div>`).join('');
   await drawBoothGraph();
+  papi('/api/voice/usage').then(u => {  // what GPT-Live has cost so far (conversations, wake-word checks, lines it said itself)
+    const el = $('#pcost'); el.hidden = !u.live; if (!u.live) return;
+    el.textContent = `GPT-Live ${u.minutes.toFixed(1)} min · ~$${u.usd.toFixed(2)}`;
+    el.title = `Since ${u.since.replace('T', ' ').slice(0, 16)} UTC, at $${u.price_per_min}/min (tokens for tricks and room questions not included)\n`
+      + `conversations: ${u.count.calls} (${u.minutes_by_kind.calls} min)\nwake-word checks: ${u.count.checks} (${u.minutes_by_kind.checks} min)\n`
+      + `lines it said itself: ${u.count.lines} (${u.minutes_by_kind.lines} min)`;
+  }).catch(() => {});
 }
 async function drawBoothGraph() {  // the robot HOSTED each conversation, which DISCUSSED topics and ENJOYED highlights
   const g = await papi('/api/booth/graph'), C = { Robot:css('--accent'), Conversation:css('--short'), Topic:css('--reasoning') };

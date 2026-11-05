@@ -566,3 +566,19 @@ def test_a_sentence_right_after_a_greeting_needs_the_wake_word_to_open_a_call():
     assert not call.confirmed and not bridge.told
     _ev(call, "input", 2000, " Hey PuppyPi, hello")
     assert call.confirmed
+
+
+def test_gpt_live_cost_is_counted_by_kind_and_shown_on_this_machine_only(client):
+    from puppy_mind.live import LiveUsage, USAGE
+    u = LiveUsage()
+    u.add("calls", 90)
+    u.add("checks", 2)
+    u.add("checks", 4)
+    u.add("lines", 6)
+    r = u.report(0.05)
+    assert r["count"] == {"calls": 1, "checks": 2, "lines": 1} and r["minutes"] == 1.7 and r["usd"] == 0.09
+    server.brain.s = dataclasses.replace(server.brain.s, live_voice=True)
+    j = client.get("/api/voice/usage").json()
+    assert set(j) >= {"live", "minutes", "usd", "count", "since"} and j["count"] == USAGE.count
+    with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
+        assert c.get("/api/voice/usage").status_code == 403

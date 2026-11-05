@@ -103,6 +103,7 @@ class Settings:
     live_model: str = os.getenv("LIVE_MODEL", "gpt-live-1")
     live_voice_name: str = os.getenv("LIVE_VOICE_NAME", "marin")
     live_backend_model: str = os.getenv("LIVE_BACKEND_MODEL", "gpt-6-luna")  # runs the tools (tricks, questions about the room)
+    live_price_per_min: float = float(os.getenv("LIVE_PRICE_PER_MIN", "0.05"))  # GPT-Live's price (USD per session minute) for the Booth tab
     # louder robot voice: the WonderEcho Pro's speaker is already at 100% and too quiet in a hall. 1 = as generated; higher raises the
     # quiet parts and softly limits the peaks (no clipping). 2.5 is clearly louder and still clean.
     voice_gain: float = float(os.getenv("VOICE_GAIN", "2.5"))
