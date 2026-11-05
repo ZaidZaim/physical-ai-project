@@ -80,7 +80,10 @@ def setup_echo_cancel():
             return False
         pactl("unload-module", "module-echo-cancel")  # from an earlier start
         r = pactl("load-module", "module-echo-cancel", "aec_method=webrtc", "source_name=ec_source", "sink_name=ec_sink",
-                  "source_master=" + src[0], "sink_master=" + snk[0], "rate=16000", "channels=1", 'aec_args="%s"' % AEC_ARGS)
+                  "source_master=" + src[0], "sink_master=" + snk[0], "rate=16000", "channels=1", 'aec_args="%s"' % AEC_ARGS,
+                  # no drift correction: mic and speaker are one USB card on one clock. With it, PulseAudio "resynced" every few
+                  # seconds and dropped pieces of the robot's speech (seen at the booth: "Playback after capture, drop sink 540")
+                  "adjust_time=0")
         if r.returncode != 0:
             print("echo cancelling: PulseAudio refused it:", (r.stderr or r.stdout).strip()[:120])
             return False
@@ -364,7 +367,27 @@ class Voice:
                                   stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
         mic = subprocess.Popen(["arecord", "-q", "-D", self.a.mic, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
                                stdout=subprocess.PIPE)
-        state = {"call": False, "play_until": 0.0, "error": None}
+        state = {"call": False, "play_until": 0.0, "error": None, "fed_until": 0.0}
+        speaker = threading.Lock()
+
+        def feed(pcm):
+            """To the speaker; fed_until = when what it holds runs out."""
+            with speaker:
+                player.stdin.write(pcm)
+                player.stdin.flush()
+                state["fed_until"] = max(state["fed_until"], time.time()) + len(pcm) / (RATE * 2.0)
+
+        def keep_alive():
+            """Silence whenever nothing else plays, so the speaker stream never stops: with the echo canceller every restart of it
+            made PulseAudio resync and drop the start of what the robot said (seen at the booth: "drop sink 2044")."""
+            gap = bytes(int(RATE * 0.02) * 2)
+            while state["error"] is None and player.poll() is None:
+                if time.time() > state["fed_until"] - 0.08:
+                    try:
+                        feed(gap)
+                    except Exception:
+                        return
+                time.sleep(0.01)
 
         def receive():
             try:
@@ -372,8 +395,7 @@ class Voice:
                     op, data = ws.recv()
                     if op == 2 and data[:1] == b"A":
                         pcm = data[1:]
-                        player.stdin.write(pcm)
-                        player.stdin.flush()
+                        feed(pcm)
                         if rms(pcm[:len(pcm) // 2 * 2]) > 200:
                             state["play_until"] = max(state["play_until"], time.time()) + len(pcm) / (RATE * 2.0)
                     elif op == 1:
@@ -387,6 +409,8 @@ class Voice:
                 state["error"] = e
 
         threading.Thread(target=receive, daemon=True).start()
+        if self.a.aec:
+            threading.Thread(target=keep_alive, daemon=True).start()
         n = int(RATE * CHUNK_S) * 2
         try:
             self.measure(mic, n)
