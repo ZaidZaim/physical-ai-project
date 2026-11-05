@@ -215,7 +215,7 @@ def test_an_utterance_without_the_wake_word_is_dropped_unheard_and_unkept():
 
     assert not call.confirmed and not bridge.played and not bridge.told and call.enc is None
 
-    call.answer_at -= 1
+    call.answer_at -= 2.5  # GPT-Live began answering 2.5 s ago, still no wake word in its transcript
 
     assert call.tick() == "no wake word"
 
