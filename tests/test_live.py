@@ -605,3 +605,16 @@ def test_a_probe_that_is_already_closing_is_not_confirmed_late():
     call.closed_reason = "no wake word"
     _ev(call, "input", 600, " Hey, PuppyPi")
     assert not call.confirmed and not bridge.told
+
+
+def test_a_sentence_that_does_not_start_with_the_wake_word_is_dropped_after_six_words():
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call.started_at = call.opened
+    _ev(call, "input", 600, " so I told him the")
+    assert call.tick() is None  # five words: the wake word may still come
+    _ev(call, "input", 2000, " coffee is over there by the stage")
+    assert call.tick() == "no wake word"  # six words and nothing like the wake word: no need to hear the rest
+    call2 = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    _ev(call2, "input", 600, " excuse me hey puppy pi what is cypher")
+    assert call2.confirmed  # the wake word a few words in still counts

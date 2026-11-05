@@ -128,6 +128,16 @@ NetworkManager keeps several networks (the phone hotspot first, the robot's own 
 Laptop side: `.env` needs `OPENAI_API_KEY`. Optional: `EVENT_NAME`, `BOOTH_INFO`, `OPENAI_TTS_VOICE`, `GREET_COOLDOWN_S`,
 `PEOPLE_GREET=false` (never greet unprompted). The robot's log `~/puppy_voice.log` prints what it heard: clear it after a booth day.
 
+## Starting the booth
+
+```bash
+uv run puppy-mind booth
+```
+
+Starts the robot app with Aura memory (the robot's address is `ROBOT_IP` in `.env`, else it is searched on the network) and
+writes everything it prints to `logs/booth-<date>.log` (git-ignored). The log holds what visitors said: delete it after the
+booth day. `--robot-ip`, `--port` and `--log` override the defaults.
+
 ## GPT-Live: faster conversations
 
 `LIVE_VOICE=true` in `.env` makes the conversations GPT-Live calls (OpenAI `gpt-live-1`, a full-duplex voice model) instead of
@@ -147,6 +157,9 @@ the robot, then transcription, the chat model, and the whole reply synthesised b
   second trick at the booth). Visitors may ask for push-ups and the moonwalk too: keep space around the robot.
 - The call closes on goodbye, the Booth tab's End conversation, or `WAKE_WINDOW_S` of quiet. GPT-Live costs $0.05 per minute of
   call (billed per second), plus the backend model's tokens when it runs a tool.
+- Cost at a busy booth: in a 25-minute test 17 minutes were billed ($0.85), more than half of it checking hall chatter for the
+  wake word. A check now ends as soon as six words were heard with nothing like "hey" / "puppy" / "pi" among them (people say
+  the wake word first): measured about 3 s instead of 5 s a sentence. The Booth tab shows the running total.
 - Tricks, questions about the room and a new visitor go to GPT-Live's delegated backend (`LIVE_BACKEND_MODEL`, default `gpt-6-luna`)
   as the same tools (`do_trick`, `ask_world`, `new_visitor`). The instructions say when to delegate with GPT-Live's
   `<|SpawnThinking|>` token; without that it answered "I can only wave in spirit".

@@ -51,6 +51,10 @@ MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
 PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
 PROBE_AFTER_ANSWER_S = 2.0  # ... or this long after GPT-Live began answering it (at the booth its transcript of "Hey, Puppy"
                             # came more than 0.7 s after the answer began: the call was dropped while the robot said "Hi there")
+PROBE_WORDS = 6             # ... or as soon as this many words were heard with nothing like "hey" / "puppy" / "pi" among them:
+                            # people say the wake word first. At the busy booth checking chatter cost more than the calls
+                            # (9.3 of 17 minutes, ~4.9 s a sentence); most of it was listening to the rest of other people's sentences
+WAKEISH = {"hey", "hi", "hello", "hallo", "ok", "okay", "puppy", "puppypi", "pi", "pie", "pai", "poppy", "puppi", "papi", "bobby"}
 PROBE_MAX_S = 20.0          # ... and a long monologue without it after this long
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
 class LiveUsage:
@@ -208,6 +212,7 @@ class LiveCall:
         self.started_at: float | None = None
         self.answer_at: float | None = None
         self.speech_end_at: float | None = None  # the robot said the sentence ended (b"E")
+        self.not_for_me = False  # its first words have nothing like the wake word: the check ends now (see PROBE_WORDS)
         self.close_at: float | None = None
         self.ws = None
         self.closed_reason = ""
@@ -312,6 +317,9 @@ class LiveCall:
                 heard = " ".join(x["content"] for x in merge_turns(self.pieces) if x["role"] == "user")
                 # only "Hey PuppyPi" opens a call: right after a camera greeting any sentence used to count as an answer to it,
                 # and in the busy hall bystanders' chatter ("to have ...") opened calls nobody had asked for
+                words = _plain(heard).split()
+                if len(words) >= PROBE_WORDS and not WAKEISH & set(words[:PROBE_WORDS]) and not has_wake_word(heard, self.s.wake_word):
+                    self.not_for_me = True
                 if heard and has_wake_word(heard, self.s.wake_word):
                     await self.confirm(heard)
         elif t == "response.event":
@@ -396,7 +404,7 @@ class LiveCall:
         reason when the call should close."""
         now = time.monotonic()
         if not self.confirmed:
-            if ((self.speech_end_at and now - self.speech_end_at > PROBE_AFTER_SPEECH_S)
+            if (self.not_for_me or (self.speech_end_at and now - self.speech_end_at > PROBE_AFTER_SPEECH_S)
                     or (self.answer_at and now - self.answer_at > PROBE_AFTER_ANSWER_S) or now - self.opened > PROBE_MAX_S):
                 return "no wake word"
             return None

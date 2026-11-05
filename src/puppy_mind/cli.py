@@ -253,6 +253,44 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
     return 0
 
 
+class _Tee:
+    """Everything printed goes to the window and to the booth log (the window keeps only its last lines)."""
+
+    def __init__(self, stream, log):
+        self.stream, self.log = stream, log
+
+    def write(self, s):
+        try:
+            self.stream.write(s)
+        except UnicodeEncodeError:  # a console that cannot show a character: the log still gets it
+            self.stream.write(s.encode("ascii", "replace").decode())
+        self.log.write(s)
+        self.log.flush()
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+        self.log.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _booth(robot_ip: str, port: int, log_path: str | None) -> int:
+    """Start the booth: the robot app with Aura memory, and a log of everything it prints (logs/booth-<date>.log)."""
+    import datetime
+    import sys
+    from pathlib import Path
+
+    path = Path(log_path) if log_path else Path("logs") / f"booth-{datetime.date.today().isoformat()}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    log = open(path, "a", encoding="utf-8", buffering=1)
+    log.write(f"\n===== booth started {datetime.datetime.now().isoformat(timespec='seconds')} =====\n")
+    sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+    print(f"Booth log: {path.resolve()} (what visitors said is in it: delete it after the booth day)")
+    return _robot_test(robot_ip, port, light=True, real_memory=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="puppy-mind")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -302,6 +340,10 @@ def main(argv: list[str] | None = None) -> int:
     rt.add_argument("--full-camera", action="store_true", help="full-size camera stream instead of the lighter 320x240")
     rt.add_argument("--real-memory", action="store_true", help="save observations to Aura (and analyse frames with OpenAI) instead of in-RAM memory")
     rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
+    bt = sub.add_parser("booth", help="start the booth: the robot app with Aura memory, logged to logs/booth-<date>.log")
+    bt.add_argument("--robot-ip", default=os.getenv("ROBOT_IP", "auto"), help="robot IP (default: ROBOT_IP in .env, else search the network)")
+    bt.add_argument("--port", type=int, default=8000)
+    bt.add_argument("--log", help="log file (default: logs/booth-<date>.log)")
     sub.add_parser("nams-check", help="test the NAMS key/workspace and show the active ontology")
     ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS, or its next revision (add --activate to switch to it)")
     ns.add_argument("--activate", action="store_true")
@@ -327,6 +369,9 @@ def main(argv: list[str] | None = None) -> int:
 
         os.environ["RECORD_TOUR"] = args.record or str(default_tour_path())
         print(f"Recording a tour to {os.environ['RECORD_TOUR']} (pictures + detections; keep it out of git)")
+
+    if args.cmd == "booth":
+        return _booth(args.robot_ip, args.port, args.log)
 
     if args.cmd == "robot-test":
         return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine, real_memory=args.real_memory)
