@@ -24,6 +24,52 @@ from .drive import DriveState
 from .pose import wrap180, wrap360
 
 ALREADY_FACING_DEG = 12.0
+# Spoken moves ("walk left", "come here", "turn around"): short, bounded, and only while the person has armed driving.
+MOVE_SPEEDS = {"slow": 1, "normal": 2, "fast": 3, "sprint": 4}
+MOVE_DIRECTIONS = ("forward", "back", "left", "right", "turn_left", "turn_right", "turn_around", "spin", "come_back")
+OPPOSITE = {"forward": "back", "back": "forward", "left": "right", "right": "left"}
+MAX_WALK_S = 4.0       # one spoken walk never lasts longer (at sprint, ~80 cm): say it again to go further
+DEFAULT_WALK_S = 1.5
+MAX_TURN_DEG = 360.0
+TURN_DEG_PER_S = 25.0  # the robot's turn rate at speed level 3 (YAW_LIMIT): times a turn when there is no gyro heading
+TURN_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}  # the robot's LEVEL_SCALE for turning (a sprint does not turn faster)
+
+
+@dataclass
+class Move:
+    """One spoken move. `seconds` for walks, `degrees` for turns (counter-clockwise positive, like the heading)."""
+    direction: str
+    seconds: float = DEFAULT_WALK_S
+    degrees: float = 0.0
+    speed: int = 2
+    sidestep: str = "strafe"  # strafe: walk sideways; turn: turn 90 degrees, walk, turn back (firmware without lateral steps)
+
+    @property
+    def message(self) -> str:
+        if self.direction in ("forward", "back", "left", "right"):
+            how = "" if self.direction in ("forward", "back") or self.sidestep == "strafe" else " (turning, stepping, turning back)"
+            return f"Walking {self.direction} for {self.seconds:.1f} s{how}."
+        return f"Turning {abs(self.degrees):.0f} degrees {'left' if self.degrees > 0 else 'right'}."
+
+
+def plan_move(direction: str, seconds: float | None = None, degrees: float | None = None, speed: str | int | None = None,
+              sidestep: str = "strafe") -> Move | str:
+    """A spoken request -> a bounded Move, or the reason it cannot be one."""
+    d = (direction or "").strip().lower().replace(" ", "_")
+    d = {"backward": "back", "backwards": "back", "around": "turn_around"}.get(d, d)
+    if d not in MOVE_DIRECTIONS or d == "come_back":
+        return f"unknown direction {direction!r}: use one of {', '.join(MOVE_DIRECTIONS)}"
+    level = speed if isinstance(speed, int) else MOVE_SPEEDS.get(str(speed or "normal").lower(), 2)
+    level = max(1, min(4, int(level)))
+    if d in ("forward", "back", "left", "right"):
+        secs = DEFAULT_WALK_S if not seconds or seconds <= 0 else min(MAX_WALK_S, max(0.3, float(seconds)))
+        if d in ("left", "right") and sidestep == "strafe":
+            level = min(level, 3)  # sprint is for walking straight only
+        return Move(d, seconds=round(secs, 2), speed=level, sidestep=sidestep)
+    deg = {"turn_around": 180.0, "spin": 360.0}.get(d) or (abs(float(degrees)) if degrees else 90.0)
+    deg = min(MAX_TURN_DEG, max(5.0, deg))
+    sign = -1.0 if d == "turn_right" else 1.0
+    return Move(d, seconds=0.0, degrees=sign * deg, speed=min(level, 3))
 CHECK_OFFSETS = (0.0, 40.0, -80.0)  # after a turn: where we turned, 40 degrees left of it, 40 degrees right of it
 
 
@@ -92,6 +138,7 @@ class Navigator:
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
         self.state: dict[str, Any] = {"active": False, "phase": "idle", "message": ""}
+        self.last_walk: Move | None = None  # the last walk that finished: "come back" walks it the other way
 
     # ---- control
     def start(self, plan: Plan, verify: bool = True) -> dict[str, Any]:
@@ -126,16 +173,92 @@ class Navigator:
         self.state = {**self.state, **kw}
         self.publish("nav", dict(self.state))
 
-    def _abort_reason(self) -> str | None:
+    def _abort_reason(self, need_heading: bool = True) -> str | None:
         if self._cancel.is_set():
             return "cancelled"
         if not self.drive.armed:
             return "driving was disarmed"
         if not self.drive.auto:
             return "you took over the controls"
-        if self.heading_fn() is None:
+        if need_heading and self.heading_fn() is None:
             return "lost the gyro heading"
         return None
+
+    # ---- spoken moves
+    def start_move(self, move: Move) -> dict[str, Any]:
+        """Run one Move in the background. A new move replaces one still running ("no, go left"), never a turn toward an object."""
+        with self._lock:
+            busy = bool(self._thread and self._thread.is_alive())
+        if busy:
+            if self.state.get("phase") != "move":
+                return {"started": False, "reason": "I'm busy turning toward something: say stop first"}
+            self.cancel("replaced by a new move")
+            self.wait(1.0)
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return {"started": False, "reason": "still stopping the last move: ask again"}
+            if not self.drive.begin_auto():
+                return {"started": False, "reason": "my legs are not enabled: someone has to click 'Enable keys' in the app first "
+                                                    "(and keep a hand near me)"}
+            self._cancel.clear()
+            self._set(active=True, phase="move", message=move.message, target=None)
+            self._thread = threading.Thread(target=self._run_move, args=(move,), daemon=True, name="mover")
+            self._thread.start()
+        return {"started": True, "message": move.message}
+
+    def _run_move(self, move: Move) -> None:
+        old_speed = self.drive.speed
+        try:
+            self.drive.set_speed(move.speed)
+            d = move.direction
+            if d in ("forward", "back"):
+                ok, why = self._walk(1.0 if d == "forward" else -1.0, 0.0, move.seconds)
+            elif d in ("left", "right") and move.sidestep == "strafe":
+                ok, why = self._walk(0.0, 1.0 if d == "left" else -1.0, move.seconds)
+            elif d in ("left", "right"):
+                side = 90.0 if d == "left" else -90.0
+                ok, why = self._turn_any(side, move.speed)
+                if ok:
+                    ok, why = self._walk(1.0, 0.0, move.seconds)
+                if ok:
+                    ok, why = self._turn_any(-side, move.speed)
+            else:
+                ok, why = self._turn_any(move.degrees, move.speed)
+            if ok and d in OPPOSITE:
+                self.last_walk = move
+            self._finish(ok, move.message.replace("Walking", "Walked", 1).replace("Turning", "Turned", 1) if ok else why)
+        except Exception as e:  # never leave the robot walking because of a bug
+            self._finish(False, f"stopped: {type(e).__name__}: {e}"[:200])
+        finally:
+            self.drive.end_auto()
+            self.drive.set_speed(old_speed)
+
+    def _walk(self, x: float, y: float, seconds: float) -> tuple[bool, str]:
+        """Timed walk: there is no odometry, so distance is speed x time. Every tick re-checks that it may still move."""
+        end = time.monotonic() + min(seconds, MAX_WALK_S)
+        while time.monotonic() < end:
+            why = self._abort_reason(need_heading=False)
+            if why:
+                return False, why
+            self.drive.command(x, y, 0.0, source="auto")
+            time.sleep(self.tick)
+        self.drive.command(0.0, 0.0, 0.0, source="auto")
+        return True, ""
+
+    def _turn_any(self, delta: float, level: int) -> tuple[bool, str]:
+        """Turn on the gyro when there is a heading, else by time (rough: about TURN_DEG_PER_S at full turn speed)."""
+        if self.heading_fn() is not None:
+            return self._turn_by(delta)
+        rate = TURN_DEG_PER_S * TURN_SCALE.get(level, 1.0)
+        end = time.monotonic() + abs(delta) / rate
+        while time.monotonic() < end:
+            why = self._abort_reason(need_heading=False)
+            if why:
+                return False, why
+            self.drive.command(0.0, 0.0, 1.0 if delta > 0 else -1.0, source="auto")
+            time.sleep(self.tick)
+        self.drive.command(0.0, 0.0, 0.0, source="auto")
+        return True, ""
 
     def _run(self, plan: Plan, verify: bool = True) -> None:
         try:

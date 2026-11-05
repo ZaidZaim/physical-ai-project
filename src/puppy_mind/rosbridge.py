@@ -13,19 +13,28 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import threading
 import time
 import uuid
 
-from .drive import DriveState
+from .drive import HOLD_POSTURES, DriveState
 
-LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0}
+LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}
+# Speeds in cm/s. Level 3 walks at DRIVE_MAX_X; level 4 ("sprint") walks forward/back at DRIVE_SPRINT_X and keeps turning and
+# sideways steps at level 3 (a fast turn tips the dog over). DRIVE_MAX_Y is the sideways speed at level 3: Hiwonder's demos call
+# lateral motion "not available", so if the dog does not slide sideways on your firmware, set DRIVE_SIDESTEP=turn (see moves).
+
 # Hiwonder's STOCK walking style (puppy.py GaitConfigFast + Stand pose). Fast, short steps are stable; the slower long-stride
 # "Trot" from their demo tipped the robot over when turning. Sending these also undoes any gait set earlier.
 GAIT = dict(overlap_time=0.1, swing_time=0.15, clearance_time=0.0, z_clearance=5.0, x_shift=-0.5)
 YAW_LIMIT = 0.436  # rad/s = 25 deg/s: the fastest turn Hiwonder's own teleop uses; above it the robot can tip over
 TYPE_CANDIDATES = ("puppy_control/Velocity", "puppy_control_msgs/msg/Velocity")  # ROS1, ROS2
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+
+def _env(name: str, default: float) -> float:
+    return float(os.getenv(name) or default)
 
 
 def battery_status(mv: int | None, t: float) -> dict:
@@ -42,13 +51,16 @@ class RosbridgeDriver:
     BATTERY_TOPIC = "/ros_robot_controller/battery"  # std_msgs/UInt16, millivolts of the 2S LiPo (Hiwonder ros_robot_controller)
     IMU_TOPIC = "/ros_robot_controller/imu_raw"  # sensor_msgs/Imu, from Hiwonder's puppy_control source
 
-    def __init__(self, url: str, drive: DriveState, *, max_x=12.0, max_y=0.0, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
+    def __init__(self, url: str, drive: DriveState, *, max_x=None, max_y=None, sprint_x=None, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
         self.url, self.drive = url, drive
         self.on_imu = on_imu  # callback(yaw_rate_rad_s) for each IMU sample
         self.imu_samples = 0
         self.battery_mv: int | None = None
         self.battery_t = 0.0
-        self.max_x, self.max_y, self.invert_yaw = max_x, max_y, invert_yaw
+        self.max_x = _env("DRIVE_MAX_X", 12.0) if max_x is None else max_x
+        self.max_y = _env("DRIVE_MAX_Y", 6.0) if max_y is None else max_y
+        self.sprint_x = max(self.max_x, _env("DRIVE_SPRINT_X", 20.0) if sprint_x is None else sprint_x)
+        self.invert_yaw = invert_yaw
         self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
         self.connected = False
         self.error = ""
@@ -114,7 +126,8 @@ class RosbridgeDriver:
         r = self._call("/puppy_control/runActionGroup", {"name": f"{name}.d6ac", "wait": True}, wait=self.drive.action_busy_s + 4)
         if r is not None and r.get("result") is False:
             self.error = f"trick {name} failed: {r.get('values')}"[:200]
-        self._pose(self.drive.pitch_rad)
+        if name not in HOLD_POSTURES:  # sitting and napping stay down until it is told to stand or walk
+            self._pose(self.drive.pitch_rad)
         self.drive.action_done()
 
     # ---- main loop
@@ -156,13 +169,15 @@ class RosbridgeDriver:
         c0 = self.drive.current()
         last, last_pub, last_home = None, 0.0, c0["home_seq"]
         last_action, last_pitch = c0["action_seq"], c0["pitch"]  # a trick asked for before we connected is stale: skip it
+        last_posture = c0.get("posture", "stand")
         zero_again = False
         while not self._stop.is_set():
             t0 = time.monotonic()
             c = self.drive.current()
-            s = LEVEL_SCALE.get(int(c["speed"]), LEVEL_SCALE[1])
+            level = int(c["speed"])
+            s = LEVEL_SCALE.get(level, LEVEL_SCALE[1])
             want = {
-                "x": c["x"] * self.max_x * s,
+                "x": c["x"] * (self.sprint_x if level >= 4 else self.max_x * s),
                 "y": c["y"] * self.max_y * s,
                 "yaw": c["yaw"] * self.max_yaw * s * (-1 if self.invert_yaw else 1),
             }
@@ -173,13 +188,16 @@ class RosbridgeDriver:
                 self._publish("/puppy_control/velocity", {"x": 0.0, "y": 0.0, "yaw_rate": 0.0})
                 self._call("/puppy_control/go_home")
                 want = dict(ZERO)
+            posture = c.get("posture", "stand")
             if c["action_seq"] != last_action:
                 last_action = c["action_seq"]
                 self._trick(c["action"])
                 last, want = dict(ZERO), dict(ZERO)
-            elif c["pitch"] != last_pitch and not c["busy"]:
+            elif posture == "stand" and last_posture != "stand":  # up from sitting / a nap, to walk or to look at someone
                 self._pose(c["pitch"])
-            last_pitch = c["pitch"]
+            elif c["pitch"] != last_pitch and not c["busy"] and posture == "stand":  # a nose-up tilt would stand a napping dog up
+                self._pose(c["pitch"])
+            last_pitch, last_posture = c["pitch"], posture
             moving = any(want.values())
             # Publish ONLY on change: the robot re-applies its stance on every velocity message, so a keep-alive
             # stream makes the dog flex. A stop is sent twice (now and 0.3 s later) in case one is lost.

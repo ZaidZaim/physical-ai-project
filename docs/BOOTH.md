@@ -88,6 +88,42 @@ robot, boxing via `/api/gesture` with booth mode on did box.
 
 > Boxing shifts all the weight onto the back legs: use it on a flat, non-slippery floor with a clear space around the robot.
 
+## Talking to it like a puppy (a stage demo)
+
+Inspired by NVIDIA's Microduck demo at GTC Berlin, where the presenter spoke to the robots like small companions: come here, sit,
+stand, nap, wake up, a somersault, come back, gather round. PuppyPi does the same with spoken commands, adapted to its own body.
+
+**Before you start:** booth mode on, **Enable keys** on in the Drive panel (no walking without it, and any key or Space takes over),
+a flat floor with about a metre clear in front of the robot, and a hand near it. Say "Hey PuppyPi" once to open the conversation.
+
+| You say | PuppyPi does | How |
+|---|---|---|
+| "Come here!" / "Come closer" | walks toward you (the way it faces) for about 1.5 s | `move forward` |
+| "Faster!" / "Run!" | the next walk at sprint speed (20 cm/s) | `move ... speed sprint` |
+| "Step to the left" | walks sideways (or turns, steps, turns back with `DRIVE_SIDESTEP=turn`) | `move left` |
+| "Sit." / "Pay attention." | sits, and **stays** sitting | `do_trick sit` |
+| "Stand up." | stands back up | `do_trick stand` |
+| "Take a nap." | lies down and stays down until woken, or until asked to walk | `do_trick lie_down` |
+| "Wake up!" | stands up, then stretches like a dog after a nap | `routine [stand, stretch]` |
+| "Shake hands!" / "Give me your paw" / "High five!" | offers its paw | `do_trick shake_hands` |
+| "Stretch!" / "Warm up" | stretches | `do_trick stretch` |
+| "Push-ups!" / "Are you strong?" | does push-ups | `do_trick push-up` |
+| "Do a somersault!" | can't: says so with humour and does push-ups instead | `do_trick push-up` |
+| "Come back!" | retraces its last walk | `move come_back` |
+| "Come here and sit." / "Walk over and take a nap." | both, in order | `routine` |
+| "Show them what you can do!" | a short show of 3 to 5 tricks and moves it picks | `routine` |
+| "Good boy!" | thanks you, maybe a nod or a wave | `do_trick nod` |
+| "Stop!" / "Freeze!" | stops at once: the word is caught in the transcript before the model answers | `stop_moving` |
+
+A run-through that works as a stage flow: *come here* → *shake hands* → *sit* → *take a nap* → *wake up* (stands and
+stretches) → *show me your muscles* (push-ups) → *come back* → *show them what you can do* (walk, paw, stretch, push-ups,
+moonwalk). Push-ups and the moonwalk need the most room: keep the metre in front of the robot clear.
+
+Limits that keep this safe: one walk lasts at most 4 s (say it again to go further), a routine has at most 8 steps, turning never
+goes faster than 25°/s (it tipped over above that), the robot has no obstacle sensing and walks the way it faces, and a new command
+replaces the one still running. Sitting and napping hold because the trick no longer re-poses the robot afterwards; asking it to
+walk stands it up first (1 s) and then walks.
+
 ## The claw machine cheerleader
 
 With `CLAW_MACHINE=true` the robot cheers for the booth's claw machine (prize: `CLAW_PRIZE`, default "a Graph Wizard"):

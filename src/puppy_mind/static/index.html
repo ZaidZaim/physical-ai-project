@@ -214,13 +214,13 @@
       <div class="lbl"><span>Drive <span id="dstate" class="tag">disarmed</span></span><button class="sm" id="arm">Enable keys</button></div>
       <div id="padrow">
         <div id="pad">
-          <span></span><button data-k="w" title="Forward (W / Up)">&#9650;</button><span></span>
+          <button data-k="q" title="Step left, sideways (Q)">&#8676;</button><button data-k="w" title="Forward (W / Up)">&#9650;</button><button data-k="e" title="Step right, sideways (E)">&#8677;</button>
           <button data-k="a" title="Turn left (A / Left)">&#8630;</button><button data-k=" " class="stop" title="Stop (Space)">&#9632;</button><button data-k="d" title="Turn right (D / Right)">&#8631;</button>
           <span></span><button data-k="s" title="Back (S / Down)">&#9660;</button><span></span>
         </div>
         <div id="dinfo">
-          <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3)</div>
-          <div><b>W S</b> walk &nbsp; <b>A D</b> turn<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
+          <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3 4)</div>
+          <div><b>W S</b> walk &nbsp; <b>A D</b> turn &nbsp; <b>Q E</b> sideways<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
         </div>
       </div>
       <div class="vrow" style="margin-top:8px"><span id="rstate">robot offline</span><span id="batt"></span></div>
@@ -937,7 +937,7 @@ async function loadOntology() {
 }
 
 /* ---------- keyboard drive ---------- */
-const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast' };
+const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast', 4:'4 · sprint' };
 const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right', q:'sl', e:'sr' };
 const held = new Set(); let ws = null, armed = false, speed = 2, loopT = null;
 const vec = () => ({
@@ -985,7 +985,7 @@ addEventListener('keydown', e => {
   else if (k === ' ') { e.preventDefault(); stopAll(); }
   else if (k === 'escape') { setArmed(false); }
   else if (k === 'h') { stopAll(); send({ home:true }); log('ask', 'stand / go home'); }
-  else if (['1','2','3'].includes(k)) { speed = +k; send({ speed }); paintPad(); }
+  else if (['1','2','3','4'].includes(k)) { speed = +k; send({ speed }); paintPad(); }
 });
 addEventListener('keyup', e => { const a = KEYMAP[e.key.toLowerCase()]; if (a && held.delete(a)) paintPad(); });
 addEventListener('blur', () => armed && stopAll());                       // lose focus => stop

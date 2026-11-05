@@ -69,9 +69,9 @@ def test_forward_scaled_and_stops_on_expiry_and_disarm():
         d.close(); fb.close()
 
 
-def test_lateral_disabled_by_default_and_message_types_follow_robot():
+def test_lateral_can_be_switched_off_and_message_types_follow_robot():
     fb, drive = FakeBridge("puppy_control_msgs/msg/Velocity"), DriveState()
-    d = run(drive, fb)
+    d = run(drive, fb, max_y=0.0)
     try:
         drive.arm(True)
         for _ in range(4):
@@ -210,5 +210,68 @@ def test_booth_mode_tilts_up_and_a_trick_runs_the_action_group_then_stands_back_
         assert not drive.in_action  # the service reply ended the trick early
         assert math.isclose(poses()[-1]["pitch"], math.radians(10), rel_tol=1e-6)  # stood back up, still looking up
         assert fb.vels()[-1] == {"x": 0.0, "y": 0.0, "yaw_rate": 0.0}
+    finally:
+        d.close(); fb.close()
+
+
+def _hold(drive, x, y, yaw, secs=0.4):
+    end = time.time() + secs
+    while time.time() < end:
+        drive.command(x, y, yaw)
+        time.sleep(0.1)
+
+
+def test_sideways_steps_are_sent_and_sprint_only_speeds_up_walking_straight(monkeypatch):
+    for k in ("DRIVE_MAX_X", "DRIVE_MAX_Y", "DRIVE_SPRINT_X"):
+        monkeypatch.delenv(k, raising=False)
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        drive.arm(True)
+        drive.set_speed(3)
+        _hold(drive, 0, 1, 0)
+        assert any(abs(v["y"] - 6.0) < 1e-6 for v in fb.vels())  # sideways at the default 6 cm/s
+        drive.set_speed(4)
+        _hold(drive, 1, 0, 0)
+        assert any(abs(v["x"] - 20.0) < 1e-6 for v in fb.vels())  # sprint
+        _hold(drive, 0, -1, 0)
+        assert any(abs(v["y"] + 6.0) < 1e-6 for v in fb.vels())  # sideways does not sprint
+        _hold(drive, 0, 0, 1)
+        assert max(abs(v["yaw_rate"]) for v in fb.vels()) <= 0.436 + 1e-9  # nor does turning
+    finally:
+        d.close(); fb.close()
+
+
+def test_speeds_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("DRIVE_MAX_X", "10")
+    monkeypatch.setenv("DRIVE_SPRINT_X", "16")
+    monkeypatch.setenv("DRIVE_MAX_Y", "4")
+    d = RosbridgeDriver("ws://127.0.0.1:1", DriveState())
+    assert (d.max_x, d.sprint_x, d.max_y) == (10.0, 16.0, 4.0)
+    assert RosbridgeDriver("ws://127.0.0.1:1", DriveState(), max_x=15, sprint_x=5).sprint_x == 15  # sprint is never slower
+
+
+def test_a_nap_holds_and_walking_stands_the_robot_up_first():
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        poses = lambda: [m["msg"] for m in fb.msgs if m["op"] == "publish" and m["topic"] == "/puppy_control/pose"]
+        drive.arm(True)
+        drive.set_booth(True, 10)
+        time.sleep(0.3)
+        assert drive.request_action("lie_down", asked=True)["ok"]
+        t0 = time.time()
+        while drive.in_action and time.time() - t0 < 3:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        n = len(poses())
+        drive.set_booth(True, 20)  # a new head tilt must not stand a napping dog up
+        time.sleep(0.3)
+        assert len(poses()) == n
+        drive._moving_until = 0.0
+        drive.command(1, 0, 0)  # "come here": stand up first
+        time.sleep(0.3)
+        assert len(poses()) == n + 1
+        assert all(v["x"] == 0.0 for v in fb.vels())  # no walking while getting up
     finally:
         d.close(); fb.close()

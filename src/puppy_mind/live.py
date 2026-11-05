@@ -90,7 +90,14 @@ SAY_SETUP_S = 6.0           # connecting and starting a line's session: longer, 
 SAY_TIMEOUT_S = 15.0        # speaking a line, counted once its session has started
 SAY_DONE_QUIET_S = 0.8      # the line is over once its words were all said and the voice has been quiet this long
 
+STOP_WORDS = {"stop", "halt", "freeze"}  # heard in a call: the robot stops at once, before GPT-Live has even answered
+
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
+           "move when someone asks you to walk, come closer, come back, step left or right, back up, turn or spin (faster = speed fast "
+           "or sprint), routine when one sentence asks for several things ('come here and sit', 'walk over and take a nap', 'show them "
+           "what you can do', 'wake up' = stand then stretch), do_trick for sit / take a nap (lie_down) / stand up (stand) / "
+           "shake hands or give paw (shake_hands) / stretch / push-ups or exercise (push-up), "
+           "stop_moving the moment anyone says stop, wait or freeze, "
            "ask_world for anything about the room or what the robot can see, new_visitor when a different person has taken over. "
            "Reply with one short plain sentence the voice can say. Never ask for or keep personal data.")
 
@@ -310,6 +317,9 @@ class LiveCall:
             self.delta_at = now
             if user:
                 self.heard_at = now
+                # "stop" must not wait for the backend's tool call (a second or two): stop any walk the moment it is heard
+                if self.confirmed and STOP_WORDS & set(_plain(m.get("delta") or "").split()) and self.booth.stop_fn:
+                    print("live: heard stop, robot stopped:", self.booth.stop_fn(), flush=True)
             else:
                 self.bot_at = now
                 self.answer_at = self.answer_at or now

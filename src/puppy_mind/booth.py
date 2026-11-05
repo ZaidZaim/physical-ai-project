@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings
 from .drive import BIG_TRICKS, TRICKS
+from .navigate import MOVE_DIRECTIONS, MOVE_SPEEDS
 from .voice import fix_terms
 from .wizard import system_prompt
 
@@ -307,6 +308,29 @@ TOOLS = [
      "description": "Perform a trick when a visitor asks for one (boxing = stands on its hind legs and pumps its front paws; also wave, "
                     "shake_hands, bow, nod, sit, stand, lie_down, stretch, shake_head, push-up, moonwalk).",
      "parameters": {"type": "object", "properties": {"name": {"type": "string", "enum": list(TRICKS + BIG_TRICKS)}}, "required": ["name"]}}},
+    {"type": "function", "function": {"name": "move",
+     "description": "Walk or turn when someone asks you to move: 'come here' / 'walk forward' = forward, 'back up' = back, 'go left' / "
+                    "'step to the right' = left/right (walks sideways), 'turn left', 'turn around', 'spin', 'come back' = come_back (retraces "
+                    "the last walk). 'faster' / 'run' = speed fast or "
+                    "sprint. Short moves only (a walk lasts at most 4 seconds; say it again to go further). Only when asked to move.",
+     "parameters": {"type": "object", "properties": {
+         "direction": {"type": "string", "enum": list(MOVE_DIRECTIONS)},
+         "seconds": {"type": "number", "description": "how long to walk, 0.5 to 4 (default 1.5; 'a little' = 1, 'a lot' = 3)"},
+         "degrees": {"type": "number", "description": "for turn_left / turn_right: how far (default 90)"},
+         "speed": {"type": "string", "enum": list(MOVE_SPEEDS)}}, "required": ["direction"]}}},
+    {"type": "function", "function": {"name": "routine",
+     "description": "Several moves and tricks in a row, when one sentence asks for more than one thing: 'come here and sit' = "
+                    "[move forward, trick sit]; 'go take a nap over there' = [move forward, trick lie_down]; 'show them what you can do' = "
+                    "a short show of 3 to 5 steps you choose. At most 8 steps. Each step is ONE of trick, move or wait.",
+     "parameters": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {
+         "trick": {"type": "string", "enum": list(TRICKS + BIG_TRICKS)},
+         "move": {"type": "string", "enum": list(MOVE_DIRECTIONS)},
+         "seconds": {"type": "number"}, "degrees": {"type": "number"},
+         "speed": {"type": "string", "enum": list(MOVE_SPEEDS)},
+         "wait": {"type": "number", "description": "pause, seconds (at most 5)"}}}}}, "required": ["steps"]}}},
+    {"type": "function", "function": {"name": "stop_moving",
+     "description": "Stop walking or turning right now ('stop', 'wait', 'freeze', 'that's enough').",
+     "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "new_visitor",
      "description": "A DIFFERENT person has started talking to you (they say it is their turn, or ignore the conversation so far). Call this "
                     "FIRST, so the previous visitor's conversation is not mixed up with theirs.",
@@ -364,6 +388,9 @@ class BoothHost:
         self.active_fn: Callable[[], bool] = lambda: True  # set by Brain: greet only while someone has the Booth tab open
         self.look_fn = look_fn if look_fn is not None else (self._look if client is not None else None)
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
+        self.move_fn: Callable[..., dict] | None = None  # set by Brain: a short spoken walk or turn (only while driving is armed)
+        self.stop_fn: Callable[[], dict] | None = None  # set by Brain: stop moving now
+        self.routine_fn: Callable[[list], dict] | None = None  # set by Brain: several moves and tricks in a row
         self.nams = None  # set by Brain: the anonymous conversation notes are mirrored to NAMS after each save
         # after each answer, what the conversation is about is noted (in the background, beside the reply being prepared)
         self.extract_fn = extract_fn if extract_fn is not None else (self._extract if client is not None else None)
@@ -481,6 +508,14 @@ class BoothHost:
             if not self.gesture_fn:
                 return {"done": False, "reason": "tricks are not available"}
             return self.gesture_fn(a.get("name", ""), asked=True)  # a visitor asked: no 60 s cooldown, only the short gap
+        if name == "move":
+            if not self.move_fn:
+                return {"started": False, "reason": "moving is not available"}
+            return self.move_fn(a.get("direction", ""), a.get("seconds"), a.get("degrees"), a.get("speed"))
+        if name == "routine":
+            return self.routine_fn(a.get("steps") or []) if self.routine_fn else {"started": False, "reason": "not available"}
+        if name == "stop_moving":
+            return self.stop_fn() if self.stop_fn else {"stopped": False}
         if name == "new_visitor":
             with self._lock:
                 self.encounters.pop(enc.id, None)

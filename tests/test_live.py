@@ -257,7 +257,7 @@ def test_live_instructions_ask_their_own_question_and_say_when_to_delegate():
 
     names = {t["name"] for t in live_tools()}
 
-    assert names == {"do_trick", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
+    assert names == {"do_trick", "move", "routine", "stop_moving", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
 
 
 
