@@ -357,4 +357,4 @@ def test_measuring_only_never_steers_but_reports_the_drift(capsys):
     end, msgs = _sprint(h, -0.15)
     assert end < -25 and msgs == 1  # it went where it went: nothing was sent but the zero at the start
     out = capsys.readouterr().out
-    assert "walk drift: speed 4 forward" in out and "(right)" in out and "not steered" in out
+    assert "walk drift (gyro, unreliable while walking): speed 4 forward" in out and "(right)" in out and "not steered" in out

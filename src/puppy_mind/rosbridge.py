@@ -116,7 +116,7 @@ class HeadingHold:
                 walked = now - self._t_start
                 if walked >= 1.0 and self.ref is not None:
                     drift = math.degrees(self.avg - self.ref)
-                    print("walk drift: speed %s %s, %.1f s, turned %+.1f deg (%s), %.1f deg/s%s" % (
+                    print("walk drift (gyro, unreliable while walking): speed %s %s, %.1f s, turned %+.1f deg (%s), %.1f deg/s%s" % (
                         self.key[0], "forward" if self.key[1] else "back", walked, drift, "left" if drift > 0 else "right",
                         drift / walked, "" if self.steer else ", not steered"), flush=True)
                 if self.steer:
@@ -188,9 +188,11 @@ class RosbridgeDriver:
                  hold_heading: bool | None = None):
         self.url, self.drive = url, drive
         self.on_imu = on_imu  # callback(yaw_rate_rad_s) for each IMU sample
-        # Steering is OFF by default: tried at the robot at 30 cm/s, the drift had no steady direction (left on one run, right on the
-        # next), and steering adds turning on top of fast walking, which made the dog nearly flip. Opt in with DRIVE_HOLD_HEADING=1.
-        # Off, the gyro still MEASURES every straight walk's drift and logs it ("walk drift: ...").
+        # Steering is OFF by default. At the robot it made fast walks worse and nearly flipped the dog at 30 cm/s, and the reason
+        # showed up later: WHILE THE DOG WALKS, its gyro reports a false turn of about 13-20 deg/s (a 15 cm/s sprint that went
+        # visibly straight "turned" 60-130 degrees), so the hold steered against turns that were not happening. Turning in place
+        # (the navigator) is not affected. Opt in with DRIVE_HOLD_HEADING=1 only with a better yaw source. Off, each straight walk's
+        # gyro reading is still logged ("walk drift (gyro, unreliable while walking): ..."): read it as a symptom, not a measurement.
         # hold_heading=False: no gyro at all.
         if hold_heading is None or hold_heading:
             steer = bool(hold_heading) or os.getenv("DRIVE_HOLD_HEADING", "0") == "1"
@@ -203,8 +205,8 @@ class RosbridgeDriver:
         self.battery_t = 0.0
         self.max_x = min(FIRMWARE_MAX_X, _env("DRIVE_MAX_X", 12.0) if max_x is None else max_x)
         # 15: the fastest speed Hiwonder's own controller adapts its gait to (puppy.py, VelocityAutogaitFun). Measured at the robot,
-        # forward sprints at 20-30 cm/s veered 55-196 degrees left OR right on different runs: no steady pull to correct, and
-        # steering on top nearly flipped it. Faster than 15 is possible (up to 35) but does not walk straight.
+        # forward sprints at 20-30 cm/s visibly drifted off course, and at 15 they went straight (watched, 2026-11-05; the gyro's
+        # numbers while walking are not usable, see hold_heading). Faster than 15 is possible (up to 35) but does not walk straight.
         self.sprint_x = min(FIRMWARE_MAX_X, max(self.max_x, _env("DRIVE_SPRINT_X", 15.0) if sprint_x is None else sprint_x))
         self.invert_yaw = invert_yaw
         self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
