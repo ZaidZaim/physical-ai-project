@@ -343,15 +343,23 @@ const LEGEND_MEM = $('#legend').innerHTML;
    organic layout. The layout is computed here (a small force simulation: nodes repel and never overlap, relationships pull like
    springs), not by vis physics, so it settles the same on every screen and holds still. New objects start next to their place and
    the rest only shifts a little to make room. */
-const NEO = { Place:['#F79767', '#F36924', '#fff'], Object:['#57C7E3', '#23B3D7', '#2A2C34'], Robot:['#F16667', '#EB2728', '#fff'], gone:['#A5ABB6', '#9AA1AC', '#2A2C34'] };
+/* Every view in the Neo4j Browser look: one colour per node label (Neo4j's default palette), the name inside the circle. */
+const NEO = { Place:['#F79767', '#F36924', '#fff'], Object:['#57C7E3', '#23B3D7', '#2A2C34'], Robot:['#F16667', '#EB2728', '#fff'],
+  gone:['#A5ABB6', '#9AA1AC', '#2A2C34'], Sighting:['#FFC454', '#D7A013', '#2A2C34'], Utterance:['#DA7194', '#CC3C6C', '#fff'],
+  Dialogue:['#C990C0', '#B261A5', '#fff'], ReasoningStep:['#8DCC93', '#5DB665', '#2A2C34'], Lookup:['#4C8EDA', '#2870C2', '#fff'],
+  Entity:['#D9C8AE', '#C0A378', '#2A2C34'] };
+const NEO_NAME = { gone:'possibly gone', ReasoningStep:'Reasoning step', Entity:'NAMS entity' };
 const NEO_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-const NEO_SIZE = { Place:86, Robot:60, Object:62, gone:50 };  // circle diameters, px
-const neoKind = n => n.kind === 'Object' && n.status === 'possibly_gone' ? 'gone' : (NEO[n.kind] ? n.kind : 'Object');
+const NEO_SIZE = { Place:86, Robot:60, Object:62, gone:50, Sighting:58, Utterance:74, Dialogue:66, ReasoningStep:74, Lookup:62, Entity:58 };  // px
+const neoKind = n => n.kind === 'Object' && n.status === 'possibly_gone' ? 'gone' : (NEO[n.kind] ? n.kind : 'Entity');
+const shortCaption = (s, max) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > max ? s.slice(0, max - 1).trimEnd() + '\u2026' : s; };
 function neoView(n) {
   const k = neoKind(n), [bg, border, ink] = NEO[k], d = NEO_SIZE[k];
-  const label = n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + '\n' : '') + n.label : n.label;
+  // long texts (what someone said, a reasoning step) are shortened in the circle; the full text is in the hover
+  const label = n.kind === 'Object' ? (n.color && n.color !== 'unknown' ? n.color + '\n' : '') + n.label
+    : shortCaption(n.label, k === 'Utterance' || k === 'ReasoningStep' ? 34 : 22);
   return { label, shape:'circle', _bg:bg, color:{ background:bg, border, highlight:{ background:bg, border:'#ffffff' }, hover:{ background:bg, border:'#ffffff' } },
-    font:{ color:ink, size: k === 'Place' ? 13 : k === 'gone' ? 9 : (Math.max(...label.split(/\s/).map(s => s.length)) > 9 ? 10 : 11), face:NEO_FONT, multi:false }, margin:6, borderWidth:2,
+    font:{ color:ink, size: k === 'Place' ? 13 : k === 'gone' ? 9 : label.length > 22 ? 9 : (Math.max(...label.split(/\s/).map(s => s.length)) > 9 ? 10 : 11), face:NEO_FONT, multi:false }, margin:6, borderWidth:2,
     widthConstraint:{ minimum:d - 12, maximum:d - 12 }, shapeProperties:{ borderDashes: k === 'gone' ? [4, 3] : false } };
 }
 /* The shared force simulation: nodes repel and never overlap (rad = circle radius), links pull like springs of their own length.
@@ -388,30 +396,34 @@ function neoLayout(g) {
   // seeds: places on a circle, each object on a sunflower spiral around its place, the robot below its place
   const places = g.nodes.filter(n => n.kind === 'Place').map(n => n.id).sort(), k = places.length, R = k <= 1 ? 0 : 480 * k / Math.PI;
   places.forEach((id, i) => { if (!P[id]) { const a = -Math.PI / 2 + i * 2 * Math.PI / k; P[id] = { x: R * Math.cos(a), y: R * Math.sin(a) }; } });
-  const count = {};
+  const count = {}, around = (c, key, base) => { const i = count[key] = (count[key] || 0) + 1, r = base + 40 * Math.sqrt(i), a = i * 2.39996;
+    return { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) }; };
   for (const n of g.nodes) if (!P[n.id]) {
-    const home = n.kind === 'Robot' ? (g.edges.find(e => e.source === n.id) || {}).target : 'loc:' + n.place, c = P[home] || { x: 0, y: 0 };
-    if (n.kind === 'Robot') { P[n.id] = { x: c.x + 20, y: c.y + 150 }; continue; }
-    const i = count[home] = (count[home] || 0) + 1, r = 170 + 46 * Math.sqrt(i), a = i * 2.39996;
-    P[n.id] = { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) };
+    if (n.kind === 'Robot') { const e = g.edges.find(x => x.source === n.id), c = e && P[e.target]; if (c) P[n.id] = { x: c.x + 20, y: c.y + 150 }; continue; }
+    if (n.kind === 'Object' && P['loc:' + n.place]) P[n.id] = around(P['loc:' + n.place], 'loc:' + n.place, 170);
   }
-  const L = { LOCATED_AT: 200, ADJACENT_TO: 560, CURRENTLY_IN: 160 };
+  const nb = {}; for (const e of g.edges) { (nb[e.source] = nb[e.source] || []).push(e.target); (nb[e.target] = nb[e.target] || []).push(e.source); }
+  for (let left = ids.filter(id => !P[id]); left.length; left = ids.filter(id => !P[id])) {
+    const next = left.find(id => (nb[id] || []).some(x => P[x]));  // next to something already placed...
+    if (next) { const anchor = nb[next].find(x => P[x]); P[next] = around(P[anchor], anchor, 120); }
+    else P[left[0]] = around({ x: 0, y: 0 }, '', 0);                  // ...or, with nothing placed near it, on a spiral
+  }
+  const L = { LOCATED_AT: 200, ADJACENT_TO: 560, CURRENTLY_IN: 160, DETECTED: 150, RELIED_ON: 170, MADE_LOOKUP: 140, THEN: 130, FOLLOWED_BY: 130, HAS_UTTERANCE: 130 };
   const links = g.edges.filter(e => P[e.source] && P[e.target]).map(e => [e.source, e.target, L[e.type] || 160]);
   relax(ids, P, known, links, rad, fresh.length === ids.length);
   for (const id of ids) { laidOut.add(id); nodes.update({ id, x: P[id].x, y: P[id].y }); }
   if (!userMoved) setTimeout(() => net.fit(), 650);  // after removed nodes have faded out (500 ms), or they stretch the view
 }
 function applyLayout(g) {
-  const map = lens === 'long' && !$('#namsent').checked;
-  net.setOptions({ physics: map ? { enabled: false } : BASE_PHYSICS, edges: { smooth: map ? { enabled: false } : { type: 'dynamic' } } });
-  if (map) neoLayout(g);
+  net.setOptions({ physics: { enabled: false }, edges: { smooth: { enabled: false } } });
+  neoLayout(g);
 }
 /* What the long-term map leaves out: people (they are not part of the room, and the booth keeps no one), and objects that are
    possibly gone unless asked for (at a busy booth most things the camera once saw are gone again). */
 const PEOPLE = new Set(['person', 'people', 'man', 'woman', 'child']);
 let showGone = false, hiddenCount = { gone: 0, people: 0 };
 function visibleGraph(g) {
-  if (lens !== 'long') return g;
+  if (lens !== 'long' && lens !== 'all') return g;  // the same tidying for "all layers" (reasoning keeps what it relied on)
   const people = g.nodes.filter(n => n.kind === 'Object' && PEOPLE.has(String(n.label).toLowerCase()));
   const gone = g.nodes.filter(n => n.kind === 'Object' && n.status === 'possibly_gone' && !people.includes(n));
   hiddenCount = { gone: gone.length, people: people.length };
@@ -427,15 +439,19 @@ function syncGraph() {
     const asked = lens;
     const g = visibleGraph(await api('/api/graph?lens=' + asked + ($('#namsent').checked ? '&nams=true' : '')));
     if (asked !== lens) return;                                // the user switched lens while this was loading
-    const quiet = lens === 'long' && !$('#namsent').checked;   // the long-term map: place spokes in the place colour, facts stand out
+    const quiet = true;   // every view in the Neo4j Browser look
     const seen = new Set();
     colorPlaces(g.nodes.filter(n => n.kind === 'Place').map(n => n.label));
     const relCount = {}; for (const e of g.edges) if (!NOLABEL.has(e.type)) relCount[e.type] = (relCount[e.type] || 0) + 1;
     const relHtml = Object.entries(relCount).map(([t, c]) => `<span class="rel${hiddenRel.has(t) ? ' off' : ''}" data-rel="${t}" title="click to show or hide"><u style="background:${relColor(t)}"></u>${esc(t.replace(/_/g, ' ').toLowerCase())} ${c}</span>`).join('');
-    const relHtmlNeo = Object.entries(relCount).map(([t, c]) => `<span class="rel${hiddenRel.has(t) ? ' off' : ''}" data-rel="${t}" title="click to show or hide"><u style="background:#A5ABB6"></u>${esc(t)} ${c}</span>`).join('');
+    const relAll = {}; for (const e of g.edges) relAll[e.type] = (relAll[e.type] || 0) + 1;
+    const relHtmlNeo = Object.entries(lens === 'long' ? relCount : relAll).map(([t, c]) => `<span class="rel${hiddenRel.has(t) ? ' off' : ''}" data-rel="${t}" title="click to show or hide"><u style="background:#A5ABB6"></u>${esc(t)} ${c}</span>`).join('');
     $('#legend').innerHTML = lens === 'long' ? `<span><i style="background:${NEO.Place[0]}"></i>Place</span><span><i style="background:${NEO.Object[0]}"></i>Object</span>`
       + `<span class="rel gonebtn${showGone ? '' : ' off'}" title="click to show or hide the objects the robot has not seen for a while"><i style="background:${NEO.gone[0]}"></i>possibly gone ${hiddenCount.gone}</span>`
-      + `<span><i style="background:${NEO.Robot[0]}"></i>Robot</span>` + (relHtmlNeo ? '<br>' + relHtmlNeo : '') : LEGEND_MEM;
+      + `<span><i style="background:${NEO.Robot[0]}"></i>Robot</span>` + (relHtmlNeo ? '<br>' + relHtmlNeo : '')
+      : [...new Set(g.nodes.map(neoKind))].filter(k => k !== 'gone' || lens !== 'all').map(k => `<span><i style="background:${NEO[k][0]}"></i>${esc(NEO_NAME[k] || k)}</span>`).join('')
+        + (lens === 'all' ? `<span class="rel gonebtn${showGone ? '' : ' off'}" title="click to show or hide the objects the robot has not seen for a while"><i style="background:${NEO.gone[0]}"></i>possibly gone ${hiddenCount.gone}</span>` : '')
+        + (relHtmlNeo ? '<br>' + relHtmlNeo : '');
     for (const n of g.nodes) {
       seen.add(n.id); const b = baseOf(n);
       if (quiet) b.size = 0;  // circles size themselves to their caption
@@ -474,7 +490,7 @@ function syncGraph() {
     }
     for (const id of edges.getIds()) if (!eseen.has(id)) { flashEdge(id, css('--bad')); setTimeout(() => edges.remove(id), 900); }
     applyLayout(g);
-    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} links` + (lens === 'long' && hiddenCount.people ? ` · ${hiddenCount.people} people not shown` : '');
+    $('#gstat').textContent = `${g.nodes.length} nodes · ${g.edges.length} links` + ((lens === 'long' || lens === 'all') && hiddenCount.people ? ` · ${hiddenCount.people} people not shown` : '');
     if (g.nodes.length !== window._lastNodeCount) {  // keep every node in view as the graph grows
       window._lastNodeCount = g.nodes.length;
       for (const ms of [900, 2600, 5000]) setTimeout(() => !userMoved && net.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } }), ms);
