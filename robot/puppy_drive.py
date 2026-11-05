@@ -8,13 +8,13 @@ Works on both Hiwonder images (verified against github.com/Hiwonder/PuppyPi, bra
   topics /puppy_control/velocity (x cm/s, y cm/s, yaw_rate rad/s; yaw CCW positive), /puppy_control/pose,
   /puppy_control/gait; services /puppy_control/go_home (Empty), /puppy_control/set_mark_time (SetBool),
   /puppy_control/runActionGroup (SetRunActionName{name, wait}: "boxing.d6ac", "wave.d6ac", ... for booth-mode tricks).
-NOTE: Hiwonder's own demos say lateral (y) movement is "currently not available". --max-y is a small 6 cm/s: if your firmware
-ignores it the dog just marks time; pass --max-y 0 to never send it.
+NOTE: the robot's puppy.py accepts a velocity only if |x| <= 35 cm/s, y == 0 and |yaw| <= 51 deg/s (anything else is dropped and
+the previous command keeps running), and the PuppyPi has no sideways hip joint (8 servos). So y is never sent.
 
 Safety (each layer fails toward stopping):
   * The robot PULLS commands; the brain never connects in. If the brain is unreachable, replies are
     garbled, or the brain says disarmed, the robot stops.
-  * Absolute speed caps are enforced here (--max-x/--max-y/--max-yaw), whatever the brain sends.
+  * Absolute speed caps are enforced here (--max-x/--sprint-x/--max-yaw, x never above 35), whatever the brain sends.
   * Ctrl+C / any exception publishes a stop.
 
 Try it first with NO robot motion:   python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run
@@ -35,6 +35,7 @@ GAITS = {  # "stock" = the robot's own default (puppy.py GaitConfigFast + Stand)
     "amble": dict(overlap_time=0.1, swing_time=0.2, clearance_time=0.1, z_clearance=5.0, x_shift=-0.9),
 }
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+FIRMWARE_MAX_X = 35.0  # puppy.py drops any command faster than this
 # only these action groups are ever run, whatever the brain sends (the brain's TRICKS + BIG_TRICKS)
 TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod", "sit", "stand", "lie_down", "stretch", "shake_head", "push-up", "moonwalk")
 HOLD_POSTURES = ("sit", "lie_down")  # these stay down until the brain says stand (or walks)
@@ -184,15 +185,14 @@ def main():
     ap.add_argument("--hz", type=float, default=10.0)
     ap.add_argument("--gait", choices=list(GAITS), default="stock")
     ap.add_argument("--max-x", type=float, default=12.0, help="cm/s at speed level 3")
-    ap.add_argument("--sprint-x", type=float, default=20.0, help="cm/s forward/back at speed level 4 (sprint)")
-    ap.add_argument("--max-y", type=float, default=6.0, help="cm/s sideways at speed level 3 (0 = never strafe)")
+    ap.add_argument("--sprint-x", type=float, default=30.0, help="cm/s forward/back at speed level 4 (sprint, at most 35)")
     ap.add_argument("--max-yaw", type=float, default=YAW_LIMIT, help="rad/s at speed level 3 (capped at 0.436)")
-    ap.add_argument("--invert-y", action="store_true")
     ap.add_argument("--invert-yaw", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print commands, publish nothing")
     a = ap.parse_args()
 
     a.max_yaw = min(abs(a.max_yaw), YAW_LIMIT)
+    a.max_x, a.sprint_x = min(FIRMWARE_MAX_X, a.max_x), min(FIRMWARE_MAX_X, max(a.max_x, a.sprint_x))
     drv = Driver(a.dry_run, a.gait)
     print("ROS%s driver ready%s; polling %s" % (drv.ros or "-", " (dry run)" if a.dry_run else "", a.brain))
     applied = dict(ZERO)
@@ -205,11 +205,9 @@ def main():
                 armed = bool(c.get("armed"))
                 level = int(c.get("speed", 1))
                 s = LEVEL_SCALE.get(level, LEVEL_SCALE[1])
-                want = {
-                    "x": max(-1.0, min(1.0, float(c["x"]))) * (max(a.max_x, a.sprint_x) if level >= 4 else a.max_x * s),
-                    "y": max(-1.0, min(1.0, float(c["y"]))) * a.max_y * s * (-1 if a.invert_y else 1),
-                    "yaw": max(-1.0, min(1.0, float(c["yaw"]))) * a.max_yaw * s * (-1 if a.invert_yaw else 1),
-                }
+                cx, cyaw = (max(-1.0, min(1.0, float(c[k]))) for k in ("x", "yaw"))
+                sign = -1 if a.invert_yaw else 1
+                want = {"x": cx * (a.sprint_x if level >= 4 else a.max_x * s), "y": 0.0, "yaw": cyaw * a.max_yaw * s * sign}
                 if not armed or not all(math.isfinite(v) for v in want.values()):
                     want = dict(ZERO)
                 hs = c.get("home_seq", 0)

@@ -1,4 +1,4 @@
-"""RosbridgeDriver against a fake rosbridge server: protocol, scaling, dead-man, no-lateral default."""
+"""RosbridgeDriver against a fake rosbridge server: protocol, scaling, dead-man, never a sideways value."""
 import json
 import threading
 import time
@@ -6,7 +6,7 @@ import time
 from websockets.sync.server import serve
 
 from puppy_mind.drive import DriveState
-from puppy_mind.rosbridge import RosbridgeDriver
+from puppy_mind.rosbridge import FIRMWARE_MAX_X, RosbridgeDriver, velocity
 
 
 class FakeBridge:
@@ -69,9 +69,9 @@ def test_forward_scaled_and_stops_on_expiry_and_disarm():
         d.close(); fb.close()
 
 
-def test_lateral_can_be_switched_off_and_message_types_follow_robot():
+def test_never_sends_sideways_and_message_types_follow_robot():
     fb, drive = FakeBridge("puppy_control_msgs/msg/Velocity"), DriveState()
-    d = run(drive, fb, max_y=0.0)
+    d = run(drive, fb)
     try:
         drive.arm(True)
         for _ in range(4):
@@ -221,34 +221,13 @@ def _hold(drive, x, y, yaw, secs=0.4):
         time.sleep(0.1)
 
 
-def test_sideways_steps_are_sent_and_sprint_only_speeds_up_walking_straight(monkeypatch):
-    for k in ("DRIVE_MAX_X", "DRIVE_MAX_Y", "DRIVE_SPRINT_X"):
-        monkeypatch.delenv(k, raising=False)
-    fb, drive = FakeBridge(), DriveState()
-    d = run(drive, fb)
-    try:
-        drive.arm(True)
-        drive.set_speed(3)
-        _hold(drive, 0, 1, 0)
-        assert any(abs(v["y"] - 6.0) < 1e-6 for v in fb.vels())  # sideways at the default 6 cm/s
-        drive.set_speed(4)
-        _hold(drive, 1, 0, 0)
-        assert any(abs(v["x"] - 20.0) < 1e-6 for v in fb.vels())  # sprint
-        _hold(drive, 0, -1, 0)
-        assert any(abs(v["y"] + 6.0) < 1e-6 for v in fb.vels())  # sideways does not sprint
-        _hold(drive, 0, 0, 1)
-        assert max(abs(v["yaw_rate"]) for v in fb.vels()) <= 0.436 + 1e-9  # nor does turning
-    finally:
-        d.close(); fb.close()
-
-
 def test_speeds_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("DRIVE_MAX_X", "10")
     monkeypatch.setenv("DRIVE_SPRINT_X", "16")
-    monkeypatch.setenv("DRIVE_MAX_Y", "4")
     d = RosbridgeDriver("ws://127.0.0.1:1", DriveState())
-    assert (d.max_x, d.sprint_x, d.max_y) == (10.0, 16.0, 4.0)
+    assert (d.max_x, d.sprint_x) == (10.0, 16.0)
     assert RosbridgeDriver("ws://127.0.0.1:1", DriveState(), max_x=15, sprint_x=5).sprint_x == 15  # sprint is never slower
+    assert RosbridgeDriver("ws://127.0.0.1:1", DriveState(), sprint_x=80).sprint_x == 35  # the firmware drops anything faster
 
 
 def test_a_nap_holds_and_walking_stands_the_robot_up_first():
@@ -275,3 +254,30 @@ def test_a_nap_holds_and_walking_stands_the_robot_up_first():
         assert all(v["x"] == 0.0 for v in fb.vels())  # no walking while getting up
     finally:
         d.close(); fb.close()
+
+
+def test_sprint_only_speeds_up_walking_straight_and_y_is_never_sent(monkeypatch):
+    for k in ("DRIVE_MAX_X", "DRIVE_SPRINT_X"):
+        monkeypatch.delenv(k, raising=False)
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb)
+    try:
+        drive.arm(True)
+        drive.set_speed(4)
+        _hold(drive, 1, 0, 0)
+        assert any(abs(v["x"] - 30.0) < 1e-6 for v in fb.vels())  # sprint
+        _hold(drive, 0, 0, 1)
+        assert max(abs(v["yaw_rate"]) for v in fb.vels()) <= 0.436 + 1e-9  # turning never sprints
+        _hold(drive, 0, 1, 0)  # a stray sideways value (old UI) must not reach the robot: the firmware drops the whole command
+        assert all(v["y"] == 0.0 and abs(v["x"]) <= FIRMWARE_MAX_X for v in fb.vels())
+    finally:
+        d.close(); fb.close()
+
+
+def test_velocity_never_breaks_the_firmware_rules():
+    for level in (1, 2, 3, 4):
+        for x in (-1, 0, 1):
+            for y in (-1, 0, 1):
+                for yaw in (-1, 0, 1):
+                    v = velocity({"x": x, "y": y, "yaw": yaw, "speed": level}, 12.0, 99.0, 0.436)
+                    assert v["y"] == 0.0 and abs(v["x"]) <= 35.0 and abs(v["yaw"]) <= 0.436

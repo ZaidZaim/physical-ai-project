@@ -428,13 +428,12 @@ class Brain:
         "come_back" walks the last walk the other way (the robot cannot see where you are: it retraces its steps)."""
         if not in_routine:
             self._routine_cancel.set()  # a new command replaces a routine that is still running
-        sidestep = os.getenv("DRIVE_SIDESTEP", "strafe").lower()
         if (direction or "").strip().lower().replace(" ", "_") == "come_back":
             last = self.nav.last_walk
-            mv = (plan_move(OPPOSITE[last.direction], last.seconds, None, last.speed, sidestep=last.sidestep) if last
+            mv = (plan_move(OPPOSITE[last.direction], last.seconds, None, last.speed) if last
                   else "I haven't walked anywhere yet, so there is nothing to come back from")
         else:
-            mv = plan_move(direction, seconds, degrees, speed, sidestep=sidestep)
+            mv = plan_move(direction, seconds, degrees, speed)
         if isinstance(mv, str):
             r = {"started": False, "reason": mv}
         elif self.drive.in_action:
@@ -443,6 +442,7 @@ class Brain:
             r = self.nav.start_move(mv)
             if r.get("started"):
                 self._moved = True
+        print("move %s: %s" % (direction, r.get("message") if r.get("started") else "refused, " + str(r.get("reason"))), flush=True)
         self.bus.publish("move", {"direction": direction, **r})
         return r
 
@@ -451,9 +451,10 @@ class Brain:
 
     def routine(self, steps: list[dict]) -> dict:
         """Several moves and tricks in a row, from one sentence: "come here and sit", "go take a nap", "show them what you can do".
-        Each step is {"trick": name}, {"move": direction, "seconds", "degrees", "speed"} or {"wait": seconds}. Runs in the background;
+        Each step is {"do": trick | move direction | "wait", "seconds", "degrees", "speed"} (older {"trick"} / {"move"} / {"wait"}
+        steps work too; a step that names both a move and a trick is the move: the model added the trick as filler). Background;
         stop_moving (or any new move) ends it. Refused up front when a step could not run (driving not armed, booth mode off)."""
-        steps = [s for s in (steps or []) if isinstance(s, dict)][: self.ROUTINE_MAX_STEPS]
+        steps = [n for n in (self._routine_step(s) for s in (steps or []) if isinstance(s, dict)) if n][: self.ROUTINE_MAX_STEPS]
         if not steps:
             return {"started": False, "reason": "no steps"}
         if any("move" in s for s in steps) and not self.drive.armed:
@@ -468,12 +469,29 @@ class Brain:
         self._routine.start()
         return {"started": True, "steps": len(steps)}
 
+    @staticmethod
+    def _routine_step(st: dict) -> dict | None:
+        """One routine step -> {"move": ...} | {"trick": ...} | {"wait": s}, or None if it names nothing we can do."""
+        from .drive import BIG_TRICKS, TRICKS
+        from .navigate import MOVE_DIRECTIONS
+
+        what = str(st.get("do") or st.get("move") or st.get("trick") or "").strip().lower().replace(" ", "_")
+        what = {"pushup": "push-up", "push_up": "push-up", "push-ups": "push-up", "nap": "lie_down"}.get(what, what)
+        if what in MOVE_DIRECTIONS:
+            return {"move": what, **{k: st[k] for k in ("seconds", "degrees", "speed") if st.get(k)}}
+        if what in TRICKS + BIG_TRICKS:
+            return {"trick": what}
+        if what == "wait" or ("wait" in st and not what):
+            return {"wait": st.get("seconds") or st.get("wait") or 1}
+        return None
+
     def _run_routine(self, steps: list[dict], cancel: threading.Event) -> None:
         done, why = 0, ""
         for st in steps:
             if cancel.is_set():
                 why = "stopped"
                 break
+            print("routine step %d/%d: %s" % (done + 1, len(steps), st), flush=True)
             if "trick" in st:
                 end = time.monotonic() + self.ROUTINE_RETRY_S
                 while True:
@@ -500,6 +518,7 @@ class Brain:
             elif "wait" in st:
                 cancel.wait(min(5.0, max(0.0, float(st.get("wait") or 1))))
             done += 1
+        print("routine: %d of %d steps done%s" % (done, len(steps), f", stopped: {why}" if why else ""), flush=True)
         self.bus.publish("routine", {"done": done, "of": len(steps), "stopped": why})
 
     def stop_moving(self) -> dict:

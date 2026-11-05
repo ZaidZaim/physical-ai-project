@@ -59,14 +59,15 @@ Verified only against a simulated rosbridge; the real message type is read from 
 4. ROS runs inside a Docker container named `puppypi`. Enter it: `docker exec -it -u ubuntu -w /home/ubuntu puppypi /bin/zsh`
 5. `echo $ROS_DISTRO` tells you the image: `noetic` = ROS1, `humble` = ROS2. `puppy_drive.py` supports both.
 6. Check the motion node is up: `rostopic list | grep puppy` (ROS1) or `ros2 topic list | grep puppy` (ROS2) should list `/puppy_control/velocity`.
-Stock firmware has no lateral (sideways) walking; Q/E do nothing unless you raise `--max-y`.
+The PuppyPi cannot walk sideways (8 servos, no sideways hip joint), so there are no sideways keys.
 
 ## 4b. Keyboard drive (verified against the Hiwonder `ros2` branch source, not yet run on your unit)
 `robot/puppy_drive.py` publishes `puppy_control_msgs/Velocity{x cm/s, y cm/s, yaw_rate rad/s}` to `/puppy_control/velocity`,
 restores the robot's STOCK gait/pose (fast short steps; the demo's slow Trot tipped it when turning) and caps turning at 25 deg/s (0.436 rad/s), and calls `/puppy_control/go_home` for the H key.
 1. `python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run` and press keys in the UI: confirm the printed values.
 2. Run it without `--dry-run` with the dog held off the ground, then in open space on the lowest speed (key `1`).
-3. If strafe or turn is mirrored on your unit, add `--invert-y` / `--invert-yaw`. Tune `--max-x/--max-y/--max-yaw`.
+3. If turning is mirrored on your unit, add `--invert-yaw`. Tune `--max-x/--sprint-x/--max-yaw` (x at most 35 cm/s: the robot's
+   puppy.py drops faster commands, and any command with a sideways part: the PuppyPi cannot strafe).
 4. Needs the ROS2 (Humble) image with the stock `puppy_control` node running. On the ROS1 image the package/message
    names differ; switch images (docs 3.4) or adapt the imports. Keep a hand near the power switch for first runs.
 5. To drive from another PC than the brain's own, set `BRAIN_TOKEN` in `.env` and open the UI as `/?token=<value>`.

@@ -411,7 +411,7 @@ def test_plan_move_is_bounded_and_understands_everyday_words():
     assert plan_move("turn_right", degrees=45).degrees == -45.0
     assert plan_move("turn_left", degrees=9999).degrees == 360.0
     assert plan_move("forward", speed="sprint").speed == 4
-    assert plan_move("left", speed="sprint").speed == 3  # no sprinting sideways
+    assert "sideways" in plan_move("left")  # no sideways walking: 8 servos, no sideways hip joint
     assert plan_move("spin", speed="sprint").speed == 3  # nor turning
     assert isinstance(plan_move("jump"), str)
 
@@ -435,40 +435,6 @@ class Recorder:
     def close(self):
         self._stop.set()
         self._t.join(1)
-
-
-def test_walk_left_strafes_for_the_time_asked_then_stops_and_restores_speed():
-    d = DriveState()
-    d.arm(True)
-    rec = Recorder(d)
-    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.02)
-    try:
-        assert nav.start_move(Move("left", seconds=0.3, speed=3))["started"]
-        nav.wait(3)
-        assert nav.state["phase"] == "done", nav.state
-        assert any(y == 1.0 and x == 0.0 for x, y, _ in rec.seen)
-        assert 3 in rec.speeds and d.speed == 2  # back to the person's own speed
-        assert d.current()["y"] == 0.0 and not d.auto
-    finally:
-        rec.close()
-
-
-def test_sidestep_by_turning_when_the_firmware_has_no_lateral_gait():
-    d = DriveState()
-    d.arm(True)
-    rec = Recorder(d)
-    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.01)
-    try:
-        nav.start_move(Move("right", seconds=0.2, speed=3, sidestep="turn", degrees=0.0))
-        nav.wait(10)
-        assert nav.state["phase"] == "done", nav.state
-        moving = [s for s in rec.seen if any(s)]
-        assert all(y == 0.0 for _, y, _ in moving)  # never a sideways command
-        kinds = [("turn" if yaw < 0 else "back") if yaw else "walk" for _, _, yaw in moving]
-        order = [k for i, k in enumerate(kinds) if i == 0 or kinds[i - 1] != k]
-        assert order == ["turn", "walk", "back"]  # right, forward, then left again to face the same way
-    finally:
-        rec.close()
 
 
 def test_turn_around_uses_the_gyro_when_there_is_one(rig):
@@ -513,10 +479,10 @@ def test_come_back_retraces_the_last_walk(monkeypatch):
     b = _brain(monkeypatch)
     assert "nothing to come back" in b.move("come_back")["reason"]
     b.drive.arm(True)
-    assert b.move("left", seconds=0.3, speed="fast")["started"]
+    assert b.move("forward", seconds=0.3, speed="fast")["started"]
     b.nav.wait(3)
     r = b.move("come_back")
-    assert r["started"] and "right" in r["message"] and "0.3" in r["message"]
+    assert r["started"] and "back" in r["message"] and "0.3" in r["message"]
 
 
 def test_a_routine_runs_moves_and_tricks_in_order_and_stop_ends_it(monkeypatch):
@@ -527,7 +493,7 @@ def test_a_routine_runs_moves_and_tricks_in_order_and_stop_ends_it(monkeypatch):
     b.drive.action_busy_s = 0.2
     events = []
     b.bus.publish = lambda t, e: events.append((t, e))
-    assert b.routine([{"move": "forward", "seconds": 0.3}, {"trick": "sit"}, {"trick": "stand"}])["started"]
+    assert b.routine([{"do": "forward", "seconds": 0.3}, {"do": "sit"}, {"trick": "stand"}])["started"]
     b._routine.join(20)
     assert ("routine", {"done": 3, "of": 3, "stopped": ""}) in events, events
     names = [e["name"] for t, e in events if t == "gesture" and e.get("ok")]
@@ -538,3 +504,27 @@ def test_a_routine_runs_moves_and_tricks_in_order_and_stop_ends_it(monkeypatch):
     b._routine.join(5)
     done = [e for t, e in events if t == "routine"][-1]
     assert done["done"] == 0 and done["stopped"] and b.drive.current()["x"] == 0.0
+
+
+def test_a_routine_step_naming_a_move_and_a_trick_is_the_move():
+    # seen at the robot: "walk five steps and go in a circle" came as {"trick": "wave", "move": "forward", ...} and only waved
+    step = Brain._routine_step({"trick": "wave", "move": "forward", "seconds": 4, "degrees": 0, "speed": "normal", "wait": 0})
+    assert step == {"move": "forward", "seconds": 4, "speed": "normal"}
+    assert Brain._routine_step({"do": "push-ups"}) == {"trick": "push-up"}
+    assert Brain._routine_step({"do": "wait", "seconds": 2}) == {"wait": 2}
+    assert Brain._routine_step({"do": "somersault"}) is None
+
+
+def test_a_walk_is_straight_and_restores_the_persons_speed():
+    d = DriveState()
+    d.arm(True)
+    rec = Recorder(d)
+    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.02)
+    try:
+        assert nav.start_move(Move("back", seconds=0.3, speed=4))["started"]
+        nav.wait(3)
+        assert nav.state["phase"] == "done", nav.state
+        assert any(x == -1.0 for x, _, _ in rec.seen) and all(y == 0.0 for _, y, _ in rec.seen)
+        assert 4 in rec.speeds and d.speed == 2 and not d.auto
+    finally:
+        rec.close()

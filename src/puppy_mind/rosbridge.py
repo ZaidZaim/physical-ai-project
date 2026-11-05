@@ -21,9 +21,12 @@ import uuid
 from .drive import HOLD_POSTURES, DriveState
 
 LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}
-# Speeds in cm/s. Level 3 walks at DRIVE_MAX_X; level 4 ("sprint") walks forward/back at DRIVE_SPRINT_X and keeps turning and
-# sideways steps at level 3 (a fast turn tips the dog over). DRIVE_MAX_Y is the sideways speed at level 3: Hiwonder's demos call
-# lateral motion "not available", so if the dog does not slide sideways on your firmware, set DRIVE_SIDESTEP=turn (see moves).
+# Speeds in cm/s. Level 3 walks at DRIVE_MAX_X; level 4 ("sprint") walks forward/back at DRIVE_SPRINT_X; turning stays at level 3
+# (a fast turn tips the dog over). Read from the robot's own puppy.py (ROS1 image), VelocityFun:
+#   * it ACCEPTS a command only if |x| <= 35 cm/s, y == 0 exactly, and |yaw_rate| <= 51 deg/s; anything else is DROPPED WHOLE, and the
+#     robot carries on with the previous command. So we never send y and never exceed FIRMWARE_MAX_X.
+#   * the PuppyPi has 8 servos (dof='8': hip swing and knee per leg, no sideways hip joint): it cannot step sideways at all.
+FIRMWARE_MAX_X = 35.0
 
 # Hiwonder's STOCK walking style (puppy.py GaitConfigFast + Stand pose). Fast, short steps are stable; the slower long-stride
 # "Trot" from their demo tipped the robot over when turning. Sending these also undoes any gait set earlier.
@@ -35,6 +38,16 @@ ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
 def _env(name: str, default: float) -> float:
     return float(os.getenv(name) or default)
+
+
+def velocity(c: dict, max_x: float, sprint_x: float, max_yaw: float, invert_yaw: bool = False) -> dict:
+    """Normalised drive command -> what the robot is sent (cm/s, rad/s). y is never sent (see FIRMWARE_MAX_X)."""
+    level = int(c.get("speed", 1))
+    s = LEVEL_SCALE.get(level, LEVEL_SCALE[1])
+    sign = -1.0 if invert_yaw else 1.0
+    x = c["x"] * (sprint_x if level >= 4 else max_x * s)
+    yaw = c["yaw"] * max_yaw * s * sign
+    return {"x": max(-FIRMWARE_MAX_X, min(FIRMWARE_MAX_X, x)), "y": 0.0, "yaw": max(-max_yaw, min(max_yaw, yaw))}
 
 
 def battery_status(mv: int | None, t: float) -> dict:
@@ -51,15 +64,14 @@ class RosbridgeDriver:
     BATTERY_TOPIC = "/ros_robot_controller/battery"  # std_msgs/UInt16, millivolts of the 2S LiPo (Hiwonder ros_robot_controller)
     IMU_TOPIC = "/ros_robot_controller/imu_raw"  # sensor_msgs/Imu, from Hiwonder's puppy_control source
 
-    def __init__(self, url: str, drive: DriveState, *, max_x=None, max_y=None, sprint_x=None, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
+    def __init__(self, url: str, drive: DriveState, *, max_x=None, sprint_x=None, max_yaw=YAW_LIMIT, invert_yaw=False, on_imu=None):
         self.url, self.drive = url, drive
         self.on_imu = on_imu  # callback(yaw_rate_rad_s) for each IMU sample
         self.imu_samples = 0
         self.battery_mv: int | None = None
         self.battery_t = 0.0
-        self.max_x = _env("DRIVE_MAX_X", 12.0) if max_x is None else max_x
-        self.max_y = _env("DRIVE_MAX_Y", 6.0) if max_y is None else max_y
-        self.sprint_x = max(self.max_x, _env("DRIVE_SPRINT_X", 20.0) if sprint_x is None else sprint_x)
+        self.max_x = min(FIRMWARE_MAX_X, _env("DRIVE_MAX_X", 12.0) if max_x is None else max_x)
+        self.sprint_x = min(FIRMWARE_MAX_X, max(self.max_x, _env("DRIVE_SPRINT_X", 30.0) if sprint_x is None else sprint_x))
         self.invert_yaw = invert_yaw
         self.max_yaw = min(abs(max_yaw), YAW_LIMIT)
         self.connected = False
@@ -174,13 +186,7 @@ class RosbridgeDriver:
         while not self._stop.is_set():
             t0 = time.monotonic()
             c = self.drive.current()
-            level = int(c["speed"])
-            s = LEVEL_SCALE.get(level, LEVEL_SCALE[1])
-            want = {
-                "x": c["x"] * (self.sprint_x if level >= 4 else self.max_x * s),
-                "y": c["y"] * self.max_y * s,
-                "yaw": c["yaw"] * self.max_yaw * s * (-1 if self.invert_yaw else 1),
-            }
+            want = velocity(c, self.max_x, self.sprint_x, self.max_yaw, self.invert_yaw)
             if not c["armed"]:
                 want = dict(ZERO)
             if c["home_seq"] != last_home:

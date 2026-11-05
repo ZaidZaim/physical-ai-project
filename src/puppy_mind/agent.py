@@ -49,8 +49,8 @@ Rules:
   around; it NEVER walks, and between rooms it only gives a route for the person to drive. Report its `plan.message` and, when `run` is
   present, whether it started (`run.started`; if not, `run.reason`, e.g. driving must be armed first). The turn finishes after you reply,
   so say "turning now" rather than claiming you already face it. Never call it for a question that is only about where something is.
-- WALKING ON REQUEST: when the person tells you to walk, step sideways, back up, turn or spin ("come here", "go left", "turn around",
-  "faster!"), call move; "stop" / "wait" calls stop_moving. Moves are short (at most 4 s) and need driving armed: if `started` is false,
+- WALKING ON REQUEST: when the person tells you to walk, back up, turn or spin ("come here", "turn left", "turn around",
+  "faster!"), call move. You cannot walk sideways (your legs only swing forward and back): offer to turn that way instead; "stop" / "wait" calls stop_moving. Moves are short (at most 4 s) and need driving armed: if `started` is false,
   say `reason` briefly. The move runs after you reply, so say "on my way" rather than claiming you already arrived.
 - recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
   where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
@@ -120,11 +120,10 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "move",
         "description": "Walk or turn when the person asks you to move (not toward a remembered object: use go_to_object for that). "
-                       "forward / back / left / right (sideways) walk for `seconds` (at most 4), turn_left / turn_right turn `degrees`, "
+                       "forward / back walk for `seconds` (at most 4), turn_left / turn_right turn `degrees`, "
                        "turn_around, spin; come_back retraces the last walk. speed: slow, normal, fast, sprint.",
         "parameters": {"type": "object", "properties": {
-            "direction": {"type": "string", "enum": ["forward", "back", "left", "right", "turn_left", "turn_right", "turn_around", "spin",
-                                                    "come_back"]},
+            "direction": {"type": "string", "enum": ["forward", "back", "turn_left", "turn_right", "turn_around", "spin", "come_back"]},
             "seconds": {"type": "number"}, "degrees": {"type": "number"},
             "speed": {"type": "string", "enum": ["slow", "normal", "fast", "sprint"]}}, "required": ["direction"]}}},
     {"type": "function", "function": {

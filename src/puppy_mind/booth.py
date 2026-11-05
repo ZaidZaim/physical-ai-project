@@ -309,9 +309,9 @@ TOOLS = [
                     "shake_hands, bow, nod, sit, stand, lie_down, stretch, shake_head, push-up, moonwalk).",
      "parameters": {"type": "object", "properties": {"name": {"type": "string", "enum": list(TRICKS + BIG_TRICKS)}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "move",
-     "description": "Walk or turn when someone asks you to move: 'come here' / 'walk forward' = forward, 'back up' = back, 'go left' / "
-                    "'step to the right' = left/right (walks sideways), 'turn left', 'turn around', 'spin', 'come back' = come_back (retraces "
-                    "the last walk). 'faster' / 'run' = speed fast or "
+     "description": "Walk or turn when someone asks you to move: 'come here' / 'walk forward' = forward, 'back up' = back, "
+                    "'turn left', 'turn around', 'spin', 'come back' = come_back (retraces "
+                    "the last walk). You cannot walk sideways: for 'go left' offer to turn left instead. 'faster' / 'run' = speed fast or "
                     "sprint. Short moves only (a walk lasts at most 4 seconds; say it again to go further). Only when asked to move.",
      "parameters": {"type": "object", "properties": {
          "direction": {"type": "string", "enum": list(MOVE_DIRECTIONS)},
@@ -320,14 +320,15 @@ TOOLS = [
          "speed": {"type": "string", "enum": list(MOVE_SPEEDS)}}, "required": ["direction"]}}},
     {"type": "function", "function": {"name": "routine",
      "description": "Several moves and tricks in a row, when one sentence asks for more than one thing: 'come here and sit' = "
-                    "[move forward, trick sit]; 'go take a nap over there' = [move forward, trick lie_down]; 'show them what you can do' = "
-                    "a short show of 3 to 5 steps you choose. At most 8 steps. Each step is ONE of trick, move or wait.",
+                    "[forward, sit]; 'go take a nap over there' = [forward, lie_down]; 'walk five steps and go in a circle' = "
+                    "[forward 3 s, spin]; 'show them what you can do' = a short show of 4 or 5 steps you choose. At most 8 steps, "
+                    "only the ones asked for: never add a trick nobody asked for.",
      "parameters": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {
-         "trick": {"type": "string", "enum": list(TRICKS + BIG_TRICKS)},
-         "move": {"type": "string", "enum": list(MOVE_DIRECTIONS)},
-         "seconds": {"type": "number"}, "degrees": {"type": "number"},
-         "speed": {"type": "string", "enum": list(MOVE_SPEEDS)},
-         "wait": {"type": "number", "description": "pause, seconds (at most 5)"}}}}}, "required": ["steps"]}}},
+         "do": {"type": "string", "enum": list(MOVE_DIRECTIONS) + list(TRICKS + BIG_TRICKS) + ["wait"],
+                "description": "one move, one trick or wait"},
+         "seconds": {"type": "number", "description": "for a walk: how long (at most 4); for wait: how long (at most 5)"},
+         "degrees": {"type": "number", "description": "for turn_left / turn_right only"},
+         "speed": {"type": "string", "enum": list(MOVE_SPEEDS)}}, "required": ["do"]}}}, "required": ["steps"]}}},
     {"type": "function", "function": {"name": "stop_moving",
      "description": "Stop walking or turning right now ('stop', 'wait', 'freeze', 'that's enough').",
      "parameters": {"type": "object", "properties": {}}}},

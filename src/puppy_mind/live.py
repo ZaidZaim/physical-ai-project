@@ -93,7 +93,7 @@ SAY_DONE_QUIET_S = 0.8      # the line is over once its words were all said and 
 STOP_WORDS = {"stop", "halt", "freeze"}  # heard in a call: the robot stops at once, before GPT-Live has even answered
 
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
-           "move when someone asks you to walk, come closer, come back, step left or right, back up, turn or spin (faster = speed fast "
+           "move when someone asks you to walk, come closer, come back, back up, turn or spin (never sideways: it cannot) (faster = speed fast "
            "or sprint), routine when one sentence asks for several things ('come here and sit', 'walk over and take a nap', 'show them "
            "what you can do', 'wake up' = stand then stretch), do_trick for sit / take a nap (lie_down) / stand up (stand) / "
            "shake hands or give paw (shake_hands) / stretch / push-ups or exercise (push-up), "

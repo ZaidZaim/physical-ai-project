@@ -30,7 +30,7 @@ BIG_TRICKS = ("push-up", "moonwalk")
 HOLD_POSTURES = ("sit", "lie_down")
 RISE_S = 1.0
 MANUAL_GAP_S = 2.0  # a trick from the buttons waits only for the previous one to finish (plus this), not GESTURE_COOLDOWN_S
-MAX_SPEED_LEVEL = 4  # 4 = sprint: forward/back only goes faster (DRIVE_SPRINT_X); sideways and turning stay at level 3
+MAX_SPEED_LEVEL = 4  # 4 = sprint: forward/back only goes faster (DRIVE_SPRINT_X); turning stays at level 3
 MAX_LOOK_UP_DEG = 30.0  # Hiwonder's pose node rejects |pitch| > 31 deg; its own "look down" pose is -15 deg
 
 

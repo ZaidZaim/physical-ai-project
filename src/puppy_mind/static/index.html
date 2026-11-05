@@ -214,13 +214,13 @@
       <div class="lbl"><span>Drive <span id="dstate" class="tag">disarmed</span></span><button class="sm" id="arm">Enable keys</button></div>
       <div id="padrow">
         <div id="pad">
-          <button data-k="q" title="Step left, sideways (Q)">&#8676;</button><button data-k="w" title="Forward (W / Up)">&#9650;</button><button data-k="e" title="Step right, sideways (E)">&#8677;</button>
+          <span></span><button data-k="w" title="Forward (W / Up)">&#9650;</button><span></span>
           <button data-k="a" title="Turn left (A / Left)">&#8630;</button><button data-k=" " class="stop" title="Stop (Space)">&#9632;</button><button data-k="d" title="Turn right (D / Right)">&#8631;</button>
           <span></span><button data-k="s" title="Back (S / Down)">&#9660;</button><span></span>
         </div>
         <div id="dinfo">
           <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3 4)</div>
-          <div><b>W S</b> walk &nbsp; <b>A D</b> turn &nbsp; <b>Q E</b> sideways<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
+          <div><b>W S</b> walk &nbsp; <b>A D</b> turn<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
         </div>
       </div>
       <div class="vrow" style="margin-top:8px"><span id="rstate">robot offline</span><span id="batt"></span></div>
@@ -938,11 +938,11 @@ async function loadOntology() {
 
 /* ---------- keyboard drive ---------- */
 const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast', 4:'4 · sprint' };
-const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right', q:'sl', e:'sr' };
+const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right' };
 const held = new Set(); let ws = null, armed = false, speed = 2, loopT = null;
 const vec = () => ({
   x: (held.has('fwd') ? 1 : 0) - (held.has('back') ? 1 : 0),
-  y: (held.has('sl') ? 1 : 0) - (held.has('sr') ? 1 : 0),
+  y: 0,   // the PuppyPi cannot walk sideways (no sideways hip joint; its firmware drops any sideways command)
   yaw: (held.has('left') ? 1 : 0) - (held.has('right') ? 1 : 0),
 });
 const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));

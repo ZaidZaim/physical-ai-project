@@ -24,11 +24,13 @@ from .drive import DriveState
 from .pose import wrap180, wrap360
 
 ALREADY_FACING_DEG = 12.0
-# Spoken moves ("walk left", "come here", "turn around"): short, bounded, and only while the person has armed driving.
+# Spoken moves ("come here", "back up", "turn around"): short, bounded, and only while the person has armed driving.
+# No sideways walking: the PuppyPi has 8 servos (hip and knee per leg, no sideways hip joint) and its firmware drops any
+# command with a sideways part. Turn-walk-turn and curving were tried at the robot and not wanted.
 MOVE_SPEEDS = {"slow": 1, "normal": 2, "fast": 3, "sprint": 4}
-MOVE_DIRECTIONS = ("forward", "back", "left", "right", "turn_left", "turn_right", "turn_around", "spin", "come_back")
-OPPOSITE = {"forward": "back", "back": "forward", "left": "right", "right": "left"}
-MAX_WALK_S = 4.0       # one spoken walk never lasts longer (at sprint, ~80 cm): say it again to go further
+MOVE_DIRECTIONS = ("forward", "back", "turn_left", "turn_right", "turn_around", "spin", "come_back")
+OPPOSITE = {"forward": "back", "back": "forward"}
+MAX_WALK_S = 4.0       # one spoken walk never lasts longer (at sprint, ~2 m at most): say it again to go further
 DEFAULT_WALK_S = 1.5
 MAX_TURN_DEG = 360.0
 TURN_DEG_PER_S = 25.0  # the robot's turn rate at speed level 3 (YAW_LIMIT): times a turn when there is no gyro heading
@@ -42,34 +44,33 @@ class Move:
     seconds: float = DEFAULT_WALK_S
     degrees: float = 0.0
     speed: int = 2
-    sidestep: str = "strafe"  # strafe: walk sideways; turn: turn 90 degrees, walk, turn back (firmware without lateral steps)
 
     @property
     def message(self) -> str:
-        if self.direction in ("forward", "back", "left", "right"):
-            how = "" if self.direction in ("forward", "back") or self.sidestep == "strafe" else " (turning, stepping, turning back)"
-            return f"Walking {self.direction} for {self.seconds:.1f} s{how}."
+        if self.direction in ("forward", "back"):
+            return f"Walking {self.direction} for {self.seconds:.1f} s."
         return f"Turning {abs(self.degrees):.0f} degrees {'left' if self.degrees > 0 else 'right'}."
 
 
-def plan_move(direction: str, seconds: float | None = None, degrees: float | None = None, speed: str | int | None = None,
-              sidestep: str = "strafe") -> Move | str:
+def plan_move(direction: str, seconds: float | None = None, degrees: float | None = None, speed: str | int | None = None) -> Move | str:
     """A spoken request -> a bounded Move, or the reason it cannot be one."""
     d = (direction or "").strip().lower().replace(" ", "_")
     d = {"backward": "back", "backwards": "back", "around": "turn_around"}.get(d, d)
+    if d in ("left", "right", "sideways"):
+        return "I can't walk sideways: my legs only swing forward and back. I can turn that way instead."
     if d not in MOVE_DIRECTIONS or d == "come_back":
         return f"unknown direction {direction!r}: use one of {', '.join(MOVE_DIRECTIONS)}"
     level = speed if isinstance(speed, int) else MOVE_SPEEDS.get(str(speed or "normal").lower(), 2)
     level = max(1, min(4, int(level)))
-    if d in ("forward", "back", "left", "right"):
+    if d in ("forward", "back"):
         secs = DEFAULT_WALK_S if not seconds or seconds <= 0 else min(MAX_WALK_S, max(0.3, float(seconds)))
-        if d in ("left", "right") and sidestep == "strafe":
-            level = min(level, 3)  # sprint is for walking straight only
-        return Move(d, seconds=round(secs, 2), speed=level, sidestep=sidestep)
+        return Move(d, seconds=round(secs, 2), speed=level)
     deg = {"turn_around": 180.0, "spin": 360.0}.get(d) or (abs(float(degrees)) if degrees else 90.0)
     deg = min(MAX_TURN_DEG, max(5.0, deg))
     sign = -1.0 if d == "turn_right" else 1.0
     return Move(d, seconds=0.0, degrees=sign * deg, speed=min(level, 3))
+
+
 CHECK_OFFSETS = (0.0, 40.0, -80.0)  # after a turn: where we turned, 40 degrees left of it, 40 degrees right of it
 
 
@@ -212,16 +213,7 @@ class Navigator:
             self.drive.set_speed(move.speed)
             d = move.direction
             if d in ("forward", "back"):
-                ok, why = self._walk(1.0 if d == "forward" else -1.0, 0.0, move.seconds)
-            elif d in ("left", "right") and move.sidestep == "strafe":
-                ok, why = self._walk(0.0, 1.0 if d == "left" else -1.0, move.seconds)
-            elif d in ("left", "right"):
-                side = 90.0 if d == "left" else -90.0
-                ok, why = self._turn_any(side, move.speed)
-                if ok:
-                    ok, why = self._walk(1.0, 0.0, move.seconds)
-                if ok:
-                    ok, why = self._turn_any(-side, move.speed)
+                ok, why = self._walk(1.0 if d == "forward" else -1.0, move.seconds)
             else:
                 ok, why = self._turn_any(move.degrees, move.speed)
             if ok and d in OPPOSITE:
@@ -233,14 +225,14 @@ class Navigator:
             self.drive.end_auto()
             self.drive.set_speed(old_speed)
 
-    def _walk(self, x: float, y: float, seconds: float) -> tuple[bool, str]:
+    def _walk(self, x: float, seconds: float) -> tuple[bool, str]:
         """Timed walk: there is no odometry, so distance is speed x time. Every tick re-checks that it may still move."""
         end = time.monotonic() + min(seconds, MAX_WALK_S)
         while time.monotonic() < end:
             why = self._abort_reason(need_heading=False)
             if why:
                 return False, why
-            self.drive.command(x, y, 0.0, source="auto")
+            self.drive.command(x, 0.0, 0.0, source="auto")
             time.sleep(self.tick)
         self.drive.command(0.0, 0.0, 0.0, source="auto")
         return True, ""
