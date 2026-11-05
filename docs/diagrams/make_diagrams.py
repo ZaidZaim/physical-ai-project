@@ -173,8 +173,9 @@ def loop(s: Svg, cx, cy, r, side, name, lines=None):
 
 def graph_model(theme: str) -> str:
     t = THEMES[theme]
-    s = new(900, 520, t, "puppy-mind graph ontology")
-    R = {"Robot": (120, 112), "Session": (430, 112), "Place": (740, 150), "Sighting": (300, 320), "Item": (610, 320)}
+    s = new(900, 760, t, "puppy-mind graph ontology")
+    R = {"Robot": (120, 112), "Session": (430, 112), "Place": (740, 150), "Sighting": (300, 320), "Item": (610, 320),
+         "Encounter": (820, 450), "Person": (500, 620), "Company": (810, 650), "Theme": (170, 620)}
     r = 46
     # edges first, nodes on top
     edge(s, R["Robot"], R["Session"], r, r, "RAN")
@@ -185,17 +186,27 @@ def graph_model(theme: str) -> str:
     edge(s, R["Sighting"], R["Item"], r, r, "MISSED", dashed=True, bend=26, lpos=0.5)
     edge(s, R["Item"], R["Place"], r, r + 4, "LOCATED_AT", color=t["long"], lpos=0.55, loff=(44, 0))
     loop(s, *R["Place"], r + 4, "right", "ADJACENT_TO")
+    # booth visitors (stored only after a spoken yes); NAMS / POLE+O names in the node subtitles
+    edge(s, R["Encounter"], R["Place"], r, r + 4, "HELD_AT", lpos=0.55, loff=(36, 0))
+    edge(s, R["Person"], R["Encounter"], r, r, "PARTICIPATED_IN", lpos=0.5, loff=(-58, -8))
+    edge(s, R["Person"], R["Company"], r, r, "WORKS_AT", lpos=0.5, loff=(0, 16))
+    edge(s, R["Person"], R["Theme"], r, r, "INTERESTED_IN", bend=-34, lpos=0.5)
+    edge(s, R["Person"], R["Theme"], r, r, "ENJOYED", dashed=False, bend=34, lpos=0.5)
     loop(s, *R["Item"], r, "below", "", lines=["ON · INSIDE · NEXT_TO", "NEAR · IN_FRONT_OF · BEHIND"])
     node(s, *R["Robot"], r, "Robot", "", t["robot"])
     node(s, *R["Session"], r, "Session", "one run", t["short"])
     node(s, *R["Sighting"], r, "Sighting", "one frame", t["short"])
     node(s, *R["Item"], r, "Item", "a thing", t["long"])
     node(s, *R["Place"], r + 4, "Place", "a room", t["long"])
+    node(s, *R["Encounter"], r, "Encounter", "Event", t["nams"])
+    node(s, *R["Person"], r, "Person", "a visitor", t["nams"])
+    node(s, *R["Company"], r, "Company", "Organization", t["nams"])
+    node(s, *R["Theme"], r, "Theme", "Topic", t["nams"])
     # legend
-    y = 502
+    y = 742
     for i, (c, txt, dash) in enumerate([(t["long"], "long-term: the world", False), (t["short"], "short-term: what was seen, when", False),
-                                        (t["line"], "dashed: expected but not seen", True)]):
-        x = 24 + i * 250
+                                        (t["nams"], "booth visitors (with consent)", False), (t["line"], "dashed: expected but not seen", True)]):
+        x = 24 + i * 218
         if dash:
             s.add(f'<path d="M{x} {y - 4} h22" stroke="{c}" stroke-width="2" stroke-dasharray="5 4"/>')
         else:

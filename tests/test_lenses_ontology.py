@@ -91,3 +91,30 @@ def test_api_lenses_ontology_and_demo_guard(client, monkeypatch):
     monkeypatch.setenv("PUPPY_FAKE_MEMORY", "0")  # pretend this is the real graph
     r = client.post("/api/demo/replay?delay=0.01")
     assert r.status_code == 403 and "real graph" in r.json()["detail"]
+
+
+def test_booth_vocabulary_is_pole_o_like_nams_and_maps_to_its_own_aura_labels():
+    o = ontology.build({"Theme": 5, "Encounter": 3})
+    by = {n["id"]: n for n in o["nodes"]}
+    assert {by[t]["pole"] for t in ("Person", "Organization", "Topic", "Event")} == {"PERSON", "ORGANIZATION", "OBJECT", "EVENT"}
+    assert (by["Topic"]["aura_label"], by["Event"]["aura_label"]) == ("Theme", "Encounter")
+    assert (by["Topic"]["count"], by["Event"]["count"]) == (5, 3)
+    assert by["Person"]["properties"] == [] and not by["Event"]["pii"]  # lead generation is on hold: nobody's data is modelled
+    # NAMS writes an entity's ontology type as a label into the shared database: our label for a type must never be that same name,
+    # or our uniqueness constraints would reject NAMS's writes.
+    for typ, label in ontology.AURA_LABEL.items():
+        assert label != typ and label not in by, (typ, label)
+
+
+def test_ontology_declares_every_booth_label_and_relationship_the_app_writes():
+    src = (SRC / "booth_graph.py").read_text(encoding="utf-8")
+    labels = set(re.findall(r"\(\w*:([A-Z][A-Za-z]+)", src))
+    rels = {r for grp in re.findall(r"\[\w*:([A-Z_|]+)\]", src) for r in grp.split("|")}
+    o = ontology.build()
+    aura = {n["aura_label"] for n in o["nodes"]}
+    declared = {(e["type"], e["source"], e["target"]) for e in o["edges"]}
+    assert labels - {"Place"} <= aura and "Person" not in labels and "Company" not in labels, labels
+    assert rels == {"DISCUSSED", "ENJOYED", "HELD_AT"}, rels
+    assert {("DISCUSSED", "Event", "Topic"), ("ENJOYED", "Event", "Topic"), ("HELD_AT", "Event", "Location"),
+            ("HOSTED", "Agent", "Event")} <= declared
+    assert not any(s == "Person" or t == "Person" for _, s, t in declared)  # no relationship can reach a person

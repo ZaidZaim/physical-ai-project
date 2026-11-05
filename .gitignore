@@ -221,3 +221,6 @@ __marimo__/
 
 # real tours: pictures and detections from someone's home
 tours/
+
+# booth logs (what visitors said): local only
+logs/

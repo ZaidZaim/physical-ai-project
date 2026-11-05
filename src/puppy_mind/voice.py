@@ -1,0 +1,101 @@
+"""Speech: audio in -> text (OpenAI transcription), text -> audio out (OpenAI TTS).
+
+The robot's WonderEcho Pro is just a USB microphone and speaker as far as this code is concerned: robot/puppy_voice.py records and plays,
+the laptop does the understanding and the talking (same split as the camera: the Pi does no inference).
+"""
+from __future__ import annotations
+
+import re
+
+from .config import Settings
+
+# Words a speech model tends to mangle; passed as a prompt so "Cypher" is not heard as "cipher".
+VOCAB_HINT = "Hey PuppyPi, PuppyPi, Neo4j, Cypher, GraphRAG, GraphAcademy, Aura, AuraDB, GenAI, LLM, knowledge graph, vector index, embeddings, Graph Data Science, MCP"
+
+
+# What Whisper-style models "hear" in silence or hum: video outros and subtitle credits from their training data. A visitor at a robot
+# booth never says these, so a transcript made of them means the microphone gave us nothing.
+_SILENCE = re.compile(
+    r"thanks? (you )?(so much )?for watching|subscribe|click the bell|see you (in the )?next (video|time)|"
+    r"subtitles? (by|from)|amara\.org|transcribed by", re.I)
+
+
+_HINT_TERMS = [h.strip().lower() for h in VOCAB_HINT.split(",")]
+
+# How speech-to-text mishears the booth's words (each seen on the robot or typical for the model), and what was meant. Applied to
+# every transcript, so the Wizard answers the right question and the booth notes keep the right topic.
+TERM_FIXES = [
+    (r"\basian (memory|memories)\b", r"agent \1"), (r"\bagents? memory\b", "agent memory"),
+    (r"\bgraph (economy|academy|academic)\b", "GraphAcademy"), (r"\bgraph ?academy\b", "GraphAcademy"),
+    (r"\bgraph ?(rag|rack|rug|wreck)\b", "GraphRAG"), (r"\bneo ?(4|four|for) ?j\b", "Neo4j"), (r"\bneo forge\b", "Neo4j"),
+    (r"\bcipher\b", "Cypher"), (r"\baura ?d ?b\b", "AuraDB"), (r"\bpuppy ?pie\b", "PuppyPi"), (r"\bcontext graft\b", "context graph"),
+]
+
+
+def fix_terms(text: str) -> str:
+    for pat, rep in TERM_FIXES:
+        text = re.sub(pat, rep, text or "", flags=re.I)
+    return text
+
+
+def echoes_the_hint(text: str) -> bool:
+    """The speech model returned its own prompt: on noise it can answer with VOCAB_HINT itself. Seen on the robot: "Hey PuppyPi,
+    Neo4j, Cypher, GraphRAG, GraphAcademy, Aura, ..." opened a conversation nobody had started."""
+    low = (text or "").lower()
+    return sum(1 for h in _HINT_TERMS if h and h in low) >= 5
+
+
+def heard_nothing(text: str) -> bool:
+    """True when a transcript is empty, a lone filler word, one of the phrases the model invents for silence, or its own prompt."""
+    t = re.sub(r"[^\w\s']", " ", (text or "").lower()).split()
+    return (not t or (len(t) == 1 and t[0] in ("you", "bye", "uh", "um", "hmm", "so", "okay")) or bool(_SILENCE.search(text or ""))
+            or echoes_the_hint(text))
+
+
+def louder(wav: bytes, gain: float) -> bytes:
+    """The speech, louder for a small speaker: normalised to full scale, then a soft limiter (tanh) raises the quiet parts and rounds
+    the peaks off instead of clipping them. `gain` <= 1 or anything that is not 16-bit PCM WAV comes back unchanged."""
+    if gain <= 1.0:
+        return wav
+    import io
+    import wave
+
+    import numpy as np
+
+    try:
+        with wave.open(io.BytesIO(wav)) as w:
+            params, frames = w.getparams(), w.readframes(w.getnframes())
+        if params.sampwidth != 2 or not frames:
+            return wav
+        x = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+        x /= max(float(np.abs(x).max()), 1e-3)
+        y = np.tanh(gain * x) / np.tanh(gain) * 0.97
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(params.nchannels)
+            w.setsampwidth(2)
+            w.setframerate(params.framerate)
+            w.writeframes((y * 32767).astype("<i2").tobytes())
+        return out.getvalue()
+    except Exception:
+        return wav  # never lose the reply over the volume
+
+
+class Voice:
+    def __init__(self, s: Settings, client=None):
+        self.s = s
+        if client is None:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=s.openai_api_key)
+        self.client = client
+
+    def transcribe(self, audio: bytes, filename: str = "speech.wav") -> str:
+        r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), prompt=VOCAB_HINT,
+                                                    language=self.s.voice_language or None)  # never guess: see Settings.voice_language
+        return fix_terms((getattr(r, "text", "") or "").strip())
+
+    def speak(self, text: str) -> bytes:
+        """WAV bytes, so the robot can play them with plain `aplay` (made louder by VOICE_GAIN for its small speaker)."""
+        r = self.client.audio.speech.create(model=self.s.tts_model, voice=self.s.tts_voice, input=text[:1500], response_format="wav")
+        return louder(r.content if hasattr(r, "content") else r.read(), self.s.voice_gain)

@@ -1,0 +1,4 @@
+# Files that run on the robot (Linux) must keep Unix line endings, or bash fails with "$'\r': command not found".
+robot/*.sh text eol=lf
+robot/*.service text eol=lf
+robot/*.py text eol=lf

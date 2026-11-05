@@ -102,6 +102,21 @@ class RosbridgeDriver:
         except Exception:
             pass
 
+    def _pose(self, pitch: float) -> None:
+        """Hiwonder's stock standing pose, with the body pitch (radians, nose-up positive) booth mode asks for."""
+        self._publish("/puppy_control/pose", dict(stance_x=0.0, stance_y=0.0, x_shift=GAIT["x_shift"], height=-10.0,
+                                                  roll=0.0, pitch=float(pitch), yaw=0.0, run_time=500))
+
+    def _trick(self, name: str) -> None:
+        """Run one of Hiwonder's action groups and wait for it (the service replies when the action group has finished),
+        then stand back in our pose: an action group leaves the legs wherever its last frame put them."""
+        self._publish("/puppy_control/velocity", {"x": 0.0, "y": 0.0, "yaw_rate": 0.0})
+        r = self._call("/puppy_control/runActionGroup", {"name": f"{name}.d6ac", "wait": True}, wait=self.drive.action_busy_s + 4)
+        if r is not None and r.get("result") is False:
+            self.error = f"trick {name} failed: {r.get('values')}"[:200]
+        self._pose(self.drive.pitch_rad)
+        self.drive.action_done()
+
     # ---- main loop
     def _run(self) -> None:
         from websockets.sync.client import connect
@@ -129,8 +144,7 @@ class RosbridgeDriver:
                            ("/puppy_control/gait", "Gait")):
             self._send({"op": "advertise", "topic": topic, "type": prefix + typ})
         time.sleep(0.2)
-        self._publish("/puppy_control/pose", dict(stance_x=0.0, stance_y=0.0, x_shift=GAIT["x_shift"], height=-10.0,
-                                                  roll=0.0, pitch=0.0, yaw=0.0, run_time=500))
+        self._pose(self.drive.pitch_rad)
         time.sleep(0.2)
         self._publish("/puppy_control/gait", {k: v for k, v in GAIT.items() if k != "x_shift"})
         self._call("/puppy_control/set_mark_time", {"data": False})  # leave mark-time so it can walk
@@ -139,7 +153,9 @@ class RosbridgeDriver:
         self._send({"op": "subscribe", "topic": self.BATTERY_TOPIC, "type": "std_msgs/UInt16", "throttle_rate": 2000, "queue_length": 1})
 
     def _loop(self) -> None:
-        last, last_pub, last_home = None, 0.0, self.drive.current()["home_seq"]
+        c0 = self.drive.current()
+        last, last_pub, last_home = None, 0.0, c0["home_seq"]
+        last_action, last_pitch = c0["action_seq"], c0["pitch"]  # a trick asked for before we connected is stale: skip it
         zero_again = False
         while not self._stop.is_set():
             t0 = time.monotonic()
@@ -157,6 +173,13 @@ class RosbridgeDriver:
                 self._publish("/puppy_control/velocity", {"x": 0.0, "y": 0.0, "yaw_rate": 0.0})
                 self._call("/puppy_control/go_home")
                 want = dict(ZERO)
+            if c["action_seq"] != last_action:
+                last_action = c["action_seq"]
+                self._trick(c["action"])
+                last, want = dict(ZERO), dict(ZERO)
+            elif c["pitch"] != last_pitch and not c["busy"]:
+                self._pose(c["pitch"])
+            last_pitch = c["pitch"]
             moving = any(want.values())
             # Publish ONLY on change: the robot re-applies its stance on every velocity message, so a keep-alive
             # stream makes the dog flex. A stop is sent twice (now and 0.3 s later) in case one is lost.

@@ -1,11 +1,11 @@
 {
-  "message": "puppy-mind: physical-world vocabulary (Agent=robot, Location, Object, Person) with spatial relationships; extends the agent-memory ontology",
+  "message": "puppy-mind rev 3: anonymous booth. Lead generation is on hold (no personal data): Person has no lead fields and no booth relationships; Event is one anonymous booth conversation (need, familiarity, questions) that DISCUSSED and ENJOYED Topics, HOSTED by the robot",
   "validation_mode": "permissive",
   "ontology": {
     "domain": {
       "id": "puppy-pi",
       "name": "PuppyPi Physical World",
-      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places, consenting people, and the spatial relationships between them",
+      "description": "What a quadruped robot sees and remembers: the robot, physical objects, places and the spatial relationships between them; and at a conference booth, anonymous notes of what visitors asked about, need and enjoyed (never who they are)",
       "tagline": "Talk with your environment"
     },
     "entity_types": [
@@ -18,6 +18,12 @@
         "icon": "bot",
         "pii_sensitive": false,
         "properties": [
+          {
+            "name": "agent_id",
+            "type": "string",
+            "required": false,
+            "unique": true
+          },
           {
             "name": "model",
             "type": "string",
@@ -73,16 +79,130 @@
       },
       {
         "label": "Person",
-        "description": "A visitor. Stored ONLY with explicit consent; never identified from camera frames.",
+        "description": "A person mentioned in text or seen by the camera. This app never stores visitors as people: booth conversations are anonymous (see Event).",
         "pole_type": "PERSON",
-        "subtype": "visitor",
+        "subtype": "person",
         "color": "#D29922",
         "icon": "user",
         "pii_sensitive": true,
         "properties": []
+      },
+      {
+        "label": "Organization",
+        "description": "A company or institution mentioned in conversation (never linked to a visitor).",
+        "pole_type": "ORGANIZATION",
+        "subtype": "company",
+        "color": "#8B5CF6",
+        "icon": "building",
+        "pii_sensitive": false,
+        "properties": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "label": "Topic",
+        "description": "A technology or theme raised at the booth (GraphRAG, Aura, knowledge graphs, agent memory) or something visitors enjoyed at the event (a keynote, the robot demo). Shared across conversations.",
+        "pole_type": "OBJECT",
+        "subtype": "topic",
+        "color": "#14B8A6",
+        "icon": "tag",
+        "pii_sensitive": false,
+        "properties": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": false
+          }
+        ]
+      },
+      {
+        "label": "Event",
+        "description": "One anonymous conversation the robot hosted at the booth: when, at which event, what the visitor needs and asked, and how well they know Neo4j. Never who they are.",
+        "pole_type": "EVENT",
+        "subtype": "booth_conversation",
+        "color": "#F97316",
+        "icon": "message-circle",
+        "pii_sensitive": false,
+        "properties": [
+          {
+            "name": "event_id",
+            "type": "string",
+            "required": false,
+            "unique": true
+          },
+          {
+            "name": "ts",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "event_name",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "need",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "familiarity",
+            "type": "string",
+            "required": false,
+            "enum": [
+              "none",
+              "curious",
+              "user",
+              "expert"
+            ]
+          },
+          {
+            "name": "questions",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "summary",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "turns",
+            "type": "integer",
+            "required": false
+          }
+        ]
       }
     ],
-    "extraction_aliases": {},
+    "extraction_aliases": {
+      "puppypi": "Agent",
+      "puppy pi": "Agent",
+      "robot": "Agent",
+      "robot dog": "Agent",
+      "graph wizard": "Agent",
+      "company": "Organization",
+      "employer": "Organization",
+      "startup": "Organization",
+      "university": "Organization",
+      "topic": "Topic",
+      "interest": "Topic",
+      "technology": "Topic",
+      "use case": "Topic",
+      "keynote": "Topic",
+      "talk": "Topic",
+      "session": "Topic",
+      "graphrag": "Topic",
+      "knowledge graph": "Topic",
+      "agent memory": "Topic",
+      "booth conversation": "Event",
+      "conversation at the booth": "Event",
+      "booth": "Location",
+      "demo area": "Location"
+    },
     "relationships": [
       {
         "type": "ON",
@@ -139,10 +259,28 @@
         "description": "The robot was at this place"
       },
       {
-        "type": "INTERACTED_WITH",
+        "type": "HELD_AT",
+        "source": "Event",
+        "target": "Location",
+        "description": "Where the conversation took place"
+      },
+      {
+        "type": "HOSTED",
         "source": "Agent",
-        "target": "Person",
-        "description": "Consented interaction"
+        "target": "Event",
+        "description": "The robot hosted this booth conversation"
+      },
+      {
+        "type": "DISCUSSED",
+        "source": "Event",
+        "target": "Topic",
+        "description": "A topic raised in this booth conversation"
+      },
+      {
+        "type": "ENJOYED",
+        "source": "Event",
+        "target": "Topic",
+        "description": "Something the visitor enjoyed at the event"
       }
     ]
   }

@@ -1,0 +1,19 @@
+# PuppyPi voice client: starts at boot, finds the Puppy Mind laptop on the current Wi-Fi and keeps the voice client running.
+# Install (on the robot): sudo cp puppy-voice.service /etc/systemd/system/ && sudo systemctl enable --now puppy-voice
+# Restart by hand: sudo systemctl restart puppy-voice     Log: ~/puppy_voice.log
+[Unit]
+Description=PuppyPi voice client (talks to the Puppy Mind laptop app)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/bin/bash /home/pi/start_voice_auto.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/pi/puppy_voice.log
+StandardError=append:/home/pi/puppy_voice.log
+
+[Install]
+WantedBy=multi-user.target

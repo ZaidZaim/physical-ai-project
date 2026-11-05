@@ -41,14 +41,34 @@ def _nams_cmd(args, s) -> int:
             spec = json.loads(Path("ontology/puppy_pi.json").read_text(encoding="utf-8"))
             for obj in s.vocab:  # let NAMS extraction map common nouns in observation text to PhysicalObject
                 spec["ontology"]["extraction_aliases"].setdefault(obj, "Object")
-            spec["ontology"]["extraction_aliases"].update({"puppypi": "Agent", "robot": "Agent", "visitor": "Person"})
-            r = n._req("POST", "/v1/ontologies", spec)
+            if args.preview:  # what NAMS would extract from this text with the file's ontology: nothing is stored or changed
+                n.http.timeout = 120  # extraction with a draft ontology took over 20 s
+                r = n._req("POST", "/v1/ontologies/preview", {"text": args.preview, "ontology": spec["ontology"]})
+                if r is None:
+                    print("preview failed:", n.stats["last_error"])
+                    return 1
+                for e in r.get("entities", []):
+                    print(f"  {e.get('type')}: {e.get('name')}  ({e.get('decision')})")
+                for x in r.get("relationships", []):
+                    print(f"  {x.get('source')} -[{x.get('type')}]-> {x.get('target')}")
+                return 0
+            # a new revision of the existing puppy-pi ontology (PUT), so its history stays in one place; created only the first time
+            mine = [o for o in (n._req("GET", "/v1/ontologies") or {}).get("ontologies", [])
+                    if o.get("name") == spec["ontology"]["domain"]["id"] and not o.get("is_system")]
+            versions = ((n._req("GET", f"/v1/ontologies/{mine[0]['id']}") or {}).get("versions") or []) if mine else []
+            newest = max(versions, key=lambda v: v.get("revision") or 0, default={})
+            if newest.get("message") == spec["message"]:  # this file is already the newest revision: no identical copy
+                r = newest
+            else:
+                r = n._req("PUT", f"/v1/ontologies/{mine[0]['id']}", spec) if mine else n._req("POST", "/v1/ontologies", spec)
             if r is None:
                 print("create failed:", n.stats["last_error"])
                 if "403" in n.stats["last_error"]:
                     print("This API key can read and write memory but is not allowed to manage ontologies.")
                     print("Memory sync works without it: the app already uses the types of your active ontology (Agent, Location, Object, Person).")
+                    print("The booth types (Organization, Topic, Event) reach NAMS once this version is created and activated.")
                 return 1
+            r = r.get("version") or r
             print("created ontology version:", json.dumps({k: r.get(k) for k in ("id", "ontology_id", "revision", "semver_tag", "validation_mode")}))
             if args.activate:
                 a = n._req("POST", "/v1/ontologies/active", {"version_id": r["id"]})
@@ -61,6 +81,12 @@ def _nams_cmd(args, s) -> int:
 
             mem = Memory(s)
             n.mem = mem
+            if args.booth:  # the anonymous booth conversations only (the world model is untouched)
+                print("booth:", n.sync_conversations(mem.list_conversations(), s.robot_name))
+                n.flush(60)
+                print("done:", n.status())
+                mem.close()
+                return 0 if n.auth != "invalid" else 1
             if args.rebuild:
                 links = mem.nams_links()
                 gone = 0
@@ -176,6 +202,8 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
 
     code = check(robot_ip)
     cam = camera_url(robot_ip, light=light) if code == 0 else None
+    if not cam:  # the robot is still off or booting: its camera comes up with it at the usual address
+        cam = f"http://{robot_ip}:8080/stream?topic=/usb_cam/image_raw" + ("&width=320&height=240&quality=50" if light else "")
     if combine:
         os.environ["DRIVE_COMBINE"] = "1"
 
@@ -199,8 +227,11 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
     elif s.openai_api_key:
         print(f"Frame analysis is ON: about one camera frame every {s.watch_interval_s:g}s is sent to OpenAI ({s.vision_model}) while the camera runs.")
     bridge = _open(robot_ip, 9090, 2.0)
-    if bridge:
-        os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
+    # Always: the app keeps retrying until the robot answers. Seen at the booth: the robot was rebooting when the app started, and
+    # tricks, driving and the camera stayed off until the app was restarted.
+    os.environ["ROSBRIDGE_URL"] = f"ws://{robot_ip}:9090"
+    if not bridge:
+        print(f"\n The robot's rosbridge (ws://{robot_ip}:9090) does not answer yet: the app keeps trying, so a booting robot is fine.")
     os.environ["CAMERA_SOURCE"] = cam or ""  # never fall back to a laptop webcam while testing the robot
     base = f"http://{laptop}:{port}"
     if bridge:
@@ -213,16 +244,51 @@ Or join the robot's own hotspot (HW...) and run this command again.""")
 """)
     else:
         print(f"""
- The robot's rosbridge (port 9090) is NOT reachable, so keyboard driving needs a small script ON the robot:
-   open VNC/SSH, enter the docker container, then run puppy_drive.py (see docs/ROBOT_SETUP.md section 4a), e.g.
-     python3 -c "import urllib.request as u; u.urlretrieve('{base}/robot/puppy_drive.py','puppy_drive.py')"
-     python3 puppy_drive.py --brain {base} --dry-run
- Without that you still get the live camera. Hiwonder's phone app / handle can move the robot meanwhile.
- Camera: {cam or 'NOT FOUND'}
+ Driving, tricks and the camera start as soon as the robot is up (if its rosbridge never comes up, run puppy_drive.py
+ on the robot instead: docs/ROBOT_SETUP.md section 4a, {base}/robot/puppy_drive.py).
+ Camera: {cam}
 """)
     threading.Timer(2.5, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     uvicorn.run("puppy_mind.server:app", host="0.0.0.0", port=port)
     return 0
+
+
+class _Tee:
+    """Everything printed goes to the window and to the booth log (the window keeps only its last lines)."""
+
+    def __init__(self, stream, log):
+        self.stream, self.log = stream, log
+
+    def write(self, s):
+        try:
+            self.stream.write(s)
+        except UnicodeEncodeError:  # a console that cannot show a character: the log still gets it
+            self.stream.write(s.encode("ascii", "replace").decode())
+        self.log.write(s)
+        self.log.flush()
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+        self.log.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _booth(robot_ip: str, port: int, log_path: str | None) -> int:
+    """Start the booth: the robot app with Aura memory, and a log of everything it prints (logs/booth-<date>.log)."""
+    import datetime
+    import sys
+    from pathlib import Path
+
+    path = Path(log_path) if log_path else Path("logs") / f"booth-{datetime.date.today().isoformat()}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    log = open(path, "a", encoding="utf-8", buffering=1)
+    log.write(f"\n===== booth started {datetime.datetime.now().isoformat(timespec='seconds')} =====\n")
+    sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+    print(f"Booth log: {path.resolve()} (what visitors said is in it: delete it after the booth day)")
+    return _robot_test(robot_ip, port, light=True, real_memory=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,11 +340,17 @@ def main(argv: list[str] | None = None) -> int:
     rt.add_argument("--full-camera", action="store_true", help="full-size camera stream instead of the lighter 320x240")
     rt.add_argument("--real-memory", action="store_true", help="save observations to Aura (and analyse frames with OpenAI) instead of in-RAM memory")
     rt.add_argument("--combine", action="store_true", help="allow forward+turn together (risky on this robot)")
+    bt = sub.add_parser("booth", help="start the booth: the robot app with Aura memory, logged to logs/booth-<date>.log")
+    bt.add_argument("--robot-ip", default=os.getenv("ROBOT_IP", "auto"), help="robot IP (default: ROBOT_IP in .env, else search the network)")
+    bt.add_argument("--port", type=int, default=8000)
+    bt.add_argument("--log", help="log file (default: logs/booth-<date>.log)")
     sub.add_parser("nams-check", help="test the NAMS key/workspace and show the active ontology")
-    ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS (add --activate to switch to it)")
+    ns = sub.add_parser("nams-setup", help="create the puppy-pi ontology in NAMS, or its next revision (add --activate to switch to it)")
     ns.add_argument("--activate", action="store_true")
+    ns.add_argument("--preview", metavar="TEXT", help="only show what NAMS would extract from TEXT with ontology/puppy_pi.json (changes nothing)")
     nc = sub.add_parser("nams-sync", help="backfill the Aura world model into NAMS entities and relationships")
     nc.add_argument("--location")
+    nc.add_argument("--booth", action="store_true", help="copy the anonymous booth conversations saved in Aura to NAMS instead")
     nc.add_argument("--rebuild", action="store_true", help="first delete the NAMS entities this app created (found via the links on our objects), then recreate them")
     et = sub.add_parser("export-tour", help="save the frames stored in Aura as a replayable tour (read-only)")
     et.add_argument("--session", help="only this session (default: all)")
@@ -297,6 +369,9 @@ def main(argv: list[str] | None = None) -> int:
 
         os.environ["RECORD_TOUR"] = args.record or str(default_tour_path())
         print(f"Recording a tour to {os.environ['RECORD_TOUR']} (pictures + detections; keep it out of git)")
+
+    if args.cmd == "booth":
+        return _booth(args.robot_ip, args.port, args.log)
 
     if args.cmd == "robot-test":
         return _robot_test(args.robot_ip, args.port, light=not args.full_camera, combine=args.combine, real_memory=args.real_memory)

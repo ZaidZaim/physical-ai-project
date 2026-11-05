@@ -18,6 +18,7 @@ class FakeNams:
         self.headers_seen = {}
         self.merge_always = set()   # entity names NAMS "merges" (measured live: look-alike names get merged)
         self.pairs = []             # pending review pairs returned by GET /v1/reviews
+        self.active = ["Agent", "Object", "Location", "Person"]  # entity types of the active ontology (revision 1)
 
     def _id(self, p):
         self.n += 1
@@ -33,6 +34,9 @@ class FakeNams:
         if path == "/v1/status":
             return httpx.Response(200, json={"status": "ok"})
         self.calls.append((req.method, path, body))
+        if req.method == "GET" and path == "/v1/ontologies/active":  # the live shape: the schema as a JSON string
+            return httpx.Response(200, json={"version": {"id": "ov-x", "schema_json": json.dumps(
+                {"entity_types": [{"label": t} for t in self.active]})}})
         if path == "/v1/conversations":
             return httpx.Response(201, json={"id": self._id("conv"), "metadata": body.get("metadata")})
         if re.fullmatch(r"/v1/conversations/[^/]+/messages", path):
@@ -341,3 +345,60 @@ def test_backfill_links_objects_to_the_same_place_entity_live_syncing_uses():
     rels = [r for c in fake.calls_to("POST", "/v1/relationships/bulk") for r in c["relationships"]]
     assert {r["targetId"] for r in rels if r["relationshipType"] == "LOCATED_AT"} == {live}
     n.close()
+
+
+def test_a_booth_conversation_reaches_nams_as_an_anonymous_event_once_the_booth_ontology_is_active():
+    from puppy_mind.booth import BoothHost
+    from puppy_mind.devfake import FakeMemory
+
+    fake = FakeNams()
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test")
+    mem = FakeMemory(s)
+    n, _ = make(fake, mem)
+    host = BoothHost(s, mem, client=None)
+    host.nams, host.write_in_background = n, False
+    enc = host._encounter("conv-abc123", "Booth")
+    enc.turns, enc.notes = 3, {"topics": ["knowledge graphs", "contracts"], "enjoyed": ["agentic ai keynote"], "need": "search contracts",
+                               "familiarity": "curious", "questions": ["what is graphrag"], "summary": "asked about contract search"}
+    host._save(enc)
+    assert n.flush(5) and fake.calls_to("POST", "/v1/entities/bulk") == []  # booth types not active yet: nothing is sent
+    fake.active += ["Organization", "Topic", "Event"]
+    n._booth_types = (False, -1e9)
+    host._save(enc)
+    host._save(enc)  # saved after every answer: the same Event, not a second one
+    assert n.flush(5)
+    sent = [e for call in fake.calls_to("POST", "/v1/entities/bulk") for e in call["entities"]]
+    assert {e["type"] for e in sent} == {"Event", "Topic", "Agent", "Location"}  # never a Person or an Organization
+    event = next(e for e in sent if e["type"] == "Event")
+    assert event["properties"]["event_id"] == "conv-abc123" and event["properties"]["need"] == "search contracts"
+    assert len([k for k in fake.entities if k[1] == "Event"]) == 1
+    ids = {name: i for (name, _), i in fake.entities.items()}
+    rels = {(r["relationshipType"], r["sourceId"], r["targetId"]) for call in fake.calls_to("POST", "/v1/relationships/bulk")
+            for r in call["relationships"]}
+    assert {("DISCUSSED", ids[event["name"]], ids["knowledge graphs"]), ("ENJOYED", ids[event["name"]], ids["agentic ai keynote"]),
+            ("HOSTED", ids[s.robot_name], ids[event["name"]])} <= rels
+
+
+def test_two_booth_conversations_never_merge_into_one_event_and_a_later_save_reuses_its_own():
+    # seen live: NAMS merged "Booth conversation 2026-11-02 adaea8" and "... 034074" (look-alike names) into one Event
+    from puppy_mind.devfake import FakeMemory
+
+    fake = FakeNams()
+    fake.active += ["Organization", "Topic", "Event"]
+    s = dataclasses.replace(get_settings(), nams_api_key="nams_test", nams_base_url="https://nams.test")
+    mem = FakeMemory(s)
+    n, _ = make(fake, mem)
+    a = {"id": "aaaa111111", "need": "chat over manuals", "topics": ["graphrag"], "turns": 2}
+    b = {"id": "bbbb222222", "need": "fraud rings in payments", "topics": ["fraud detection"], "turns": 3}
+    for c in (a, b):
+        mem.save_conversation(c, place=None, ts="2026-11-02T17:00:00Z")
+    fake.merge_always = {"fraud rings in payments ("}  # NAMS folds b's first name into someone else's entity
+    n.submit_conversation(a, None, "2026-11-02T17:00:00Z", "PuppyPi")
+    n.submit_conversation(b, None, "2026-11-02T17:05:00Z", "PuppyPi")
+    n.submit_conversation({**a, "need": "a chatbot over product manuals", "turns": 3}, None, "2026-11-02T17:01:00Z", "PuppyPi")
+    assert n.flush(5)
+    ea, eb = mem.conversation_nams_id(a["id"]), mem.conversation_nams_id(b["id"])
+    assert ea and eb and ea != eb and eb != "someone-elses"  # b got its own Event under the more distinctive name
+    events = [k for k in fake.entities if k[1] == "Event"]
+    assert len(events) == 2 and any(name.startswith("Booth conversation bbbb222222") for name, _ in events)
+    assert sum(1 for m, p, b_ in fake.calls if m == "PUT" and p == f"/v1/entities/{ea}") == 1  # the later save updated a's Event
