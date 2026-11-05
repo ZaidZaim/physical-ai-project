@@ -507,7 +507,9 @@ function log(kind, html) {
   const L = $('#log'); L.prepend(d); while (L.children.length > 80) L.lastChild.remove();
 }
 function add(cls, text, evidence) {
-  const d = document.createElement('div'); d.className = 'm ' + cls; d.textContent = text;
+  const d = document.createElement('div'); d.className = 'm ' + cls;
+  // answers may still carry a little markdown: **bold** and line breaks are shown, everything else stays escaped text
+  d.innerHTML = esc(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
   if (evidence && evidence.length) {
     const e = document.createElement('details');
     e.innerHTML = '<summary>Lookups: ' + evidence.map(t => esc(t.tool)).join(' → ') + '</summary><pre>' + esc(JSON.stringify(evidence, null, 2)) + '</pre>';
