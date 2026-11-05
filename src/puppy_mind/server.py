@@ -192,8 +192,22 @@ def robot_script(name: str):
     return FileResponse(p, media_type="text/x-python")
 
 
+_last_graph_state: dict = {"stats": {}, "current": [], "timeline": []}
+
+
+def _graph_state() -> dict:
+    """What the page shows from the graph. When Aura does not answer (seen on the phone hotspot: a read timed out and the page's
+    poll failed with a 500), the last values are shown and the next poll tries again."""
+    try:
+        _last_graph_state.update(stats=brain.mem.stats(), current=brain.mem.current_view(), timeline=brain.mem.timeline(10))
+    except Exception as e:
+        print("graph read failed (showing the last values):", type(e).__name__, str(e)[:120], flush=True)
+    return dict(_last_graph_state)
+
+
 @app.get("/api/state")
 def state():
+    g = _graph_state()
     return {
         "session": brain.session,
         "location": brain.location,
@@ -206,10 +220,10 @@ def state():
         "memory": brain.memory_kind,
         "place": brain.place_info(),
         "nams_status": brain.nams.status(),
-        "stats": brain.mem.stats(),
-        "current": brain.mem.current_view(),
+        "stats": g["stats"],
+        "current": g["current"],
         "recent": recent,
-        "timeline": brain.mem.timeline(10),
+        "timeline": g["timeline"],
     }
 
 
