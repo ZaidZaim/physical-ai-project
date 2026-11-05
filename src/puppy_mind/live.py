@@ -37,7 +37,7 @@ import wave
 
 import numpy as np
 
-from .booth import TOOLS, robot_says_goodbye, says_goodbye
+from .booth import TOOLS, has_wake_word, robot_says_goodbye, says_goodbye
 from .voice import fix_terms
 from .wizard import system_prompt
 
@@ -215,6 +215,8 @@ class LiveCall:
             self.open = False
 
     async def mic(self, pcm: bytes) -> None:
+        if self.enc is not None and self.enc.closing:  # they said goodbye: the hall's chatter must not keep the call going
+            pcm = bytes(len(pcm))
         if self.open and not self.starting and pcm:
             await self.send({"type": "session.input_audio.append", "audio": base64.b64encode(pcm[:len(pcm) // 2 * 2]).decode()})
 
@@ -281,7 +283,9 @@ class LiveCall:
                 self.answer_at = self.answer_at or now
             if not self.confirmed:
                 heard = " ".join(x["content"] for x in merge_turns(self.pieces) if x["role"] == "user")
-                if heard and self.booth.addressed(heard, None)[0]:
+                # only "Hey PuppyPi" opens a call: right after a camera greeting any sentence used to count as an answer to it,
+                # and in the busy hall bystanders' chatter ("to have ...") opened calls nobody had asked for
+                if heard and has_wake_word(heard, self.s.wake_word):
                     await self.confirm(heard)
         elif t == "response.event":
             ev = m.get("event") or {}
@@ -357,8 +361,8 @@ class LiveCall:
                 threading.Thread(target=self.booth._learn, args=args, daemon=True).start()
             else:
                 self.booth._learn(*args)
-        if enc.closing:
-            self.close_at = time.monotonic() + 0.5  # once the goodbye has been played
+        if enc.closing and self.close_at is None:  # once, when the goodbye is answered: later replies never push it back
+            self.close_at = time.monotonic() + 0.5  # (and the goodbye has been played: see tick)
 
     def tick(self) -> str | None:
         """Housekeeping, about four times a second: end a probe that was not for the robot, commit quiet turns, and return a

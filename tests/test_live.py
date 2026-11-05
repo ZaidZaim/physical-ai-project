@@ -531,3 +531,38 @@ def test_a_visitor_who_speaks_while_a_line_is_prepared_goes_first(monkeypatch):
     assert not bridge.busy()
     bridge.call = object()  # a visitor's wake check opened meanwhile
     assert asyncio.run(bridge.say("Step right up!")) == "skipped" and not bridge.ws.audio
+
+
+def test_after_goodbye_the_halls_chatter_cannot_keep_the_call_open():
+    # seen at the booth: after "Thanks, bye" every bit of chatter got an answer and each answer pushed the closing back
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    sent = []
+
+    async def fake_send(ev):
+        sent.append(ev)
+    call.send, call.starting = fake_send, False
+    _ev(call, "input", 600, " Hey PuppyPi, what is Aura?")
+    _ev(call, "output", 3000, " Neo4j's cloud database.")
+    _ev(call, "input", 8000, " Thanks, bye!")
+    _ev(call, "output", 9000, " Bye, try the claw machine!")
+    call.commit()
+    first = call.close_at
+    _ev(call, "input", 11000, " so anyway the coffee is over there")
+    _ev(call, "output", 12000, " Sorry, I didn't catch that.")
+    call.commit()
+    assert call.close_at == first  # not pushed back
+    asyncio.run(call.mic(b"\x10\x00" * 320))
+    assert base64.b64decode(sent[-1]["audio"]) == bytes(640)  # the microphone is silenced after the goodbye
+
+
+def test_a_sentence_right_after_a_greeting_needs_the_wake_word_to_open_a_call():
+    import time as _t
+    booth, _ = _booth()
+    booth._recent_greeting = (_t.monotonic(), "Hi there!")
+    bridge = FakeBridge(booth)
+    call = LiveCall(bridge, b"\x00\x00" * 1600)
+    _ev(call, "input", 600, " to have in assure that the sensor")
+    assert not call.confirmed and not bridge.told
+    _ev(call, "input", 2000, " Hey PuppyPi, hello")
+    assert call.confirmed
