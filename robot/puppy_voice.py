@@ -57,6 +57,42 @@ def pick_card(listing):
     return "plughw:%s,%s" % (good[0][0], good[0][2]) if good else None
 
 
+AEC_ARGS = "noise_suppression=1 high_pass_filter=1 analog_gain_control=0 digital_gain_control=1"
+
+
+def setup_echo_cancel():
+    """Record and play through PulseAudio's WebRTC echo canceller (module-echo-cancel): it removes most of the robot's own voice
+    from its microphone and suppresses the hall's noise. Measured on this robot with speech at booth volume: its own voice 24260 ->
+    2976 (RMS), a quiet room 188 instead of 1000-2500. True when it is on; then the mic and speaker are ALSA's "pulse" device."""
+    os.environ.setdefault("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid())  # the systemd service has no session environment
+
+    def pactl(*args):
+        return subprocess.run(["pactl", *args], capture_output=True, text=True, timeout=10)
+    try:
+        if pactl("info").returncode != 0:
+            print("echo cancelling: no PulseAudio running")
+            return False
+        names = lambda kind: [l.split("\t")[1] for l in pactl("list", "short", kind).stdout.splitlines() if "\t" in l]
+        usb = lambda items: [n for n in items if PREFER.search(n) and not n.endswith(".monitor") and not n.startswith("ec_")]
+        src, snk = usb(names("sources")), usb(names("sinks"))
+        if not src or not snk:
+            print("echo cancelling: the WonderEcho Pro is not in PulseAudio")
+            return False
+        pactl("unload-module", "module-echo-cancel")  # from an earlier start
+        r = pactl("load-module", "module-echo-cancel", "aec_method=webrtc", "source_name=ec_source", "sink_name=ec_sink",
+                  "source_master=" + src[0], "sink_master=" + snk[0], "rate=16000", "channels=1", 'aec_args="%s"' % AEC_ARGS)
+        if r.returncode != 0:
+            print("echo cancelling: PulseAudio refused it:", (r.stderr or r.stdout).strip()[:120])
+            return False
+        pactl("set-default-source", "ec_source")
+        pactl("set-default-sink", "ec_sink")
+        print("echo cancelling: on (WebRTC: the robot's own voice and the hall's noise are taken out of the microphone)")
+        return True
+    except Exception as e:
+        print("echo cancelling: not available (%s)" % e)
+        return False
+
+
 def find_device(tool):
     try:
         out = subprocess.run([tool, "-l"], capture_output=True, text=True, timeout=10).stdout
@@ -322,6 +358,7 @@ class Voice:
                 raise LiveOff(str(e))
             raise
         print("GPT-Live: connected to", url)
+        ws.send_text(json.dumps({"type": "hello", "aec": bool(getattr(self.a, "aec", False))}))  # may it hear visitors while it talks?
         # stderr: between sentences the stream pauses and aplay prints "underrun!!!" (harmless; it filled the log)
         player = subprocess.Popen(["aplay", "-q", "-D", self.a.speaker, "-t", "raw", "-f", "S16_LE", "-r", str(RATE), "-c", "1"],
                                   stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -445,12 +482,17 @@ def main():
     ap.add_argument("--forget-after", type=float, default=120.0, help="seconds of quiet after which the next voice is treated as a new visitor")
     ap.add_argument("--test-mic", action="store_true")
     ap.add_argument("--classic", action="store_true", help="never use GPT-Live calls, even when the laptop offers them")
+    ap.add_argument("--no-echo-cancel", dest="echo_cancel", action="store_false",
+                    help="use the sound card directly instead of PulseAudio's WebRTC echo canceller")
     ap.add_argument("--live-ratio", type=float, default=1.7,
                     help="GPT-Live mode: speech counts above this many times the room noise (the classic mode uses 3)")
     ap.add_argument("--live-silence", type=float, default=0.6,
                     help="GPT-Live mode: quiet that ends the wake sentence (the rest of the question streams into the call)")
     a = ap.parse_args()
     a.brain = a.brain.rstrip("/")
+    a.aec = a.echo_cancel and a.mic == "auto" and a.speaker == "auto" and not a.test_mic and setup_echo_cancel()
+    if a.aec:
+        a.mic = a.speaker = "pulse"  # ALSA's PulseAudio device: its defaults are now the echo-cancelled source and sink
     for name, tool in (("mic", "arecord"), ("speaker", "aplay")):
         if getattr(a, name) == "auto":
             dev = find_device(tool)

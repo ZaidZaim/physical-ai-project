@@ -445,7 +445,15 @@ class LiveBridge:
         self.play_end = 0.0
         self.audible_until = 0.0
         self.spare: asyncio.Task | None = None  # a GPT-Live connection kept ready for the next utterance
+        self.robot_aec = False  # the robot said its echo canceller is on (its hello)
         self.spare_at = 0.0
+
+    def mute_mic(self) -> bool:
+        """In a call: send silence instead of the microphone? While the robot moves (servo noise), and while it talks unless
+        LIVE_BARGE_IN is on and the robot's echo canceller removes its own voice (then visitors can interrupt it)."""
+        if self.brain.drive.moving:
+            return True
+        return time.monotonic() < self.audible_until + ECHO_TAIL_S and not (self.brain.s.live_barge_in and self.robot_aec)
 
     def busy(self) -> bool:
         """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos). A line still being prepared
@@ -605,6 +613,14 @@ class LiveBridge:
                     break
                 data = m.get("bytes")
                 if not data:
+                    try:  # the robot's hello: is its echo canceller on?
+                        hello = json.loads(m.get("text") or "{}")
+                        if hello.get("type") == "hello":
+                            self.robot_aec = bool(hello.get("aec"))
+                            print("robot echo cancelling: %s%s" % ("on" if self.robot_aec else "off", ", visitors may interrupt it"
+                                  if self.robot_aec and self.brain.s.live_barge_in else ""), flush=True)
+                    except ValueError:
+                        pass
                     continue
                 kind, pcm = data[:1], data[1:]
                 call = self.call
@@ -615,7 +631,7 @@ class LiveBridge:
                     if call.starting:
                         call.pending += pcm
                     elif kind in (b"M", b"S") or not call.confirmed:  # a probe hears the rest of the sentence as it is said
-                        await call.mic(bytes(len(pcm)) if self.busy() else pcm)
+                        await call.mic(bytes(len(pcm)) if self.mute_mic() else pcm)
                 elif kind in (b"S", b"U") and not self.busy() and self.brain.listening:
                     # self.call is set HERE, before the next frame is read: set inside the task, the next pieces of the same sentence
                     # each opened a session of their own (seen at the booth: 3 to 4 per sentence, the wake word split between them)

@@ -582,3 +582,16 @@ def test_gpt_live_cost_is_counted_by_kind_and_shown_on_this_machine_only(client)
     assert set(j) >= {"live", "minutes", "usd", "count", "since"} and j["count"] == USAGE.count
     with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
         assert c.get("/api/voice/usage").status_code == 403
+
+
+def test_visitors_may_interrupt_only_with_barge_in_on_and_the_robots_echo_canceller_on(monkeypatch):
+    import time as _t
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    bridge.audible_until = _t.monotonic() + 5  # the robot is talking
+    assert bridge.mute_mic()
+    bridge.robot_aec = True
+    assert bridge.mute_mic()  # LIVE_BARGE_IN is off by default
+    bridge.brain.s = dataclasses.replace(S, live_barge_in=True)
+    assert not bridge.mute_mic()
+    bridge.robot_aec = False
+    assert bridge.mute_mic()

@@ -156,7 +156,13 @@ the robot, then transcription, the chat model, and the whole reply synthesised b
   same voice as the calls: a short session told to say exactly that line (measured: word for word, first sound about 1.8 s). GPT-Live
   only speaks while audio flows in, so silence is streamed to it meanwhile. If it cannot start within 6 s, the classic voice says
   the line instead; if a visitor speaks while a line is still being prepared, the line gives way to their conversation.
-- The robot's microphone hears its own speaker, so the laptop sends silence while the robot talks: visitors cannot interrupt it
+- Echo cancelling and noise suppression on the robot: the voice client loads PulseAudio's WebRTC echo canceller
+  (module-echo-cancel) at start and records and plays through it. Measured with speech at booth volume: the robot's own voice in
+  its microphone 24260 -> 2976 (RMS), a quiet room 188 instead of 1000-2500. GPT-Live itself has no noise or echo setting.
+  `--no-echo-cancel` on the robot goes back to the sound card directly. `LIVE_BARGE_IN=true` on the laptop lets visitors
+  interrupt the robot (its microphone reaches GPT-Live while it talks), only when the robot reports the canceller is on; the
+  leftover echo is about as loud as a quiet visitor, so it is off by default.
+- Without that, the robot's microphone hears its own speaker, so the laptop sends silence while the robot talks: visitors cannot interrupt it
   yet. Settings: `LIVE_MODEL`, `LIVE_VOICE_NAME` (default `marin`), `LIVE_BACKEND_MODEL`. Code: `live.py`.
 
 ## Not built (on purpose)
