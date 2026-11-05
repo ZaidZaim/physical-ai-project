@@ -1,4 +1,4 @@
-"""Draw the README diagrams (architecture, graph ontology) as hand-laid-out SVGs, in a light and a dark version.
+"""Draw the README diagrams (architecture, graph ontology, booth conversation) as hand-laid-out SVGs, light and dark.
 
     uv run python docs/diagrams/make_diagrams.py
 
@@ -14,9 +14,11 @@ FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-se
 
 THEMES = {
     "light": dict(bg="#ffffff", ink="#1f2328", mute="#59636e", line="#8c959f", frame="#d1d9e0", panel="#f6f8fa",
-                  robot="#2a7f9e", long="#b9691a", short="#2f8f55", nams="#7050cc", on_fill="#ffffff", label_bg="#ffffff"),
+                  robot="#2a7f9e", long="#b9691a", short="#2f8f55", nams="#7050cc", voice="#b8457c", drop="#8c959f",
+                  on_fill="#ffffff", label_bg="#ffffff"),
     "dark": dict(bg="#0d1117", ink="#e6edf3", mute="#9198a1", line="#6e7681", frame="#3d444d", panel="#151b23",
-                 robot="#4db3d6", long="#e3a047", short="#4cc27a", nams="#a98cf5", on_fill="#0d1117", label_bg="#0d1117"),
+                 robot="#4db3d6", long="#e3a047", short="#4cc27a", nams="#a98cf5", voice="#d96ca0", drop="#6e7681",
+                 on_fill="#0d1117", label_bg="#0d1117"),
 }
 
 
@@ -84,25 +86,28 @@ def cylinder(s: Svg, cx, cy, w, h, title, sub, color):
 
 def architecture(theme: str) -> str:
     t = THEMES[theme]
-    s = new(900, 410, t, "puppy-mind architecture: perceive, remember, answer, act")
+    s = new(900, 520, t, "puppy-mind architecture: perceive, remember, answer, act, talk")
     # frames
-    s.add(f'<rect x="12" y="34" width="196" height="360" rx="12" fill="none" stroke="{t["frame"]}" stroke-dasharray="6 5"/>')
+    s.add(f'<rect x="12" y="34" width="196" height="472" rx="12" fill="none" stroke="{t["frame"]}" stroke-dasharray="6 5"/>')
     s.text(110, 24, "PuppyPi robot", size=13, weight=600, fill=t["mute"])
-    s.add(f'<rect x="234" y="34" width="490" height="360" rx="12" fill="none" stroke="{t["frame"]}" stroke-dasharray="6 5"/>')
+    s.add(f'<rect x="234" y="34" width="490" height="472" rx="12" fill="none" stroke="{t["frame"]}" stroke-dasharray="6 5"/>')
     s.text(479, 24, "Laptop: the brain (this repo)", size=13, weight=600, fill=t["mute"])
     s.text(820, 24, "Cloud", size=13, weight=600, fill=t["mute"])
     # robot
     rf = dict(fill=t["robot"], stroke=t["robot"], title_fill=t["on_fill"], sub_fill=t["on_fill"])
     box(s, 28, 70, 164, 76, "Sensors", "camera · gyro", **rf)
-    box(s, 28, 282, 164, 76, "Legs", "rosbridge commands", **rf)
+    box(s, 28, 282, 164, 76, "Legs", "rosbridge · tricks", **rf)
+    box(s, 28, 404, 164, 76, "Voice", "echo-cancelled mic · speaker", **rf)
     # steps
     box(s, 252, 70, 210, 76, "1 · Perceive", "OpenAI vision → objects")
     box(s, 496, 70, 210, 76, "2 · Remember", "match objects · know the room")
     box(s, 496, 282, 210, 76, "3 · Answer", "agent with graph tools · UI")
-    box(s, 252, 282, 210, 76, "4 · Act", "turn to an object · drive")
-    # stores
+    box(s, 252, 282, 210, 76, "4 · Act", "turn to an object · tricks")
+    box(s, 252, 404, 454, 76, "5 · Talk (booth host)", "wake-word check · GPT-Live call · tricks · anonymous notes")
+    # stores and services
     cylinder(s, 818, 206, 120, 62, "Neo4j Aura", "world model", t["long"])
-    cylinder(s, 818, 338, 120, 50, "NAMS", "agent memory", t["nams"])
+    cylinder(s, 818, 330, 120, 50, "NAMS", "agent memory", t["nams"])
+    box(s, 758, 420, 120, 60, "GPT-Live", "voice model", fill=t["voice"], stroke=t["voice"], title_fill=t["on_fill"], sub_fill=t["on_fill"])
     # flow
     s.arrow("M192 108 H250")
     s.label(221, 92, "frames")
@@ -111,13 +116,21 @@ def architecture(theme: str) -> str:
     s.label(770, 116, "writes")
     s.arrow("M758 220 C730 232 706 250 640 280", color=t["long"])
     s.label(735, 254, "reads")
-    s.arrow("M706 336 H756", color=t["nams"])
-    s.label(731, 320, "chat")
-    s.arrow("M818 238 V312", color=t["line"], dashed=True, end=False)
-    s.label(862, 276, "same DB", size=11)
+    s.arrow("M706 330 H756", color=t["nams"])
+    s.label(731, 314, "chat")
+    s.arrow("M818 238 V303", color=t["line"], dashed=True, end=False)
+    s.label(862, 272, "same DB", size=11)
     s.arrow("M494 320 H464")
     s.arrow("M252 320 H194")
     s.label(222, 304, "turn")
+    s.arrow("M192 442 H250", color=t["voice"], start=True)
+    s.label(221, 426, "audio")
+    s.arrow("M706 450 H756", color=t["voice"], start=True)
+    s.label(731, 470, "call")
+    s.arrow("M640 404 C660 380 700 372 760 352", color=t["nams"], dashed=True)
+    s.label(668, 386, "notes", size=11)
+    s.arrow("M330 404 V360", color=t["line"], dashed=True)
+    s.label(330, 384, "tricks", size=11)
     # captions under the robot boxes explain the loop
     s.text(110, 182, "sees the room", size=12, fill=t["mute"], italic=True)
     s.text(110, 262, "moves when you ask", size=12, fill=t["mute"], italic=True)
@@ -173,9 +186,9 @@ def loop(s: Svg, cx, cy, r, side, name, lines=None):
 
 def graph_model(theme: str) -> str:
     t = THEMES[theme]
-    s = new(900, 760, t, "puppy-mind graph ontology")
+    s = new(900, 720, t, "puppy-mind graph ontology")
     R = {"Robot": (120, 112), "Session": (430, 112), "Place": (740, 150), "Sighting": (300, 320), "Item": (610, 320),
-         "Encounter": (820, 450), "Person": (500, 620), "Company": (810, 650), "Theme": (170, 620)}
+         "Encounter": (760, 560), "Theme": (430, 610)}
     r = 46
     # edges first, nodes on top
     edge(s, R["Robot"], R["Session"], r, r, "RAN")
@@ -186,26 +199,24 @@ def graph_model(theme: str) -> str:
     edge(s, R["Sighting"], R["Item"], r, r, "MISSED", dashed=True, bend=26, lpos=0.5)
     edge(s, R["Item"], R["Place"], r, r + 4, "LOCATED_AT", color=t["long"], lpos=0.55, loff=(44, 0))
     loop(s, *R["Place"], r + 4, "right", "ADJACENT_TO")
-    # booth visitors (stored only after a spoken yes); NAMS / POLE+O names in the node subtitles
+    # booth: one anonymous node per conversation, never a person (NAMS / POLE+O names in the docs)
     edge(s, R["Encounter"], R["Place"], r, r + 4, "HELD_AT", lpos=0.55, loff=(36, 0))
-    edge(s, R["Person"], R["Encounter"], r, r, "PARTICIPATED_IN", lpos=0.5, loff=(-58, -8))
-    edge(s, R["Person"], R["Company"], r, r, "WORKS_AT", lpos=0.5, loff=(0, 16))
-    edge(s, R["Person"], R["Theme"], r, r, "INTERESTED_IN", bend=-34, lpos=0.5)
-    edge(s, R["Person"], R["Theme"], r, r, "ENJOYED", dashed=False, bend=34, lpos=0.5)
+    edge(s, R["Encounter"], R["Theme"], r, r, "DISCUSSED", color=t["nams"], bend=-30, lpos=0.5)
+    edge(s, R["Encounter"], R["Theme"], r, r, "ENJOYED", bend=30, lpos=0.5)
     loop(s, *R["Item"], r, "below", "", lines=["ON · INSIDE · NEXT_TO", "NEAR · IN_FRONT_OF · BEHIND"])
     node(s, *R["Robot"], r, "Robot", "", t["robot"])
     node(s, *R["Session"], r, "Session", "one run", t["short"])
     node(s, *R["Sighting"], r, "Sighting", "one frame", t["short"])
     node(s, *R["Item"], r, "Item", "a thing", t["long"])
     node(s, *R["Place"], r + 4, "Place", "a room", t["long"])
-    node(s, *R["Encounter"], r, "Encounter", "Event", t["nams"])
-    node(s, *R["Person"], r, "Person", "a visitor", t["nams"])
-    node(s, *R["Company"], r, "Company", "Organization", t["nams"])
-    node(s, *R["Theme"], r, "Theme", "Topic", t["nams"])
+    node(s, *R["Encounter"], r, "Encounter", "a conversation", t["nams"])
+    node(s, *R["Theme"], r, "Theme", "a topic", t["nams"])
+    s.text(760, 630, "need · questions · familiarity", size=11, fill=t["mute"])
+    s.text(760, 646, "never a name or a company", size=11, fill=t["mute"], italic=True)
     # legend
-    y = 742
+    y = 702
     for i, (c, txt, dash) in enumerate([(t["long"], "long-term: the world", False), (t["short"], "short-term: what was seen, when", False),
-                                        (t["nams"], "booth visitors (with consent)", False), (t["line"], "dashed: expected but not seen", True)]):
+                                        (t["nams"], "booth: anonymous conversations", False), (t["line"], "dashed: expected but not seen", True)]):
         x = 24 + i * 218
         if dash:
             s.add(f'<path d="M{x} {y - 4} h22" stroke="{c}" stroke-width="2" stroke-dasharray="5 4"/>')
@@ -215,8 +226,40 @@ def graph_model(theme: str) -> str:
     return s.render()
 
 
+# ------------------------------------------------------------------ a booth conversation
+def booth_flow(theme: str) -> str:
+    t = THEMES[theme]
+    s = new(900, 360, t, "a booth conversation: wake-word check, GPT-Live call, anonymous note")
+    vf = dict(fill=t["voice"], stroke=t["voice"], title_fill=t["on_fill"], sub_fill=t["on_fill"])
+    rf = dict(fill=t["robot"], stroke=t["robot"], title_fill=t["on_fill"], sub_fill=t["on_fill"])
+    nf = dict(fill=t["nams"], stroke=t["nams"], title_fill=t["on_fill"], sub_fill=t["on_fill"])
+    box(s, 20, 40, 160, 80, "Someone speaks", "the robot streams it", **rf)
+    box(s, 240, 40, 190, 80, "Wake-word check", "GPT-Live hears it live")
+    box(s, 500, 40, 170, 80, "Dropped", "nothing played or kept", fill=t["panel"], stroke=t["drop"])
+    box(s, 240, 200, 190, 80, "Call", "answers in about 1 s", **vf)
+    box(s, 500, 200, 170, 80, "Backend tools", "tricks · what it sees")
+    box(s, 720, 120, 160, 80, "Goodbye", "the call closes")
+    box(s, 720, 260, 160, 80, "Anonymous note", "topics · questions → Aura", **nf)
+    s.arrow("M180 80 H238")
+    s.arrow("M430 80 H498", color=t["drop"])
+    s.label(464, 64, "no wake word")
+    s.text(464, 104, "after ~3 s", size=11, fill=t["mute"])
+    s.arrow("M335 120 V198", color=t["voice"])
+    s.label(335, 160, "Hey PuppyPi")
+    s.arrow("M430 240 H498", start=True)
+    s.label(464, 224, "delegates", size=11)
+    s.arrow("M335 280 C335 330 600 330 718 304", color=t["nams"], dashed=True)
+    s.label(540, 322, "transcript", size=11)
+    s.arrow("M430 210 C560 180 640 165 718 160")
+    s.label(600, 176, "thanks, bye", size=11)
+    s.text(20, 160, "Hall noise and the robot's own voice", size=12, fill=t["mute"], anchor="start", italic=True)
+    s.text(20, 176, "are removed on the robot first", size=12, fill=t["mute"], anchor="start", italic=True)
+    return s.render()
+
+
 if __name__ == "__main__":
     for theme in THEMES:
         (OUT / f"architecture-{theme}.svg").write_text(architecture(theme), encoding="utf-8")
         (OUT / f"graph-model-{theme}.svg").write_text(graph_model(theme), encoding="utf-8")
+        (OUT / f"booth-flow-{theme}.svg").write_text(booth_flow(theme), encoding="utf-8")
     print("wrote", sorted(p.name for p in OUT.glob("*.svg")))

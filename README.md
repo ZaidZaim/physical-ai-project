@@ -6,7 +6,8 @@
 A small quadruped robot walks through your home and keeps looking. Every camera frame becomes structured facts (objects, where
 they are, what sits on what), stored in a **Neo4j Aura** graph that remembers how the world changes over time. You can then ask it
 questions in plain language, and an agent answers **only from that memory**, with timestamps and evidence. It can also turn to face
-things it remembers.
+things it remembers. At a conference booth it becomes the **Graph Wizard**: visitors say "Hey PuppyPi" and talk with it about
+Neo4j, GenAI and GraphRAG, and it keeps anonymous notes of what the booth talked about.
 
 *Document intelligence is "talk to your PDF". Physical intelligence is "talk with your environment".*
 
@@ -24,17 +25,18 @@ things it remembers.
 | **Know where** | "Which rooms do you know?" | Rooms are recognised from what is in them; a room map is learned as the robot moves |
 | **Explain** | "Where did you last see it?" | Every answer comes with the tool calls and graph facts it used |
 | **Act** | "Turn to the door." | Turns in place to face a remembered object, or looks around for it. Between rooms it gives you the route. It never walks on its own |
-| **Host** | "Hey PuppyPi, what is GraphRAG?" | At a booth it boxes, looks up and answers through the WonderEcho Pro as the **Graph Wizard** (Neo4j, GenAI, GraphRAG), and keeps anonymous notes of what visitors ask about and need in the **Booth** tab, never who they are: [docs/BOOTH.md](docs/BOOTH.md) |
+| **Host** | "Hey PuppyPi, what is GraphRAG?" | At a booth it talks through **GPT-Live** (it starts answering about a second after you stop), does tricks on request (push-ups and the moonwalk included), cheers for the claw machine, and keeps anonymous notes of what visitors ask about and need in the **Booth** tab, never who they are: [docs/BOOTH.md](docs/BOOTH.md) |
 
 ## How it works
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
-  <img src="docs/diagrams/architecture-light.svg" alt="Architecture: the PuppyPi's sensors send frames to the brain, which perceives and remembers into Neo4j Aura; the agent answers from Aura, records chat in NAMS, and acts by turning the robot" width="900">
+  <img src="docs/diagrams/architecture-light.svg" alt="Architecture: the PuppyPi's sensors send frames to the brain, which perceives and remembers into Neo4j Aura; the agent answers from Aura, records chat in NAMS, and acts by turning the robot; at a booth the robot's echo-cancelled microphone and speaker talk through GPT-Live, which can trigger tricks, and anonymous notes go to Aura and NAMS" width="900">
 </picture>
 
 No Docker: Aura hosts the graph, NAMS (the Neo4j Agent Memory Service) hosts agent memory, and the robot only streams frames and
-takes velocity commands over its stock rosbridge. Nothing has to be installed on the robot.
+takes velocity commands over its stock rosbridge. For driving and memory nothing has to be installed on the robot; the booth's voice
+client (`robot/puppy_voice.py`) starts there by itself at boot.
 
 ### Two memories, one database
 
@@ -50,7 +52,7 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
-  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place; booth visitors: Person WORKS_AT Company, INTERESTED_IN and ENJOYED Theme, PARTICIPATED_IN Encounter HELD_AT Place" width="900">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place; booth: an anonymous Encounter (one conversation) DISCUSSED and ENJOYED Theme and was HELD_AT Place" width="900">
 </picture>
 
 
@@ -60,9 +62,8 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `Place` | `placeId`, `name`, `roomType`, `visits` |
 | `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
 | `Session` · `Robot` | `id`, `startedAt` · `name` |
-| `Encounter` | `id`, `ts`, `event`, `need`, `familiarity`, `questions`, `summary`, `turns` (one anonymous booth conversation; `DISCUSSED` / `ENJOYED` a `Theme`) |
-| `Company` · `Theme` | `name` · `name` |
-| `Encounter` | `id`, `ts`, `summary` (one sentence, never a transcript) |
+| `Encounter` | `id`, `ts`, `event`, `need`, `familiarity`, `questions`, `summary`, `turns`: one anonymous booth conversation (never a name, company or transcript) |
+| `Theme` | `name`: a topic visitors talked about |
 
 | Relationship | Properties | Meaning |
 |---|---|---|
@@ -73,18 +74,36 @@ labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the tw
 | `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
 | `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
 | `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
-| `WORKS_AT` | | a visitor's company |
-| `INTERESTED_IN` · `ENJOYED` | `since` | what a visitor wants to learn about or build with · what they enjoyed most at the event |
-| `PARTICIPATED_IN` · `HELD_AT` | | a visitor took part in this conversation · where it took place |
+| `DISCUSSED` · `ENJOYED` | | what a booth conversation was about · what the visitor enjoyed most at the event |
+| `HELD_AT` | | where the conversation took place |
 
 The ontology ([`ontology/puppy_pi.json`](ontology/puppy_pi.json)) uses NAMS's POLE+O types, and `puppy-mind nams-setup` sends that
 same file to NAMS. In Aura each type has its own label, so the app never shares nodes with NAMS: Agent is `Robot`, Location `Place`,
-Object `Item`, Organization `Company`, Topic `Theme` and Event `Encounter`. Person stays `Person`; the app's people carry a `personId`.
+Object `Item`, Topic `Theme` and Event `Encounter`. The booth stores **no personal data**: lead generation (`Person`, `Company`) is
+on hold for compliance, parked on branch `parked/booth-lead-generation`.
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
 constraints, no write-only edges and no supernodes ([review](docs/ONTOLOGY_REVIEW.md)). Startup migrates older data automatically.
 To look at it in Aura, use the one-question queries in [docs/AURA_VIEWS.md](docs/AURA_VIEWS.md). `MATCH (n)-[r]->(m)` draws
 everything at once, NAMS included, and is unreadable.
+
+### The booth host
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/booth-flow-dark.svg">
+  <img src="docs/diagrams/booth-flow-light.svg" alt="A booth conversation: someone speaks and the robot streams it; GPT-Live checks it for the wake word, and without it the sentence is dropped after about 3 s, nothing played or kept; with Hey PuppyPi the call starts and answers in about a second, delegates tricks and room questions to backend tools, closes on goodbye, and the transcript becomes an anonymous note in Aura" width="900">
+</picture>
+
+- **One voice, full duplex:** conversations, the camera greeting and the claw machine cheers are all spoken by OpenAI's
+  **GPT-Live** (`gpt-live-1`). Measured: about 1 to 1.5 s from the end of a question to the first sound, against 5 to 7 s turn by turn.
+- **Only "Hey PuppyPi" opens a call.** Everything else said near the robot is checked and dropped, unheard and unkept.
+- **Tricks and room questions** go to GPT-Live's backend model as tools; tricks a visitor asks for wait only for the previous one.
+- **The robot's microphone is cleaned on the robot:** PulseAudio's WebRTC echo canceller removes most of its own voice and the
+  hall's noise (measured: noise 1000-2500 down to about 200-500).
+- **Anonymous notes:** topics, questions, need and familiarity, scrubbed of anything identifying, in Aura and NAMS.
+- **Cost:** GPT-Live is billed per minute (about $2 an hour at a busy booth); the Booth tab shows the running total.
+
+Setup, settings and every measurement: [docs/BOOTH.md](docs/BOOTH.md).
 
 ---
 
@@ -116,17 +135,26 @@ uv run puppy-mind robot-test --real-memory                         # finds the r
 Open http://localhost:8000, click **Start camera**, and ask away. Robot networking and the camera URL:
 [docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md). Without `--real-memory`, `robot-test` is a driving test that never sends frames to OpenAI.
 
+**At a booth** (`ROBOT_IP`, `LIVE_VOICE=true` and the booth settings in `.env`, see [docs/BOOTH.md](docs/BOOTH.md)):
+
+```bash
+uv run puppy-mind booth                                            # robot app + Aura memory, logged to logs/booth-<date>.log
+```
+
 ## Using it
 
 ### The web UI
 
 - **Live camera** with the detected labels drawn over the left, centre and right thirds of the frame. One frame is analysed per
   `WATCH_INTERVAL_S`, and a scan line shows while that happens.
-- **Live graph** over Server-Sent Events. New objects glow green, re-seen ones pulse blue, misses pulse amber, `possibly_gone` objects
-  turn grey, and the nodes the agent used for your last answer glow purple. Lenses: long-term, short-term, reasoning, all.
+- **Live graph** over Server-Sent Events, drawn like **Neo4j Browser**: one colour per label, the name inside the circle, grey arrows
+  named after the relationship, a layout that holds still. Lenses: long-term, short-term, reasoning, all. People are left out of the
+  map, and possibly gone objects show on a click in the legend.
 - **Places:** the learned room map. Rename or merge rooms the robot discovered on its own.
 - **Ontology:** the schema as a picture, with live counts. **Timeline:** every sighting.
 - **Ask:** chat with the robot. Every answer has an **Evidence** section with the exact tool calls.
+- **Booth:** the conversations as a graph (topics grow with their conversations), what visitors need and asked, trick and claw
+  machine buttons, End conversation, and the GPT-Live cost so far.
 
 ### Asking questions
 
@@ -167,6 +195,9 @@ does only what is safe:
 - Driving from another machine needs `BRAIN_TOKEN`.
 - **People:** stored only as anonymous `person` presence (no description, colour or image) unless `PEOPLE_CONSENT=true`.
 - **Frames** are sent to OpenAI only while frame analysis is on, and saved to disk only if `STORE_IMAGES=true`.
+- **Booth visitors are never identified:** no names, companies, emails or faces; a note keeps topics and questions only, scrubbed of
+  anything identifying. What people say near the robot goes to OpenAI to be checked for the wake word, and is dropped without it.
+  `logs/booth-<date>.log` holds what visitors said: it is git-ignored, delete it after the booth day.
 
 ## Memory rules that matter
 
@@ -184,6 +215,7 @@ does only what is safe:
 |---|---|
 | `init` | constraints, indexes and migrations in Aura; checks connectivity |
 | `serve` · `robot-test [--real-memory]` | web UI + API · the same plus finding the robot, its camera and rosbridge |
+| `booth [--robot-ip IP] [--log FILE]` | start the booth: `robot-test --real-memory` with the robot from `ROBOT_IP`, logged to `logs/booth-<date>.log` |
 | `--record [DIR]` (on `serve`, `robot-test`, `watch`) | record a **tour**: every analysed frame's picture and detections, into `tours/` |
 | `export-tour` · `replay-tour <tour> [-v] [--new-frames N]` | the frames stored in Aura as a tour (read-only) · replay one through room recognition on throwaway memory |
 | `watch` · `observe <image>` | analyse `CAMERA_SOURCE` continuously · one image file |
@@ -192,7 +224,7 @@ does only what is safe:
 | `consolidate [--place P] [--yes]` · `split-place <place> [--yes]` | merge look-alike duplicates · split a place that mixed rooms (both dry runs by default) |
 | `imu-check --robot-ip <ip>` | turns the robot left for 2 s and checks that the gyro heading rises |
 | `robot-check <ip\|auto>` | probes the robot and finds a working camera URL |
-| `nams-check` · `nams-setup [--activate]` · `nams-sync [--rebuild]` | NAMS key/workspace · install the PuppyPi ontology · backfill entities |
+| `nams-check` · `nams-setup [--activate]` · `nams-sync [--rebuild] [--booth]` | NAMS key/workspace · install the PuppyPi ontology · backfill entities (or the booth conversations) |
 | `seed --yes` · `eval [questions.json]` | write a scripted "booth day" · ask a question set and score it (never stores the Q&A) |
 | `purge-demo [--yes]` · `reset-spatial [--yes]` · `reset --yes` | remove demo data only · all places/objects/sightings · everything this app stores |
 
@@ -215,11 +247,18 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 | `OBJECT_VOCAB`, `STRICT_VOCAB` | a common list, `false` | the labels to prefer (or allow only) |
 | `PEOPLE_CONSENT`, `STORE_IMAGES` | `false`, `false` | privacy switches |
 | `BRAIN_TOKEN` | - | required to drive or push frames from another machine |
+| `ROBOT_IP` | search | the robot's address for `puppy-mind booth` |
+| `LIVE_VOICE`, `LIVE_BARGE_IN` | `false`, `false` | booth conversations through GPT-Live · let visitors interrupt the robot (needs its echo canceller; it heard itself at the booth, so off) |
+| `WAKE_WORD`, `LISTEN_ALWAYS`, `VOICE_GAIN` | `Hey PuppyPi`, `true`, `2.5` | the wake word · listen without the Booth tab open · louder speech for the small speaker |
+| `CLAW_MACHINE`, `CLAW_PRIZE` | `false`, `a Graph Wizard` | the claw machine cheers (Booth tab buttons) |
+| `EVENT_NAME`, `BOOTH_INFO` | `the conference`, - | what the robot may say about the event; without `BOOTH_INFO` it sends visitors to the staff |
+
+The booth's full list (timings, tricks, NAMS) is in [docs/BOOTH.md](docs/BOOTH.md).
 
 ## Testing
 
 ```bash
-uv run pytest                          # 193 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, booth host + privacy scrubber + API
+uv run pytest                          # 230 unit tests: matching, places, heading, navigation (simulated robot), NAMS (fake server), tours, booth host + privacy scrubber + API, GPT-Live bridge (fake session) + the robot's WebSocket client
 uv run python eval/verify_spatial.py   # live Cypher checks: safe on your REAL database (isolated zz- namespace, cleaned up)
 uv run python eval/check_views.py      # runs every query in docs/AURA_VIEWS.md, read-only
 uv run puppy-mind imu-check --robot-ip <ip>   # on the robot: the gyro sign the navigator relies on
@@ -242,14 +281,17 @@ on real hardware, and when: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ```
 src/puppy_mind/   brain.py (orchestration) · perception.py · graph.py (Aura) · matching.py · spatial.py (rooms) · pose.py (heading)
-                  navigate.py (phase 5) · agent.py · booth.py / booth_graph.py / wizard.py / voice.py (booth host, anonymous notes) · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
+                  navigate.py (phase 5) · agent.py · booth.py / booth_graph.py / wizard.py / voice.py (booth host, anonymous notes)
+                  live.py (GPT-Live calls) · nams.py / nams_graph.py · drive.py / rosbridge.py · server.py · cli.py
                   static/index.html (the UI)
-robot/            puppy_drive.py, puppy_streamer.py, puppy_voice.py: optional scripts for running on the robot
+robot/            puppy_voice.py (the booth's ears and mouth: echo-cancelled, GPT-Live stream) + puppy-voice.service / start_voice_auto.sh
+                  (starts it at boot); puppy_drive.py, puppy_streamer.py: optional scripts for running on the robot
 ontology/         puppy_pi.json: the domain ontology (also installed into NAMS)
 eval/             scenarios, the 20 questions, live checks
 tests/            unit tests
 docs/             design notes (below)
 docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw them (light + dark)
+logs/             booth logs (git-ignored)
 ```
 
 ## Docs
@@ -258,7 +300,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | ingestion pipeline, schema, known weak points |
 | [SPATIAL.md](docs/SPATIAL.md) | room recognition, room map, view-aware misses, gyro heading |
-| [BOOTH.md](docs/BOOTH.md) | the Graph Wizard, anonymous booth notes, the Booth tab, tricks, WonderEcho Pro setup |
+| [BOOTH.md](docs/BOOTH.md) | the Graph Wizard, GPT-Live, anonymous booth notes, the Booth tab, tricks, claw machine, echo cancelling, robot voice setup |
 | [MEMORY.md](docs/MEMORY.md) | Aura + NAMS together, measured NAMS behaviour, setup |
 | [ONTOLOGY_REVIEW.md](docs/ONTOLOGY_REVIEW.md) | the model checked against Neo4j modeling practice |
 | [AURA_VIEWS.md](docs/AURA_VIEWS.md) | clean, one-question queries for Aura |
@@ -275,3 +317,7 @@ docs/diagrams/    the README diagrams: edit and run make_diagrams.py to redraw t
   place, even right after a start (one frame of the Hallway stairs once became a "Garage"). Merge a wrong room in the Places tab.
 - **Look-alike objects** seen from different angles can split into two. `consolidate` merges ones that never appear in the same frame.
 - `eval` uses a scripted scene and substring checks: a floor, not a proof. The model is non-deterministic, so re-run it after prompt changes.
+- **A loud hall still hurts recognition,** even with echo cancelling: people should speak close to the robot. Bystanders talking
+  during a call can get mixed into it.
+- **Visitors cannot interrupt the robot** while it talks: its leftover echo is about as loud as a quiet voice, so the microphone is
+  muted meanwhile (`LIVE_BARGE_IN` lets you try, at the risk of the robot interrupting itself).
