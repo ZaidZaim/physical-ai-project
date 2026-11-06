@@ -554,3 +554,36 @@ def test_spoken_turns_use_the_full_safe_turn_speed():
     assert plan_move("turn_around", speed="normal").speed == 3
     assert plan_move("turn_left", speed="slow").speed == 3
 
+
+
+def test_a_spin_starts_with_its_jingle_and_a_stop_while_it_waits_cancels_it(monkeypatch):
+    import dataclasses
+    import threading
+    import time
+    b = _brain(monkeypatch)
+    played, ready = [], threading.Event()
+    b.sound_fn = lambda name: played.append(name) or ready
+    b.drive.arm(True)
+    assert b.move("turn_left", degrees=10)["started"]
+    b.nav.cancel("test")
+    b.nav.wait(3)
+    assert played == []  # only a spin has music
+    r = b.move("spin")
+    assert r["started"] and "music" in r["message"] and played == ["spin"]
+    time.sleep(0.2)
+    assert not b.nav.state.get("active")  # still talking: the spin waits for its music
+    ready.set()
+    time.sleep(0.2)
+    assert b.nav.state.get("active")  # the music started, so did the spin
+    b.stop_moving()
+    b.nav.wait(3)
+    ready.clear()
+    assert b.move("spin")["started"]
+    b.stop_moving()  # "Stop!" before the music began
+    ready.set()
+    time.sleep(0.2)
+    assert not b.nav.state.get("active")
+    b.s = dataclasses.replace(b.s, spin_music=False)  # SPIN_MUSIC=0: a silent spin starts at once
+    assert b.move("spin")["started"] and b.nav.state.get("active") and played == ["spin", "spin"]
+    b.stop_moving()
+    b.nav.wait(3)

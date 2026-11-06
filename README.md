@@ -169,7 +169,7 @@ uv run puppy-mind ask                                    # interactive chat
 ### Driving
 
 Click **Enable keyboard drive**; nothing moves until you arm it. Hold a key to move, and release it to stop:
-`W/S` forward/back · `A/D` turn · `Space` stop · `H` stand · `1 2 3` speed · `Esc` disarm (the arrow keys and on-screen pad work too).
+`W/S` forward/back · `A/D` turn · `Space` stop · `G` stand · `H` bicycle horn · `1 2 3 4` speed · `Esc` disarm (the arrow keys and on-screen pad work too).
 
 ### "Go where you last saw it"
 

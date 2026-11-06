@@ -360,6 +360,13 @@ async def drive_ws(ws: WebSocket, token: str = ""):
         _drive_event()
 
 
+@app.post("/api/horn")
+def horn(request: Request, x_brain_token: str | None = Header(None), token: str | None = None):
+    """The bicycle horn (H in the page): honk-honk on the robot's speaker. Works without Enable keys: it cannot move anything."""
+    _local_auth(request, x_brain_token, token)
+    return brain.honk()
+
+
 @app.get("/api/drive/cmd")
 def drive_cmd(ax: float | None = None, ay: float | None = None, ayaw: float | None = None,
               x_brain_token: str | None = Header(None)):

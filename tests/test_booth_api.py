@@ -334,3 +334,15 @@ def test_claw_machine_cheer_buttons(client):
     assert server.brain.drive.booth  # a cheer turns booth mode on, so the invite's wave can play
     assert client.get("/api/voice/next").content.startswith(b"RIFFfake-wav:")
     assert client.post("/api/booth/cheer", json={"kind": "nope"}).status_code == 400
+
+
+def test_h_honks_the_bicycle_horn_without_enable_keys_and_only_from_this_machine(client, monkeypatch):
+    played = []
+    monkeypatch.setattr(server.brain, "sound_fn", None)
+    r = client.post("/api/horn").json()
+    assert r["ok"] is False and "not connected" in r["reason"]  # no robot voice link yet
+    monkeypatch.setattr(server.brain, "sound_fn", lambda name: played.append(name) or object())
+    assert not server.brain.drive.armed
+    assert client.post("/api/horn").json() == {"ok": True} and played == ["horn"]
+    with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
+        assert c.post("/api/horn").status_code in (401, 403) and played == ["horn"]

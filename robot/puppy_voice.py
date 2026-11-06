@@ -361,7 +361,10 @@ class Voice:
                 raise LiveOff(str(e))
             raise
         print("GPT-Live: connected to", url)
-        ws.send_text(json.dumps({"type": "hello", "aec": bool(getattr(self.a, "aec", False))}))  # may it hear visitors while it talks?
+        aec = bool(getattr(self.a, "aec", False))
+        # may it hear visitors while it talks? and can it play music beside its voice (PulseAudio mixes a second stream; a raw
+        # ALSA device would be busy)?
+        ws.send_text(json.dumps({"type": "hello", "aec": aec, "music": aec}))
         # stderr: between sentences the stream pauses and aplay prints "underrun!!!" (harmless; it filled the log)
         player = subprocess.Popen(["aplay", "-q", "-D", self.a.speaker, "-t", "raw", "-f", "S16_LE", "-r", str(RATE), "-c", "1"],
                                   stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -369,6 +372,24 @@ class Voice:
                                stdout=subprocess.PIPE)
         state = {"call": False, "play_until": 0.0, "error": None, "fed_until": 0.0}
         speaker = threading.Lock()
+        music = {"proc": None}
+
+        def play_music(pcm, replace=True):
+            """b"B": music (the spin jingle) at once, in a stream of its own beside the voice: through the speech queue it
+            played only after whatever the robot was still saying, so after the spin it belonged to (2026-11-06).
+            b"C" (replace=False): a short effect, the horn, played over everything else."""
+            old = music["proc"]
+            if replace and old is not None and old.poll() is None:
+                old.kill()  # new music replaces the music still playing
+            proc = subprocess.Popen(["aplay", "-q", "-D", self.a.speaker, "-t", "raw", "-f", "S16_LE", "-r", str(RATE), "-c", "1"],
+                                    stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            if replace:
+                music["proc"] = proc
+            try:
+                proc.stdin.write(pcm)
+                proc.stdin.close()
+            except Exception:
+                pass
 
         def feed(pcm):
             """To the speaker; fed_until = when what it holds runs out."""
@@ -398,6 +419,8 @@ class Voice:
                         feed(pcm)
                         if rms(pcm[:len(pcm) // 2 * 2]) > 200:
                             state["play_until"] = max(state["play_until"], time.time()) + len(pcm) / (RATE * 2.0)
+                    elif op == 2 and data[:1] in (b"B", b"C"):  # music (replaces music still playing) / a short effect (the horn)
+                        threading.Thread(target=play_music, args=(data[1:], data[:1] == b"B"), daemon=True).start()
                     elif op == 1:
                         m = json.loads(data.decode())
                         if m.get("type") == "call":
