@@ -22,7 +22,7 @@ from .config import Settings, get_settings
 from .drive import SETTLE_S, DriveState
 from .graph import Memory, now_iso
 from .models import Scene
-from .navigate import Navigator, Plan, pick_target, plan_go_to
+from .navigate import OPPOSITE, Navigator, Plan, pick_target, plan_go_to, plan_move
 from .pose import HeadingTracker
 from .spatial import TRANSIENT, VAGUE, PlaceInfo, PlaceResolver, PlaceTracker, TrackResult
 from .nams import Nams
@@ -75,6 +75,8 @@ class Brain:
         self.bus = Bus()
         self.drive = DriveState(allow_combine=os.getenv("DRIVE_COMBINE") == "1")
         self._moved = False  # robot moved since the last observation
+        self._move_gen = 0  # counts moves and stops: a spin waiting for its music checks nothing replaced it
+        self.sound_fn = None  # plays a named sound on the robot's speaker (set while the robot's voice link is up; see live.py)
         self.session = self.mem.start_session()
         self.location = self.s.default_location
         self.tracker = PlaceTracker(PlaceResolver(), self.s.place_confirm_frames, self.s.new_place_confirm_frames)
@@ -99,6 +101,8 @@ class Brain:
         self.nav = Navigator(self.drive, lambda: self.heading.value(), publish=self.bus.publish, obs_seq_fn=lambda: self.obs_seq,
                              seen_fn=self._seen_now, fov_deg=self.s.camera_fov_deg, settle_s=SETTLE_S,
                              obs_wait_s=self.s.watch_interval_s * 2 + 5)
+        self._routine: threading.Thread | None = None
+        self._routine_cancel = threading.Event()
         self._deferred: list[tuple] = []  # frames held back while a change of place is unconfirmed
         self.frame: bytes | None = None
         self.frame_id = 0
@@ -121,12 +125,15 @@ class Brain:
             self.agent = Agent(self.s, self.mem, self.nams)
             self.agent.place_fn = self.place_info
             self.agent.go_fn = self.go_to
+            self.agent.move_fn = self.move
+            self.agent.stop_fn = self.stop_moving
         # The booth host: greet, talk as the Graph Wizard, keep anonymous notes of what the booth talked about (never who).
         self.voice = None
         self.drive.set_booth(self.s.booth_mode, self.s.look_up_deg)
         self.drive.gesture_cooldown_s, self.drive.max_gestures_per_hour = self.s.gesture_cooldown_s, self.s.max_gestures_per_hour
         self.booth = BoothHost(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
                                gesture_fn=self.gesture)
+        self.booth.move_fn, self.booth.stop_fn, self.booth.routine_fn = self.move, self.stop_moving, self.routine
         self.booth.nams = self.nams if self.nams.enabled else None
         if self.agent:
             from .voice import Voice
@@ -415,6 +422,147 @@ class Brain:
         elif execute and plan.kind in ("turn", "scan"):
             out["run"] = self.nav.start(plan, verify=bool(self.perception and self.fps > 0))  # check with the camera if it runs
         return out
+
+    # ---- spoken moves: "walk left", "come here", "turn around", "faster", "stop"
+    def move(self, direction: str, seconds: float | None = None, degrees: float | None = None, speed: str | None = None,
+             in_routine: bool = False) -> dict:
+        """A short, bounded move someone asked for out loud. Only while driving is armed; a key press, stop or disarm ends it.
+        "come_back" walks the last walk the other way (the robot cannot see where you are: it retraces its steps)."""
+        self._move_gen += 1  # a spin still waiting for its music is dropped (see _spin_with_music)
+        if not in_routine:
+            self._routine_cancel.set()  # a new command replaces a routine that is still running
+        if (direction or "").strip().lower().replace(" ", "_") == "come_back":
+            last = self.nav.last_walk
+            mv = (plan_move(OPPOSITE[last.direction], last.seconds, None, last.speed) if last
+                  else "I haven't walked anywhere yet, so there is nothing to come back from")
+        else:
+            mv = plan_move(direction, seconds, degrees, speed)
+        if isinstance(mv, str):
+            r = {"started": False, "reason": mv}
+        elif self.drive.in_action:
+            r = {"started": False, "reason": "I'm still finishing a trick"}
+        else:
+            ready = self.sound_fn("spin") if mv.direction == "spin" and self.s.spin_music and self.sound_fn else None
+            r = self._spin_with_music(mv, ready, in_routine) if ready is not None else self.nav.start_move(mv)
+            if r.get("started"):
+                self._moved = True
+        print("move %s: %s" % (direction, r.get("message") if r.get("started") else "refused, " + str(r.get("reason"))), flush=True)
+        self.bus.publish("move", {"direction": direction, **r})
+        return r
+
+    SPIN_MUSIC_WAIT_S = 8.0  # the longest a spin waits for its music (the robot finishing what it is saying)
+
+    def _spin_with_music(self, mv, ready: threading.Event, in_routine: bool) -> dict:
+        """Start the spin when its jingle starts. The robot's speaker plays one thing after another, so music sent while it was
+        still talking played after the spin had ended (robot, 2026-11-06); now both wait for the end of the sentence. In a routine
+        this waits here (the routine waits for each move anyway); otherwise in the background, so the reply is not held up."""
+        gen = self._move_gen
+
+        def go() -> dict:
+            ready.wait(self.SPIN_MUSIC_WAIT_S)
+            if gen != self._move_gen or (in_routine and self._routine_cancel.is_set()):
+                return {"started": False, "reason": "stopped before it began"}
+            return self.nav.start_move(mv)
+
+        if in_routine:
+            return go()
+
+        def later() -> None:
+            r = go()
+            print("move spin (with music): %s" % (r.get("message") if r.get("started") else "not started, " + str(r.get("reason"))),
+                  flush=True)
+        threading.Thread(target=later, daemon=True).start()
+        return {"started": True, "message": "Spinning 360 degrees, with music, as soon as I finish this sentence."}
+
+    ROUTINE_MAX_STEPS = 8
+    ROUTINE_RETRY_S = 6.0  # a trick right after a move or another trick waits this long for the robot to settle
+
+    def routine(self, steps: list[dict]) -> dict:
+        """Several moves and tricks in a row, from one sentence: "come here and sit", "go take a nap", "show them what you can do".
+        Each step is {"do": trick | move direction | "wait", "seconds", "degrees", "speed"} (older {"trick"} / {"move"} / {"wait"}
+        steps work too; a step that names both a move and a trick is the move: the model added the trick as filler). Background;
+        stop_moving (or any new move) ends it. Refused up front when a step could not run (driving not armed, booth mode off)."""
+        steps = [n for n in (self._routine_step(s) for s in (steps or []) if isinstance(s, dict)) if n][: self.ROUTINE_MAX_STEPS]
+        if not steps:
+            return {"started": False, "reason": "no steps"}
+        if any("move" in s for s in steps) and not self.drive.armed:
+            return {"started": False, "reason": "my legs are not enabled: someone has to click 'Enable keys' in the app first"}
+        if any("trick" in s for s in steps) and not self.drive.booth:
+            return {"started": False, "reason": "booth mode is off, so no tricks"}
+        self._routine_cancel.set()
+        if self._routine and self._routine.is_alive():
+            self._routine.join(2.0)
+        self._routine_cancel = threading.Event()
+        self._routine = threading.Thread(target=self._run_routine, args=(steps, self._routine_cancel), daemon=True, name="routine")
+        self._routine.start()
+        return {"started": True, "steps": len(steps)}
+
+    @staticmethod
+    def _routine_step(st: dict) -> dict | None:
+        """One routine step -> {"move": ...} | {"trick": ...} | {"wait": s}, or None if it names nothing we can do."""
+        from .drive import BIG_TRICKS, TRICKS
+        from .navigate import MOVE_DIRECTIONS
+
+        what = str(st.get("do") or st.get("move") or st.get("trick") or "").strip().lower().replace(" ", "_")
+        what = {"pushup": "push-up", "push_up": "push-up", "push-ups": "push-up", "nap": "lie_down"}.get(what, what)
+        if what in MOVE_DIRECTIONS:
+            return {"move": what, **{k: st[k] for k in ("seconds", "degrees", "speed") if st.get(k)}}
+        if what in TRICKS + BIG_TRICKS:
+            return {"trick": what}
+        if what == "wait" or ("wait" in st and not what):
+            return {"wait": st.get("seconds") or st.get("wait") or 1}
+        return None
+
+    def _run_routine(self, steps: list[dict], cancel: threading.Event) -> None:
+        done, why = 0, ""
+        for st in steps:
+            if cancel.is_set():
+                why = "stopped"
+                break
+            print("routine step %d/%d: %s" % (done + 1, len(steps), st), flush=True)
+            if "trick" in st:
+                end = time.monotonic() + self.ROUTINE_RETRY_S
+                while True:
+                    r = self.gesture(str(st["trick"]), asked=True)
+                    waiting = r.get("reason") in ("a trick is already running", "the last trick is still settling", "the robot is moving")
+                    if r.get("ok") or not waiting or time.monotonic() > end or cancel.wait(0.3):
+                        break
+                if not r.get("ok"):
+                    why = r.get("reason") or "the trick did not start"
+                    break
+                end = time.monotonic() + self.drive.action_busy_s + 4
+                while self.drive.in_action and time.monotonic() < end and not cancel.wait(0.1):
+                    pass
+            elif "move" in st:
+                r = self.move(str(st["move"]), st.get("seconds"), st.get("degrees"), st.get("speed"), in_routine=True)
+                if not r.get("started"):
+                    why = r.get("reason") or "the move did not start"
+                    break
+                while self.nav.state.get("active") and not cancel.wait(0.1):
+                    pass
+                if self.nav.state.get("phase") != "done":
+                    why = self.nav.state.get("message") or "the move stopped"
+                    break
+            elif "wait" in st:
+                cancel.wait(min(5.0, max(0.0, float(st.get("wait") or 1))))
+            done += 1
+        print("routine: %d of %d steps done%s" % (done, len(steps), f", stopped: {why}" if why else ""), flush=True)
+        self.bus.publish("routine", {"done": done, "of": len(steps), "stopped": why})
+
+    def honk(self) -> dict:
+        """The bicycle horn (the H key): played at once on the robot's speaker, over anything it is saying or playing."""
+        if not self.sound_fn:
+            return {"ok": False, "reason": "the robot's voice link is not connected"}
+        return {"ok": self.sound_fn("horn") is not None}
+
+    def stop_moving(self) -> dict:
+        """Stop any walk, turn or routine now (the person always wins)."""
+        self._move_gen += 1
+        self._routine_cancel.set()
+        was = bool(self.nav.state.get("active"))
+        self.nav.cancel("stopped on request")
+        self.drive.stop()
+        return {"stopped": True, "was_moving": was}
 
     # ---- booth host: the Booth tab is open, so the robot listens for its wake word
     LISTEN_TTL_S = 15.0

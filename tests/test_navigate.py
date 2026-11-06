@@ -9,7 +9,7 @@ from puppy_mind.brain import Brain
 from puppy_mind.config import get_settings
 from puppy_mind.drive import DriveState
 from puppy_mind.models import Detection, Scene
-from puppy_mind.navigate import Navigator, pick_target, plan_go_to
+from puppy_mind.navigate import MAX_WALK_S, Move, Navigator, pick_target, plan_go_to, plan_move
 from puppy_mind.pose import wrap180, wrap360
 
 CAT = {"id": "obj-1", "label": "cat", "color": "gray", "location": "Hallway", "status": "present", "last_seen": "2026-10-22T16:00:00Z"}
@@ -399,3 +399,191 @@ def test_without_the_camera_running_the_turn_is_not_checked(rig):
     nav.start(turn_plan(60), verify=False)
     nav.wait(5)
     assert nav.state["phase"] == "done" and nav.state["message"].startswith("Turned")
+
+
+
+# ---------------------------------------------------------------- spoken moves ("walk left", "turn around", "stop")
+def test_plan_move_is_bounded_and_understands_everyday_words():
+    assert plan_move("forward").seconds == 1.5
+    assert plan_move("forward", seconds=60).seconds == MAX_WALK_S
+    assert plan_move("backwards").direction == "back"
+    assert plan_move("turn_around").degrees == 180.0
+    assert plan_move("turn_right", degrees=45).degrees == -45.0
+    assert plan_move("turn_left", degrees=9999).degrees == 360.0
+    assert plan_move("forward", speed="sprint").speed == 4
+    assert "sideways" in plan_move("left")  # no sideways walking: 8 servos, no sideways hip joint
+    assert plan_move("spin", speed="sprint").speed == 3  # nor turning
+    assert isinstance(plan_move("jump"), str)
+
+
+class Recorder:
+    """What the drive is told, sampled like the robot polls it."""
+
+    def __init__(self, drive):
+        self.drive, self.seen, self.speeds = drive, [], set()
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        self._t.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            c = self.drive.current()
+            self.seen.append((c["x"], c["y"], c["yaw"]))
+            self.speeds.add(c["speed"])
+            time.sleep(0.005)
+
+    def close(self):
+        self._stop.set()
+        self._t.join(1)
+
+
+def test_turn_around_uses_the_gyro_when_there_is_one(rig):
+    d, sim, nav, _ = rig
+    assert nav.start_move(Move("turn_around", degrees=180.0, speed=3))["started"]
+    nav.wait(5)
+    assert nav.state["phase"] == "done" and abs(wrap180(sim.heading - 180)) <= 8
+
+
+def test_moves_need_armed_driving_and_stop_or_a_key_ends_them():
+    d = DriveState()
+    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.01)
+    r = nav.start_move(Move("forward", seconds=2))
+    assert not r["started"] and "Enable keys" in r["reason"]
+    d.arm(True)
+    nav.start_move(Move("forward", seconds=3))
+    time.sleep(0.1)
+    d.command(0.0, 0.0, 1.0)  # a key press takes over
+    nav.wait(2)
+    assert nav.state["phase"] == "stopped" and "took over" in nav.state["message"]
+
+
+def test_a_new_move_replaces_the_one_running():
+    d = DriveState()
+    d.arm(True)
+    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.01)
+    nav.start_move(Move("forward", seconds=3))
+    time.sleep(0.1)
+    assert nav.start_move(Move("back", seconds=0.2))["started"]
+    nav.wait(2)
+    assert nav.state["phase"] == "done" and "back" in nav.state["message"]
+
+
+def _brain(monkeypatch):
+    monkeypatch.setenv("PUPPY_FAKE_MEMORY", "1")
+    b = Brain(need_openai=False)
+    b.nav.tick = 0.01
+    return b
+
+
+def test_come_back_retraces_the_last_walk(monkeypatch):
+    b = _brain(monkeypatch)
+    assert "nothing to come back" in b.move("come_back")["reason"]
+    b.drive.arm(True)
+    assert b.move("forward", seconds=0.3, speed="fast")["started"]
+    b.nav.wait(3)
+    r = b.move("come_back")
+    assert r["started"] and "back" in r["message"] and "0.3" in r["message"]
+
+
+def test_a_routine_runs_moves_and_tricks_in_order_and_stop_ends_it(monkeypatch):
+    b = _brain(monkeypatch)
+    b.drive.set_booth(True)
+    assert "Enable keys" in b.routine([{"move": "forward"}, {"trick": "sit"}])["reason"]
+    b.drive.arm(True)
+    b.drive.action_busy_s = 0.2
+    events = []
+    b.bus.publish = lambda t, e: events.append((t, e))
+    assert b.routine([{"do": "forward", "seconds": 0.3}, {"do": "sit"}, {"trick": "stand"}])["started"]
+    b._routine.join(20)
+    assert ("routine", {"done": 3, "of": 3, "stopped": ""}) in events, events
+    names = [e["name"] for t, e in events if t == "gesture" and e.get("ok")]
+    assert names == ["sit", "stand"] and b.drive.posture == "stand"
+    assert b.routine([{"move": "forward", "seconds": 3}, {"trick": "wave"}])["started"]
+    time.sleep(0.2)
+    b.stop_moving()
+    b._routine.join(5)
+    done = [e for t, e in events if t == "routine"][-1]
+    assert done["done"] == 0 and done["stopped"] and b.drive.current()["x"] == 0.0
+
+
+def test_a_routine_step_naming_a_move_and_a_trick_is_the_move():
+    # seen at the robot: "walk five steps and go in a circle" came as {"trick": "wave", "move": "forward", ...} and only waved
+    step = Brain._routine_step({"trick": "wave", "move": "forward", "seconds": 4, "degrees": 0, "speed": "normal", "wait": 0})
+    assert step == {"move": "forward", "seconds": 4, "speed": "normal"}
+    assert Brain._routine_step({"do": "push-ups"}) == {"trick": "push-up"}
+    assert Brain._routine_step({"do": "wait", "seconds": 2}) == {"wait": 2}
+    assert Brain._routine_step({"do": "somersault"}) is None
+
+
+def test_a_walk_is_straight_and_restores_the_persons_speed():
+    d = DriveState()
+    d.arm(True)
+    rec = Recorder(d)
+    nav = Navigator(d, lambda: None, publish=lambda t, e: None, tick_s=0.02)
+    try:
+        assert nav.start_move(Move("back", seconds=0.3, speed=4))["started"]
+        nav.wait(3)
+        assert nav.state["phase"] == "done", nav.state
+        assert any(x == -1.0 for x, _, _ in rec.seen) and all(y == 0.0 for _, y, _ in rec.seen)
+        assert 4 in rec.speeds and d.speed == 2 and not d.auto
+    finally:
+        rec.close()
+
+
+def test_spin_really_turns_all_the_way_round(rig):
+    d, sim, nav, _ = rig
+    start = sim.heading
+    turned = {"total": 0.0, "last": start}
+
+    def watch():
+        while nav.state.get("active"):
+            h = sim.heading
+            turned["total"] += wrap180(h - turned["last"])
+            turned["last"] = h
+            time.sleep(0.002)
+
+    assert nav.start_move(Move("spin", degrees=360.0, speed=3))["started"]
+    w = threading.Thread(target=watch)
+    w.start()
+    nav.wait(10)
+    w.join(2)
+    assert nav.state["phase"] == "done" and turned["total"] > 330  # at the robot it ended at once, having turned nothing
+
+
+def test_spoken_turns_use_the_full_safe_turn_speed():
+    assert plan_move("turn_around", speed="normal").speed == 3
+    assert plan_move("turn_left", speed="slow").speed == 3
+
+
+
+def test_a_spin_starts_with_its_jingle_and_a_stop_while_it_waits_cancels_it(monkeypatch):
+    import dataclasses
+    import threading
+    import time
+    b = _brain(monkeypatch)
+    played, ready = [], threading.Event()
+    b.sound_fn = lambda name: played.append(name) or ready
+    b.drive.arm(True)
+    assert b.move("turn_left", degrees=10)["started"]
+    b.nav.cancel("test")
+    b.nav.wait(3)
+    assert played == []  # only a spin has music
+    r = b.move("spin")
+    assert r["started"] and "music" in r["message"] and played == ["spin"]
+    time.sleep(0.2)
+    assert not b.nav.state.get("active")  # still talking: the spin waits for its music
+    ready.set()
+    time.sleep(0.2)
+    assert b.nav.state.get("active")  # the music started, so did the spin
+    b.stop_moving()
+    b.nav.wait(3)
+    ready.clear()
+    assert b.move("spin")["started"]
+    b.stop_moving()  # "Stop!" before the music began
+    ready.set()
+    time.sleep(0.2)
+    assert not b.nav.state.get("active")
+    b.s = dataclasses.replace(b.s, spin_music=False)  # SPIN_MUSIC=0: a silent spin starts at once
+    assert b.move("spin")["started"] and b.nav.state.get("active") and played == ["spin", "spin"]
+    b.stop_moving()
+    b.nav.wait(3)

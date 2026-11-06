@@ -17,6 +17,8 @@ import socket
 
 import threading
 
+import time
+
 import wave
 
 
@@ -257,7 +259,7 @@ def test_live_instructions_ask_their_own_question_and_say_when_to_delegate():
 
     names = {t["name"] for t in live_tools()}
 
-    assert names == {"do_trick", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
+    assert names == {"do_trick", "move", "routine", "stop_moving", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
 
 
 
@@ -618,3 +620,157 @@ def test_a_sentence_that_does_not_start_with_the_wake_word_is_dropped_after_six_
     call2 = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
     _ev(call2, "input", 600, " excuse me hey puppy pi what is cypher")
     assert call2.confirmed  # the wake word a few words in still counts
+
+
+def test_a_slow_session_still_hears_the_first_hey_puppypi(capsys):
+    # at the robot the first "Hey PuppyPi" after a quiet spell was dropped and the second worked: the session was still connecting
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call.speech_end_at = call.opened  # the sentence ended right away...
+    call.opened -= 3.0
+    call.speech_end_at -= 2.5
+    assert call.tick() is None  # ...but the session is not ready yet: the 2 s have not started
+    call.started_at = time.monotonic() - 2.5  # ready 2.5 s ago, and no transcript yet
+    assert call.tick() is None  # no transcript at all: wait up to 4 s for it
+    _ev(call, "input", 600, " hey puppy pi")
+    assert call.confirmed
+
+
+def test_a_probe_says_why_it_was_dropped_but_never_what_was_said():
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call.started_at = call.opened - 5
+    call.speech_end_at = time.monotonic() - 4.5
+    assert call.tick() == "no wake word"
+    assert "no transcript came" in call.drop_detail and "ready after" in call.drop_detail
+    call2 = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call2.started_at = call2.opened - 5
+    _ev(call2, "input", 600, " secret plans")
+    call2.speech_end_at = time.monotonic() - 2.5
+    assert call2.tick() == "no wake word"
+    assert "words but no wake word" in call2.drop_detail and "secret" not in call2.drop_detail
+
+
+def test_the_microphone_stays_open_while_the_robot_moves_so_stop_is_heard(monkeypatch):
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    bridge.brain.drive.moving = True  # walking, not talking: "Stop!" must reach GPT-Live (robot, 2026-11-06)
+    assert not bridge.mute_mic()
+
+
+def test_a_probe_hears_the_pause_after_the_sentence(monkeypatch):
+    from puppy_mind import live
+    monkeypatch.setattr(live, "TRAIL_SILENCE_S", 0.1)
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    got = []
+
+    class Call:
+        starting, open, confirmed, robot_audio_at = True, True, False, 0.0
+
+        async def mic(self, pcm):
+            got.append(pcm)
+
+    call = Call()
+
+    async def go():
+        t = asyncio.create_task(bridge._trail(call))
+        await asyncio.sleep(0.05)
+        assert not got  # nothing while the session is still starting (mic() would drop it)
+        call.starting = False
+        await t
+    asyncio.run(go())
+    assert got and all(not any(c) for c in got) and sum(len(c) for c in got) >= live.BPS * 0.08
+
+
+def test_the_pause_is_never_mixed_into_speech_still_arriving(monkeypatch):
+    import time as _t
+    from puppy_mind import live
+    monkeypatch.setattr(live, "TRAIL_SILENCE_S", 0.05)
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    got = []
+
+    class Call:
+        starting, open, confirmed, robot_audio_at = False, True, False, 0.0
+
+        async def mic(self, pcm):
+            got.append(pcm)
+
+    call = Call()
+
+    async def go():
+        t = asyncio.create_task(bridge._trail(call))
+        for _ in range(5):  # they started a new sentence: the robot is sending again
+            call.robot_audio_at = _t.monotonic()
+            await asyncio.sleep(0.02)
+        assert not got
+        await t
+    asyncio.run(go())
+    assert got  # once it went quiet, the pause was sent
+
+
+def test_the_spin_jingle_is_original_music_that_waits_for_the_robot_to_finish_talking(monkeypatch):
+    import time as _t
+    from puppy_mind import live
+    from puppy_mind.jingle import RATE, spin_jingle
+    pcm = spin_jingle()
+    x = np.frombuffer(pcm, dtype="<i2")
+    assert RATE == live.RATE and 5 < len(x) / RATE < 10 and 15000 < np.abs(x).max() < 32767  # loud, never clipping
+    monkeypatch.setattr(live, "SOUND_QUIET_S", 0.1)
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+
+    async def go():
+        bridge.loop = asyncio.get_running_loop()
+        await bridge.play(bytes(int(live.BPS * 0.2)), True)  # it is saying something (0.2 s)
+        assert bridge.sound("nonsense") is None  # unknown sounds are ignored
+        ev = bridge.sound("spin")
+        await asyncio.sleep(0.1)
+        assert not ev.is_set()  # still talking: the music waits
+        t0 = _t.monotonic()
+        while not ev.is_set() and _t.monotonic() - t0 < 2:
+            await asyncio.sleep(0.02)
+        assert ev.is_set()
+    asyncio.run(go())
+    sent = b"".join(a[1:] for a in bridge.ws.audio)
+    assert sent.endswith(pcm)  # after the speech
+    bridge.audible_until = 0.0  # the speech's echo tail is over
+    assert not bridge.mute_mic()  # the music does not mute the microphone: "Stop!" is still heard while it plays
+
+
+def test_a_robot_that_mixes_music_plays_the_jingle_at_once_even_mid_sentence(monkeypatch):
+    from puppy_mind.jingle import spin_jingle
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    bridge.robot_music = True
+
+    async def go():
+        bridge.loop = asyncio.get_running_loop()
+        await bridge.play(bytes(int(32000 * 2.0)), True)  # it is in the middle of a 2 s sentence
+        ev = bridge.sound("spin")
+        await asyncio.sleep(0.05)
+        assert ev.is_set()  # no waiting for the sentence to end: the spin starts now
+    asyncio.run(go())
+    assert bridge.ws.audio[-1] == b"B" + spin_jingle()  # its own stream, not the speech queue (b"A")
+
+
+def test_the_horn_honks_at_once_over_speech_and_never_cuts_the_spin_music(monkeypatch):
+    from puppy_mind.jingle import RATE, horn
+    pcm = horn()
+    assert 0.4 < len(pcm) / 2 / RATE < 1.0
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    bridge.robot_music = True
+
+    async def go():
+        bridge.loop = asyncio.get_running_loop()
+        await bridge.play(bytes(32000 * 2), True)  # mid-sentence
+        ev = bridge.sound("horn")
+        await asyncio.sleep(0.05)
+        assert ev.is_set()
+    asyncio.run(go())
+    assert bridge.ws.audio[-1] == b"C" + pcm  # an effect (b"C"), not music (b"B" replaces the music playing)
+
+    old = _bridge(monkeypatch, FakeOpenAI(""))  # an older robot client: the honk joins its speech queue
+
+    async def go_old():
+        old.loop = asyncio.get_running_loop()
+        old.sound("horn")
+        await asyncio.sleep(0.05)
+    asyncio.run(go_old())
+    assert b"".join(a[1:] for a in old.ws.audio) == pcm and old.ws.audio[0][:1] == b"A"

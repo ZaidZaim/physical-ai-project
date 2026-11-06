@@ -8,12 +8,13 @@ Works on both Hiwonder images (verified against github.com/Hiwonder/PuppyPi, bra
   topics /puppy_control/velocity (x cm/s, y cm/s, yaw_rate rad/s; yaw CCW positive), /puppy_control/pose,
   /puppy_control/gait; services /puppy_control/go_home (Empty), /puppy_control/set_mark_time (SetBool),
   /puppy_control/runActionGroup (SetRunActionName{name, wait}: "boxing.d6ac", "wave.d6ac", ... for booth-mode tricks).
-NOTE: Hiwonder's own demos say lateral (y) movement is "currently not available", so --max-y defaults to 0.
+NOTE: the robot's puppy.py accepts a velocity only if |x| <= 35 cm/s, y == 0 and |yaw| <= 51 deg/s (anything else is dropped and
+the previous command keeps running), and the PuppyPi has no sideways hip joint (8 servos). So y is never sent.
 
 Safety (each layer fails toward stopping):
   * The robot PULLS commands; the brain never connects in. If the brain is unreachable, replies are
     garbled, or the brain says disarmed, the robot stops.
-  * Absolute speed caps are enforced here (--max-x/--max-y/--max-yaw), whatever the brain sends.
+  * Absolute speed caps are enforced here (--max-x/--sprint-x/--max-yaw, x never above 35), whatever the brain sends.
   * Ctrl+C / any exception publishes a stop.
 
 Try it first with NO robot motion:   python3 puppy_drive.py --brain http://<laptop-ip>:8000 --dry-run
@@ -25,7 +26,7 @@ import os
 import time
 import urllib.request
 
-LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0}
+LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}  # 4 = sprint: forward/back at --sprint-x, the rest as level 3
 YAW_LIMIT = 0.436  # rad/s = 25 deg/s, the fastest turn Hiwonder's own teleop uses; above it the robot can tip over
 GAITS = {  # "stock" = the robot's own default (puppy.py GaitConfigFast + Stand); the others are from puppy_demo.py
     "stock": dict(overlap_time=0.1, swing_time=0.15, clearance_time=0.0, z_clearance=5.0, x_shift=-0.5),
@@ -34,7 +35,10 @@ GAITS = {  # "stock" = the robot's own default (puppy.py GaitConfigFast + Stand)
     "amble": dict(overlap_time=0.1, swing_time=0.2, clearance_time=0.1, z_clearance=5.0, x_shift=-0.9),
 }
 ZERO = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod")  # only these action groups are ever run, whatever the brain sends
+FIRMWARE_MAX_X = 35.0  # puppy.py drops any command faster than this
+# only these action groups are ever run, whatever the brain sends (the brain's TRICKS + BIG_TRICKS)
+TRICKS = ("boxing", "wave", "shake_hands", "bow", "nod", "sit", "stand", "lie_down", "stretch", "shake_head", "push-up", "moonwalk")
+HOLD_POSTURES = ("sit", "lie_down")  # these stay down until the brain says stand (or walks)
 MAX_PITCH = math.radians(30)  # body pitch cap, inside the 31 deg the pose node accepts
 
 
@@ -181,30 +185,29 @@ def main():
     ap.add_argument("--hz", type=float, default=10.0)
     ap.add_argument("--gait", choices=list(GAITS), default="stock")
     ap.add_argument("--max-x", type=float, default=12.0, help="cm/s at speed level 3")
-    ap.add_argument("--max-y", type=float, default=0.0, help="cm/s at speed level 3 (stock firmware has no lateral move)")
+    ap.add_argument("--sprint-x", type=float, default=15.0, help="cm/s forward/back at speed level 4 (sprint, at most 35)")
     ap.add_argument("--max-yaw", type=float, default=YAW_LIMIT, help="rad/s at speed level 3 (capped at 0.436)")
-    ap.add_argument("--invert-y", action="store_true")
     ap.add_argument("--invert-yaw", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print commands, publish nothing")
     a = ap.parse_args()
 
     a.max_yaw = min(abs(a.max_yaw), YAW_LIMIT)
+    a.max_x, a.sprint_x = min(FIRMWARE_MAX_X, a.max_x), min(FIRMWARE_MAX_X, max(a.max_x, a.sprint_x))
     drv = Driver(a.dry_run, a.gait)
     print("ROS%s driver ready%s; polling %s" % (drv.ros or "-", " (dry run)" if a.dry_run else "", a.brain))
     applied = dict(ZERO)
-    last_home, last_sent, last_action, last_pitch = None, None, None, 0.0
+    last_home, last_sent, last_action, last_pitch, last_posture = None, None, None, 0.0, "stand"
     try:
         while True:
             t0 = time.monotonic()
             try:
                 c = fetch(a.brain, a.token, applied)
                 armed = bool(c.get("armed"))
-                s = LEVEL_SCALE.get(int(c.get("speed", 1)), LEVEL_SCALE[1])
-                want = {
-                    "x": max(-1.0, min(1.0, float(c["x"]))) * a.max_x * s,
-                    "y": max(-1.0, min(1.0, float(c["y"]))) * a.max_y * s * (-1 if a.invert_y else 1),
-                    "yaw": max(-1.0, min(1.0, float(c["yaw"]))) * a.max_yaw * s * (-1 if a.invert_yaw else 1),
-                }
+                level = int(c.get("speed", 1))
+                s = LEVEL_SCALE.get(level, LEVEL_SCALE[1])
+                cx, cyaw = (max(-1.0, min(1.0, float(c[k]))) for k in ("x", "yaw"))
+                sign = -1 if a.invert_yaw else 1
+                want = {"x": cx * (a.sprint_x if level >= 4 else a.max_x * s), "y": 0.0, "yaw": cyaw * a.max_yaw * s * sign}
                 if not armed or not all(math.isfinite(v) for v in want.values()):
                     want = dict(ZERO)
                 hs = c.get("home_seq", 0)
@@ -221,13 +224,21 @@ def main():
                 elif aseq != last_action and c.get("action") in TRICKS:
                     last_action = aseq
                     drv.move(0, 0, 0)
+                    drv.pose(0.0)  # go idle first: level stock pose, settled (from a tilt, shake_hands tipped the dog over)
+                    time.sleep(1.0)
                     drv.trick(c["action"])
-                    drv.pose(float(c.get("pitch", 0.0)))  # stand back up in our pose after the action group
+                    if c["action"] not in HOLD_POSTURES:
+                        drv.pose(0.0)  # stand back up level after the action group; the brain sends the tilt again later
                     last_pitch, want = float(c.get("pitch", 0.0)), dict(ZERO)
                 pitch = max(-MAX_PITCH, min(MAX_PITCH, float(c.get("pitch", 0.0))))
-                if pitch != last_pitch and not c.get("busy"):
+                posture = c.get("posture", "stand")
+                if posture == "stand" and last_posture != "stand" and not c.get("busy"):  # up from sitting / a nap
                     drv.pose(pitch)
                     last_pitch = pitch
+                elif pitch != last_pitch and not c.get("busy") and posture == "stand":
+                    drv.pose(pitch)
+                    last_pitch = pitch
+                last_posture = posture
             except Exception as e:  # unreachable / bad reply -> stop
                 if applied != ZERO:
                     print("brain unreachable (%s): stopping" % e)

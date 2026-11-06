@@ -51,7 +51,7 @@ def test_moving_flag_and_home_requires_armed():
 def test_speed_level_clamped():
     d = DriveState()
     d.set_speed(9)
-    assert d.speed == 3
+    assert d.speed == 4  # 4 = sprint
     d.set_speed(-1)
     assert d.speed == 1
 
@@ -105,3 +105,51 @@ def test_tricks_need_booth_mode_never_run_while_moving_block_driving_and_are_rat
     d._moving_until, d._action_until = 0, d._action_until - 10
     d.gesture_cooldown_s, d.max_gestures_per_hour = 0, 1
     assert d.request_action("wave")["reason"] == "hourly trick limit reached"
+
+
+def test_sit_and_nap_hold_until_told_to_stand_and_walking_stands_up_first(monkeypatch):
+    import puppy_mind.drive as dm
+
+    d = DriveState()
+    d.arm(True)
+    d.set_booth(True)
+    assert d.request_action("lie_down", asked=True)["ok"]
+    assert d.current()["posture"] == "lie_down"
+    d.action_done()
+    d._moving_until = 0.0
+    d.command(1, 0, 0)  # "come here" while napping
+    assert d.posture == "stand" and d.current()["x"] == 0.0  # getting up first: no walking yet
+    monkeypatch.setattr(dm, "RISE_S", 0.0)
+    d._rise_until = 0.0
+    d.command(1, 0, 0)
+    assert d.current()["x"] == 1.0  # up, now walking
+    d._action_until = d._moving_until = 0.0
+    d._action_times.clear()
+    d.stop()
+    d._moving_until = 0.0
+    assert d.request_action("sit", asked=True)["ok"] and d.posture == "sit"
+    d._action_until = d._moving_until = 0.0
+    assert d.request_action("wave", asked=True)["ok"] and d.posture == "stand"  # any other trick ends standing
+
+
+def test_a_tilted_booth_dog_levels_before_walking_and_tilts_back_after(monkeypatch):
+    import math
+    import time as _t
+
+    import puppy_mind.drive as dm
+
+    d = DriveState()
+    d.arm(True)
+    d.set_booth(True, 10)
+    assert math.isclose(d.current()["pitch"], math.radians(10))
+    d.command(1, 0, 0)
+    c = d.current()
+    assert c["pitch"] == 0.0 and c["x"] == 0.0  # level first, no step yet
+    d._rise_until = 0.0
+    d.command(1, 0, 0)
+    assert d.current()["x"] == 1.0 and d.current()["pitch"] == 0.0  # walking level
+    monkeypatch.setattr(dm, "RETILT_S", 0.0)
+    d.stop()
+    d._walk_until = _t.monotonic() - 1
+    assert math.isclose(d.current()["pitch"], math.radians(10))  # stopped: looking up at people again
+

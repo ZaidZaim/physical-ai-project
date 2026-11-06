@@ -51,11 +51,19 @@ MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
 PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
 PROBE_AFTER_ANSWER_S = 2.0  # ... or this long after GPT-Live began answering it (at the booth its transcript of "Hey, Puppy"
                             # came more than 0.7 s after the answer began: the call was dropped while the robot said "Hi there")
+PROBE_NO_TRANSCRIPT_S = 4.0  # ... but while NO transcript has come yet, wait this long: at the robot (2026-11-06) the first "Hey
+                            # PuppyPi" after a quiet spell was dropped and the second worked; its session had to (re)connect, and
+                            # the 2 s were counted from the end of the sentence, not from when the session could hear it
 PROBE_WORDS = 6             # ... or as soon as this many words were heard with nothing like "hey" / "puppy" / "pi" among them:
                             # people say the wake word first. At the busy booth checking chatter cost more than the calls
                             # (9.3 of 17 minutes, ~4.9 s a sentence); most of it was listening to the rest of other people's sentences
 WAKEISH = {"hey", "hi", "hello", "hallo", "ok", "okay", "puppy", "puppypi", "pi", "pie", "pai", "poppy", "puppi", "papi", "bobby"}
 PROBE_MAX_S = 20.0          # ... and a long monologue without it after this long
+TRAIL_SILENCE_S = 1.5       # after the robot says a sentence ended, a probe is fed this much silence: GPT-Live transcribes a
+                            # turn only once it HEARS the pause after it, and the robot sends nothing between sentences. Without
+                            # it the first "Hey PuppyPi" after a quiet spell often got no transcript at all (robot, 2026-11-06)
+SOUND_QUIET_S = 0.8         # a sound (the spin jingle) waits until no speech has been sent for this long and all of it has played
+SOUND_WAIT_S = 6.0          # ... but no longer than this
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
 class LiveUsage:
     """What GPT-Live has cost since the app started: session seconds of conversations, of wake-word checks (every sentence the
@@ -90,7 +98,14 @@ SAY_SETUP_S = 6.0           # connecting and starting a line's session: longer, 
 SAY_TIMEOUT_S = 15.0        # speaking a line, counted once its session has started
 SAY_DONE_QUIET_S = 0.8      # the line is over once its words were all said and the voice has been quiet this long
 
+STOP_WORDS = {"stop", "halt", "freeze"}  # heard in a call: the robot stops at once, before GPT-Live has even answered
+
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
+           "move when someone asks you to walk, come closer, come back, back up, turn or spin (never sideways: it cannot) (faster = speed fast "
+           "or sprint), routine when one sentence asks for several things ('come here and sit', 'walk over and take a nap', 'show them "
+           "what you can do', 'wake up' = stand then stretch), do_trick for sit / take a nap (lie_down) / stand up (stand) / "
+           "shake hands or give paw (shake_hands) / stretch / push-ups or exercise (push-up), "
+           "stop_moving the moment anyone says stop, wait or freeze, "
            "ask_world for anything about the room or what the robot can see, new_visitor when a different person has taken over. "
            "Reply with one short plain sentence the voice can say. Never ask for or keep personal data.")
 
@@ -210,8 +225,12 @@ class LiveCall:
         now = time.monotonic()
         self.opened = self.heard_at = self.bot_at = self.delta_at = now
         self.started_at: float | None = None
+        self.drop_detail = ""  # why a probe was dropped (timing only, never the words)
         self.answer_at: float | None = None
         self.speech_end_at: float | None = None  # the robot said the sentence ended (b"E")
+        self.robot_audio_at = 0.0  # the last microphone frame from the robot (the trailing silence never cuts into speech)
+        self.robot_audio_s = 0.0   # how much the robot sent, and how loud: logged when a probe is dropped (never the words)
+        self.robot_peak = 0.0
         self.not_for_me = False  # its first words have nothing like the wake word: the check ends now (see PROBE_WORDS)
         self.close_at: float | None = None
         self.ws = None
@@ -310,6 +329,9 @@ class LiveCall:
             self.delta_at = now
             if user:
                 self.heard_at = now
+                # "stop" must not wait for the backend's tool call (a second or two): stop any walk the moment it is heard
+                if self.confirmed and STOP_WORDS & set(_plain(m.get("delta") or "").split()) and self.booth.stop_fn:
+                    print("live: heard stop, robot stopped:", self.booth.stop_fn(), flush=True)
             else:
                 self.bot_at = now
                 self.answer_at = self.answer_at or now
@@ -343,7 +365,8 @@ class LiveCall:
         self.enc = self.booth._encounter(None, self.brain.place_info().get("name"))
         self.enc.messages.append({"role": "user", "content": self.wake_text})  # the conversation is open from now on
         self.enc.turns += 1
-        print("live: woken by %r (%.1fs after the session started)" % (self.wake_text, time.monotonic() - (self.started_at or self.opened)), flush=True)
+        print("live: woken by %r (%.1fs after the session started; robot sent %.1fs of audio, loudest RMS %.0f)" % (
+            self.wake_text, time.monotonic() - (self.started_at or self.opened), self.robot_audio_s, self.robot_peak), flush=True)
         self.brain.on_wake()  # look up at the visitor
         await self.b.tell({"type": "call", "open": True})
         held, self.held = self.held, []
@@ -404,8 +427,19 @@ class LiveCall:
         reason when the call should close."""
         now = time.monotonic()
         if not self.confirmed:
-            if (self.not_for_me or (self.speech_end_at and now - self.speech_end_at > PROBE_AFTER_SPEECH_S)
+            heard_any = any(p[2] == "user" and p[3].strip() for p in self.pieces)
+            wait = PROBE_AFTER_SPEECH_S if heard_any else PROBE_NO_TRANSCRIPT_S
+            # the wait counts from when the session could hear it (it may still have been connecting when the sentence ended)
+            sentence_over = (self.speech_end_at is not None and self.started_at is not None
+                             and now - max(self.speech_end_at, self.started_at) > wait)
+            if (self.not_for_me or sentence_over
                     or (self.answer_at and now - self.answer_at > PROBE_AFTER_ANSWER_S) or now - self.opened > PROBE_MAX_S):
+                # why, and how long things took; never what was said (bystanders)
+                ready = "never ready" if self.started_at is None else "ready after %.1fs" % (self.started_at - self.opened)
+                self.drop_detail = "%s; session %s; %s; robot sent %.1fs of audio, loudest RMS %.0f" % (
+                    "words but no wake word" if heard_any else "no transcript came", ready,
+                    "the sentence ended %.1fs ago" % (now - self.speech_end_at) if self.speech_end_at else "still talking",
+                    self.robot_audio_s, self.robot_peak)
                 return "no wake word"
             return None
         if self.pieces and self.delta_at > self.committed_at and now - self.delta_at > BOT_TURN_GAP_S:
@@ -455,13 +489,15 @@ class LiveBridge:
         self.audible_until = 0.0
         self.spare: asyncio.Task | None = None  # a GPT-Live connection kept ready for the next utterance
         self.robot_aec = False  # the robot said its echo canceller is on (its hello)
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.robot_music = False  # the robot plays music in a stream of its own (its hello says so; newer robot clients)
+        self.loud_sent_at = 0.0  # when speech was last sent to the robot (a sound waits for the answer to end)
         self.spare_at = 0.0
 
     def mute_mic(self) -> bool:
-        """In a call: send silence instead of the microphone? While the robot moves (servo noise), and while it talks unless
-        LIVE_BARGE_IN is on and the robot's echo canceller removes its own voice (then visitors can interrupt it)."""
-        if self.brain.drive.moving:
-            return True
+        """In a call: send silence instead of the microphone? While the robot talks, unless LIVE_BARGE_IN is on and the robot's
+        echo canceller removes its own voice (then visitors can interrupt it). NOT while it moves: muting the servo noise also
+        muted "Stop!", which is exactly when it is said (robot, 2026-11-06)."""
         return time.monotonic() < self.audible_until + ECHO_TAIL_S and not (self.brain.s.live_barge_in and self.robot_aec)
 
     def busy(self) -> bool:
@@ -588,6 +624,7 @@ class LiveBridge:
         self.play_end = max(self.play_end, now) + len(pcm) / BPS
         if loud if loud is not None else pcm_rms(pcm) > LOUD_OUT:
             self.audible_until = self.play_end
+            self.loud_sent_at = now
 
     async def tell(self, msg: dict) -> None:
         if self.ws is not None:
@@ -611,9 +648,62 @@ class LiveBridge:
         except Exception:
             return None
 
+    def sound(self, name: str) -> threading.Event | None:
+        """Play a named sound (jingle.SOUNDS: "spin", "horn") on the robot's speaker; safe to call from any thread (tools run in
+        threads). Returns an event set when the sound starts (None: it cannot be played). Not counted as speech: the microphone
+        stays open while it plays, so "Stop!" is still heard mid-spin."""
+        from .jingle import SOUNDS
+        if name not in SOUNDS or self.ws is None or self.loop is None:
+            return None
+        ev = threading.Event()
+        if self.robot_music:  # mixed with its voice and played at once: the spin starts with it, even mid-sentence
+            self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._sound_now(name, ev)))
+        elif name == "horn":  # an older robot client: a short honk just joins the speech queue
+            self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._queue_sound(name, ev)))
+        else:  # an older robot client queues music behind its speech: wait until it has finished talking
+            self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._sound_when_quiet(ev)))
+        return ev
+
+    async def _sound_now(self, name: str, ev: threading.Event) -> None:
+        """b"B": music, replacing music still playing; b"C": a short effect (the horn), played over whatever plays."""
+        from .jingle import SOUNDS
+        try:
+            await self.ws.send_bytes((b"C" if name == "horn" else b"B") + SOUNDS[name]())
+            print("%s: playing now, beside the voice" % ("horn" if name == "horn" else "spin music"), flush=True)
+        finally:
+            ev.set()
+
+    async def _queue_sound(self, name: str, ev: threading.Event) -> None:
+        from .jingle import SOUNDS
+        try:
+            await self.play(SOUNDS[name](), False)
+        finally:
+            ev.set()
+
+    async def _sound_when_quiet(self, ev: threading.Event) -> None:
+        from .jingle import spin_jingle
+        t0 = time.monotonic()
+        end = t0 + SOUND_WAIT_S
+        try:
+            while time.monotonic() < end:
+                now = time.monotonic()
+                if now - self.loud_sent_at > SOUND_QUIET_S and now >= self.play_end - 0.1:
+                    break  # the answer has stopped coming and the speaker has played it all
+                await asyncio.sleep(0.05)
+            now = time.monotonic()
+            print("spin music: waited %.1fs for the robot to finish talking%s; speaker queue %.1fs, playing now" % (
+                now - t0, " (gave up waiting)" if now >= end else "", max(0.0, self.play_end - now)), flush=True)
+            await self.play(spin_jingle(), False)
+        finally:
+            ev.set()
+
     async def serve(self, ws) -> None:
         self.ws = ws
+        self.loop = asyncio.get_running_loop()
         self._renew_spare()
+        from .jingle import SOUNDS
+        await asyncio.to_thread(lambda: [make() for make in SOUNDS.values()])  # made once (about a second), never mid-trick
+        self.brain.sound_fn = self.sound
         ticker = asyncio.create_task(self._tick())
         try:
             while True:
@@ -626,6 +716,7 @@ class LiveBridge:
                         hello = json.loads(m.get("text") or "{}")
                         if hello.get("type") == "hello":
                             self.robot_aec = bool(hello.get("aec"))
+                            self.robot_music = bool(hello.get("music"))  # it plays b"B" music beside its voice, at once
                             print("robot echo cancelling: %s%s" % ("on" if self.robot_aec else "off", ", visitors may interrupt it"
                                   if self.robot_aec and self.brain.s.live_barge_in else ""), flush=True)
                     except ValueError:
@@ -636,7 +727,10 @@ class LiveBridge:
                 if kind == b"E":
                     if call is not None and not call.confirmed and call.speech_end_at is None:
                         call.speech_end_at = time.monotonic()
+                        asyncio.create_task(self._trail(call))
                 elif call is not None and call.open:
+                    call.robot_audio_at, call.robot_audio_s = time.monotonic(), call.robot_audio_s + len(pcm) / BPS
+                    call.robot_peak = max(call.robot_peak, pcm_rms(pcm))
                     if call.starting:
                         call.pending += pcm
                     elif kind in (b"M", b"S") or not call.confirmed:  # a probe hears the rest of the sentence as it is said
@@ -650,6 +744,8 @@ class LiveBridge:
                     asyncio.create_task(self._probe(self.call))
         finally:
             ticker.cancel()
+            if getattr(self.brain, "sound_fn", None) == self.sound:
+                self.brain.sound_fn = None
             if self.call is not None:
                 await self.call.close("the robot disconnected")
             if self.spare is not None:
@@ -663,7 +759,8 @@ class LiveBridge:
             await call.run(await self._take_spare())
         finally:
             if not call.confirmed:  # what a bystander said is never printed
-                print("live: no wake word (%s): dropped" % (call.closed_reason or "session ended"), flush=True)
+                print("live: no wake word (%s): dropped%s" % (call.closed_reason or "session ended",
+                                                               " [%s]" % call.drop_detail if call.drop_detail else ""), flush=True)
             if self.call is call:
                 self.call = None
             if call.confirmed:
@@ -671,6 +768,21 @@ class LiveBridge:
                     await self.tell({"type": "call", "open": False})
                 except Exception:
                     pass
+
+    async def _trail(self, call: LiveCall) -> None:
+        """The sentence ended: feed the probe the pause after it (see TRAIL_SILENCE_S), once its session can hear."""
+        step = 0.02
+        try:
+            while call.starting and call.open:
+                await asyncio.sleep(step)
+            chunk, sent, t_end = bytes(int(BPS * step) // 2 * 2), 0.0, time.monotonic() + TRAIL_SILENCE_S + 5.0
+            while sent < TRAIL_SILENCE_S and call.open and not call.confirmed and time.monotonic() < t_end:
+                if time.monotonic() - call.robot_audio_at > 3 * step:  # the robot is not sending: never mixed into real speech
+                    await call.mic(chunk)
+                    sent += step
+                await asyncio.sleep(step)
+        except Exception:  # the session went away: nothing to feed
+            pass
 
     async def _tick(self) -> None:
         """Every second: the head-levelling clock the classic client's polls gave, greetings or cheers waiting to be said, and a

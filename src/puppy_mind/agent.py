@@ -49,6 +49,9 @@ Rules:
   around; it NEVER walks, and between rooms it only gives a route for the person to drive. Report its `plan.message` and, when `run` is
   present, whether it started (`run.started`; if not, `run.reason`, e.g. driving must be armed first). The turn finishes after you reply,
   so say "turning now" rather than claiming you already face it. Never call it for a question that is only about where something is.
+- WALKING ON REQUEST: when the person tells you to walk, back up, turn or spin ("come here", "turn left", "turn around",
+  "faster!"), call move. You cannot walk sideways (your legs only swing forward and back): offer to turn that way instead; "stop" / "wait" calls stop_moving. Moves are short (at most 4 s) and need driving armed: if `started` is false,
+  say `reason` briefly. The move runs after you reply, so say "on my way" rather than claiming you already arrived.
 - recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
   where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
 - For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
@@ -115,6 +118,19 @@ TOOLS = [
                        "(or looks around for it); in another room it returns the route for the person to drive. Only when asked to move.",
         "parameters": {"type": "object", "properties": {"label": {"type": "string"}, "color": {"type": "string"}}, "required": ["label"]}}},
     {"type": "function", "function": {
+        "name": "move",
+        "description": "Walk or turn when the person asks you to move (not toward a remembered object: use go_to_object for that). "
+                       "forward / back walk for `seconds` (at most 4), turn_left / turn_right turn `degrees`, "
+                       "turn_around, spin; come_back retraces the last walk. speed: slow, normal, fast, sprint.",
+        "parameters": {"type": "object", "properties": {
+            "direction": {"type": "string", "enum": ["forward", "back", "turn_left", "turn_right", "turn_around", "spin", "come_back"]},
+            "seconds": {"type": "number"}, "degrees": {"type": "number"},
+            "speed": {"type": "string", "enum": ["slow", "normal", "fast", "sprint"]}}, "required": ["direction"]}}},
+    {"type": "function", "function": {
+        "name": "stop_moving",
+        "description": "Stop walking or turning now.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
         "name": "read_cypher",
         "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:TAKEN_AT]->(Place), (Item)-[:LOCATED_AT {firstSeen,lastSeen,count}]->(Place {placeId,name,roomType,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed}]->(Item). Item{itemId,label,color,status,firstSeen,lastSeen,seenCount,missCount}. Sighting{id,ts,summary}. Property keys are camelCase.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
@@ -127,6 +143,8 @@ class Agent:
         self.client = OpenAI(api_key=s.openai_api_key)
         self.place_fn = None  # set by Brain: returns where the robot is now
         self.go_fn = None  # set by Brain: plans (and, if driving is armed, starts) a turn toward an object
+        self.move_fn = None  # set by Brain: a short walk or turn the person asked for (only while driving is armed)
+        self.stop_fn = None  # set by Brain: stop moving now
         self.history: dict[str, list[dict]] = {}  # per-session short-term turns (also mirrored to NAMS)
 
     def _with_directions(self, rows: list[dict]) -> list[dict]:
@@ -158,6 +176,9 @@ class Agent:
             "recall_memory": lambda: self.nams.recall(a["query"], int(a.get("limit", 5))),
             "read_cypher": lambda: m.read_cypher(a["query"]),
             "go_to_object": lambda: (self.go_fn(a["label"], a.get("color")) if self.go_fn else {"error": "moving is not available"}),
+            "move": lambda: (self.move_fn(a.get("direction", ""), a.get("seconds"), a.get("degrees"), a.get("speed"))
+                             if self.move_fn else {"error": "moving is not available"}),
+            "stop_moving": lambda: (self.stop_fn() if self.stop_fn else {"error": "moving is not available"}),
         }[name]()
 
     def ask(self, question: str, session_id: str) -> dict[str, Any]:

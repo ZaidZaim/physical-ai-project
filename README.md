@@ -24,7 +24,7 @@ Neo4j, GenAI and GraphRAG, and it keeps anonymous notes of what the booth talked
 | **Notice change** | "What changed?" | New objects, things not seen any more (`possibly_gone`, never "deleted"), relations that ended |
 | **Know where** | "Which rooms do you know?" | Rooms are recognised from what is in them; a room map is learned as the robot moves |
 | **Explain** | "Where did you last see it?" | Every answer comes with the tool calls and graph facts it used |
-| **Act** | "Turn to the door." | Turns in place to face a remembered object, or looks around for it. Between rooms it gives you the route. It never walks on its own |
+| **Act** | "Turn to the door." · "Come here!" · "Take a nap." · "Run!" · "Stop!" | Turns in place to face a remembered object, or looks around for it. Between rooms it gives you the route. Walks, turns, sprints and does its tricks when you tell it to, in short moves (at most 4 s) and only while driving is enabled in the app; "stop" halts it at once. It never wanders off on its own |
 | **Host** | "Hey PuppyPi, what is GraphRAG?" | At a booth it talks through **GPT-Live** (it starts answering about a second after you stop), does tricks on request (push-ups and the moonwalk included), cheers for the claw machine, and keeps anonymous notes of what visitors ask about and need in the **Booth** tab, never who they are: [docs/BOOTH.md](docs/BOOTH.md) |
 
 ## How it works
@@ -169,7 +169,7 @@ uv run puppy-mind ask                                    # interactive chat
 ### Driving
 
 Click **Enable keyboard drive**; nothing moves until you arm it. Hold a key to move, and release it to stop:
-`W/S` forward/back · `A/D` turn · `Space` stop · `H` stand · `1 2 3` speed · `Esc` disarm (the arrow keys and on-screen pad work too).
+`W/S` forward/back · `A/D` turn · `Space` stop · `G` stand · `H` bicycle horn · `1 2 3 4` speed · `Esc` disarm (the arrow keys and on-screen pad work too).
 
 ### "Go where you last saw it"
 

@@ -219,8 +219,8 @@
           <span></span><button data-k="s" title="Back (S / Down)">&#9660;</button><span></span>
         </div>
         <div id="dinfo">
-          <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3)</div>
-          <div><b>W S</b> walk &nbsp; <b>A D</b> turn<br><b>SPACE</b> stop &nbsp; <b>H</b> stand &nbsp; <b>ESC</b> disarm</div>
+          <div>SPEED <b id="spd">2 · medium</b> (keys 1 2 3 4)</div>
+          <div><b>W S</b> walk &nbsp; <b>A D</b> turn<br><b>SPACE</b> stop &nbsp; <b>G</b> stand &nbsp; <b>H</b> horn &nbsp; <b>ESC</b> disarm</div>
         </div>
       </div>
       <div class="vrow" style="margin-top:8px"><span id="rstate">robot offline</span><span id="batt"></span></div>
@@ -937,12 +937,12 @@ async function loadOntology() {
 }
 
 /* ---------- keyboard drive ---------- */
-const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast' };
-const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right', q:'sl', e:'sr' };
+const SPEEDS = { 1:'1 · slow', 2:'2 · medium', 3:'3 · fast', 4:'4 · sprint' };
+const KEYMAP = { w:'fwd', arrowup:'fwd', s:'back', arrowdown:'back', a:'left', arrowleft:'left', d:'right', arrowright:'right' };
 const held = new Set(); let ws = null, armed = false, speed = 2, loopT = null;
 const vec = () => ({
   x: (held.has('fwd') ? 1 : 0) - (held.has('back') ? 1 : 0),
-  y: (held.has('sl') ? 1 : 0) - (held.has('sr') ? 1 : 0),
+  y: 0,   // the PuppyPi cannot walk sideways (no sideways hip joint; its firmware drops any sideways command)
   yaw: (held.has('left') ? 1 : 0) - (held.has('right') ? 1 : 0),
 });
 const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
@@ -979,13 +979,18 @@ async function setArmed(on, fromServer) {
 $('#arm').onclick = () => setArmed(!armed);
 const typing = () => /^(input|textarea|select)$/i.test(document.activeElement?.tagName || '');
 addEventListener('keydown', e => {
-  if (!armed || typing() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (typing() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
+  if (k === 'h') {  // the horn moves nothing: it works without Enable keys too
+    if (!e.repeat) fetch('/api/horn', { method:'POST' }).then(r => r.json()).then(j => j.ok || log('bad', 'horn: ' + (j.reason || 'not played'))).catch(() => {});
+    return;
+  }
+  if (!armed) return;
   if (KEYMAP[k]) { e.preventDefault(); held.add(KEYMAP[k]); paintPad(); }
   else if (k === ' ') { e.preventDefault(); stopAll(); }
   else if (k === 'escape') { setArmed(false); }
-  else if (k === 'h') { stopAll(); send({ home:true }); log('ask', 'stand / go home'); }
-  else if (['1','2','3'].includes(k)) { speed = +k; send({ speed }); paintPad(); }
+  else if (k === 'g') { stopAll(); send({ home:true }); log('ask', 'stand / go home'); }
+  else if (['1','2','3','4'].includes(k)) { speed = +k; send({ speed }); paintPad(); }
 });
 addEventListener('keyup', e => { const a = KEYMAP[e.key.toLowerCase()]; if (a && held.delete(a)) paintPad(); });
 addEventListener('blur', () => armed && stopAll());                       // lose focus => stop

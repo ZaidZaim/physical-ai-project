@@ -246,7 +246,10 @@ def test_hey_puppypi_does_the_trick_then_looks_up_then_levels_when_quiet(client)
     assert r.status_code == 200
     d = server.brain.drive.current()
     assert d["action"] == "boxing" and d["action_seq"] == 1  # the trick came first
-    assert math.isclose(d["pitch"], math.radians(25))  # then it looks up at the visitor, before it speaks
+    assert d["pitch"] == 0.0  # level right after the trick (it went idle for it)...
+    server.brain.drive._walk_until = 0.0  # ...a moment later (RETILT_S)
+    d = server.brain.drive.current()
+    assert math.isclose(d["pitch"], math.radians(25))  # it looks up at the visitor
     assert client.post("/api/listen").json()["state"] == "conversation"
     for e in server.brain.booth.encounters.values():
         e.last -= 999  # the conversation went quiet
@@ -331,3 +334,15 @@ def test_claw_machine_cheer_buttons(client):
     assert server.brain.drive.booth  # a cheer turns booth mode on, so the invite's wave can play
     assert client.get("/api/voice/next").content.startswith(b"RIFFfake-wav:")
     assert client.post("/api/booth/cheer", json={"kind": "nope"}).status_code == 400
+
+
+def test_h_honks_the_bicycle_horn_without_enable_keys_and_only_from_this_machine(client, monkeypatch):
+    played = []
+    monkeypatch.setattr(server.brain, "sound_fn", None)
+    r = client.post("/api/horn").json()
+    assert r["ok"] is False and "not connected" in r["reason"]  # no robot voice link yet
+    monkeypatch.setattr(server.brain, "sound_fn", lambda name: played.append(name) or object())
+    assert not server.brain.drive.armed
+    assert client.post("/api/horn").json() == {"ok": True} and played == ["horn"]
+    with TestClient(server.app, client=("192.168.1.50", 5000)) as c:
+        assert c.post("/api/horn").status_code in (401, 403) and played == ["horn"]
