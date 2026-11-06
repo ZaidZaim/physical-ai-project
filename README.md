@@ -1,4 +1,8 @@
-<p align="center"><img src="docs/logo.svg" width="96" alt="Puppy Mind logo"></p>
+<p align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/neo4j-mark-white.svg"><img src="docs/neo4j-mark.svg" height="92" alt="Neo4j logo"></picture>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/logo.svg" width="96" alt="Puppy Mind logo">
+</p>
 
 <h1 align="center">puppy-mind</h1>
 <p align="center"><b>Talk with your environment.</b> Spatial memory and physical AI for the Hiwonder PuppyPi, on Neo4j.</p>
