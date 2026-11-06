@@ -208,7 +208,11 @@ def test_booth_mode_tilts_up_and_a_trick_runs_the_action_group_then_stands_back_
             time.sleep(0.05)
         assert [c["args"] for c in calls()] == [{"name": "boxing.d6ac", "wait": True}]
         assert not drive.in_action  # the service reply ended the trick early
-        assert math.isclose(poses()[-1]["pitch"], math.radians(10), rel_tol=1e-6)  # stood back up, still looking up
+        pitches = [p["pitch"] for p in poses()]
+        assert 0.0 in pitches[:-1] and pitches[-1] == 0.0  # went idle (level) before the trick and stood back up level after it
+        drive._walk_until = 0.0  # RETILT_S later...
+        time.sleep(0.4)
+        assert math.isclose(poses()[-1]["pitch"], math.radians(10), rel_tol=1e-6)  # ...it looks up at people again
         assert fb.vels()[-1] == {"x": 0.0, "y": 0.0, "yaw_rate": 0.0}
     finally:
         d.close(); fb.close()
@@ -358,3 +362,28 @@ def test_measuring_only_never_steers_but_reports_the_drift(capsys):
     assert end < -25 and msgs == 1  # it went where it went: nothing was sent but the zero at the start
     out = capsys.readouterr().out
     assert "walk drift (gyro, unreliable while walking): speed 4 forward" in out and "(right)" in out and "not steered" in out
+
+
+def test_a_trick_from_the_conversation_tilt_first_goes_idle_and_level():
+    # at the robot, shake_hands from the 25 degree tilt right after a walk tipped the dog over
+    import math
+
+    fb, drive = FakeBridge(), DriveState()
+    d = run(drive, fb, hold_heading=False)
+    try:
+        drive.arm(True)
+        drive.set_booth(True, 25)
+        time.sleep(0.4)
+        assert drive.request_action("shake_hands", asked=True)["ok"]
+        t0 = time.time()
+        while drive.in_action and time.time() - t0 < 5:
+            time.sleep(0.05)
+        is_pose = lambda m: m["op"] == "publish" and m.get("topic") == "/puppy_control/pose"
+        order = [("pose", m["msg"]["pitch"]) if is_pose(m) else ("trick", None)
+                 for m in fb.msgs if is_pose(m) or m.get("service") == "/puppy_control/runActionGroup"]
+        k = order.index(("trick", None))
+        assert order[k - 1] == ("pose", 0.0)  # level, right before the action group
+        assert math.isclose(order[0][1], math.radians(25)) or order[0] == ("pose", 0.0)
+        assert drive.current()["pitch"] == 0.0  # and still level just after it
+    finally:
+        d.close(); fb.close()

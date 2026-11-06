@@ -224,9 +224,11 @@ def main():
                 elif aseq != last_action and c.get("action") in TRICKS:
                     last_action = aseq
                     drv.move(0, 0, 0)
+                    drv.pose(0.0)  # go idle first: level stock pose, settled (from a tilt, shake_hands tipped the dog over)
+                    time.sleep(1.0)
                     drv.trick(c["action"])
                     if c["action"] not in HOLD_POSTURES:
-                        drv.pose(float(c.get("pitch", 0.0)))  # stand back up in our pose after the action group
+                        drv.pose(0.0)  # stand back up level after the action group; the brain sends the tilt again later
                     last_pitch, want = float(c.get("pitch", 0.0)), dict(ZERO)
                 pitch = max(-MAX_PITCH, min(MAX_PITCH, float(c.get("pitch", 0.0))))
                 posture = c.get("posture", "stand")

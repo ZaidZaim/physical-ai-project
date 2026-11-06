@@ -35,6 +35,7 @@ DEFAULT_WALK_S = 1.5
 MAX_TURN_DEG = 360.0
 TURN_DEG_PER_S = 25.0  # the robot's turn rate at speed level 3 (YAW_LIMIT): times a turn when there is no gyro heading
 TURN_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}  # the robot's LEVEL_SCALE for turning (a sprint does not turn faster)
+TURN_PIECE_DEG = 120.0  # a long turn (spin, 360) is made of pieces no longer than this
 
 
 @dataclass
@@ -68,7 +69,8 @@ def plan_move(direction: str, seconds: float | None = None, degrees: float | Non
     deg = {"turn_around": 180.0, "spin": 360.0}.get(d) or (abs(float(degrees)) if degrees else 90.0)
     deg = min(MAX_TURN_DEG, max(5.0, deg))
     sign = -1.0 if d == "turn_right" else 1.0
-    return Move(d, seconds=0.0, degrees=sign * deg, speed=min(level, 3))
+    # spoken turns always at the safe maximum (25 deg/s, speed 3): at speed 2 "turn around" took over 11 s at the robot
+    return Move(d, seconds=0.0, degrees=sign * deg, speed=3)
 
 
 CHECK_OFFSETS = (0.0, 40.0, -80.0)  # after a turn: where we turned, 40 degrees left of it, 40 degrees right of it
@@ -240,7 +242,18 @@ class Navigator:
     def _turn_any(self, delta: float, level: int) -> tuple[bool, str]:
         """Turn on the gyro when there is a heading, else by time (rough: about TURN_DEG_PER_S at full turn speed)."""
         if self.heading_fn() is not None:
-            return self._turn_by(delta)
+            # in pieces of at most TURN_PIECE_DEG: _turn_by aims at a heading, and "spin" (+360) aims at the heading it already
+            # has, so at the robot it finished at once without moving
+            h0, done = self.heading_fn(), 0.0
+            while abs(delta - done) > 1e-6:
+                done += max(-TURN_PIECE_DEG, min(TURN_PIECE_DEG, delta - done))
+                h = self.heading_fn()
+                if h is None:
+                    return False, "lost the gyro heading"
+                ok, why = self._turn_by(wrap180(h0 + done - h))  # each piece aims at the overall target: errors do not add up
+                if not ok:
+                    return ok, why
+            return True, ""
         rate = TURN_DEG_PER_S * TURN_SCALE.get(level, 1.0)
         end = time.monotonic() + abs(delta) / rate
         while time.monotonic() < end:
@@ -298,7 +311,7 @@ class Navigator:
                 last_h, last_move = h, now
             elif now - last_move > self.stall_s:
                 return False, "I'm not turning (stuck, or the floor is too soft?)"
-            mag = min(1.0, max(0.35, abs(err) / 40.0))  # slow down near the target
+            mag = min(1.0, max(0.4, abs(err) / 20.0))  # full speed until the last 20 degrees, then slow down to stop on target
             self.drive.command(0.0, 0.0, mag if err > 0 else -mag, source="auto")
             self._set(remaining_deg=round(err, 1))
             time.sleep(self.tick)

@@ -17,6 +17,8 @@ import socket
 
 import threading
 
+import time
+
 import wave
 
 
@@ -618,3 +620,32 @@ def test_a_sentence_that_does_not_start_with_the_wake_word_is_dropped_after_six_
     call2 = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
     _ev(call2, "input", 600, " excuse me hey puppy pi what is cypher")
     assert call2.confirmed  # the wake word a few words in still counts
+
+
+def test_a_slow_session_still_hears_the_first_hey_puppypi(capsys):
+    # at the robot the first "Hey PuppyPi" after a quiet spell was dropped and the second worked: the session was still connecting
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call.speech_end_at = call.opened  # the sentence ended right away...
+    call.opened -= 3.0
+    call.speech_end_at -= 2.5
+    assert call.tick() is None  # ...but the session is not ready yet: the 2 s have not started
+    call.started_at = time.monotonic() - 2.5  # ready 2.5 s ago, and no transcript yet
+    assert call.tick() is None  # no transcript at all: wait up to 4 s for it
+    _ev(call, "input", 600, " hey puppy pi")
+    assert call.confirmed
+
+
+def test_a_probe_says_why_it_was_dropped_but_never_what_was_said():
+    booth, _ = _booth()
+    call = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call.started_at = call.opened - 5
+    call.speech_end_at = time.monotonic() - 4.5
+    assert call.tick() == "no wake word"
+    assert "no transcript came" in call.drop_detail and "ready after" in call.drop_detail
+    call2 = LiveCall(FakeBridge(booth), b"\x00\x00" * 1600)
+    call2.started_at = call2.opened - 5
+    _ev(call2, "input", 600, " secret plans")
+    call2.speech_end_at = time.monotonic() - 2.5
+    assert call2.tick() == "no wake word"
+    assert "words but no wake word" in call2.drop_detail and "secret" not in call2.drop_detail

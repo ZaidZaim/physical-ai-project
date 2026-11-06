@@ -20,7 +20,7 @@ import threading
 import time
 import uuid
 
-from .drive import HOLD_POSTURES, DriveState
+from .drive import HOLD_POSTURES, IDLE_S, DriveState
 
 LEVEL_SCALE = {1: 0.35, 2: 0.65, 3: 1.0, 4: 1.0}
 # Speeds in cm/s. Level 3 walks at DRIVE_MAX_X; level 4 ("sprint") walks forward/back at DRIVE_SPRINT_X; turning stays at level 3
@@ -269,13 +269,17 @@ class RosbridgeDriver:
 
     def _trick(self, name: str) -> None:
         """Run one of Hiwonder's action groups and wait for it (the service replies when the action group has finished),
-        then stand back in our pose: an action group leaves the legs wherever its last frame put them."""
+        then stand back in our pose: an action group leaves the legs wherever its last frame put them.
+        It first goes IDLE: stop, stand LEVEL in the stock pose and let it settle. The action groups start from that pose; at the
+        robot, shake_hands from the 25 degree conversation tilt right after a walk tipped the dog over."""
         self._publish("/puppy_control/velocity", {"x": 0.0, "y": 0.0, "yaw_rate": 0.0})
+        self._pose(0.0)
+        time.sleep(IDLE_S)
         r = self._call("/puppy_control/runActionGroup", {"name": f"{name}.d6ac", "wait": True}, wait=self.drive.action_busy_s + 4)
         if r is not None and r.get("result") is False:
             self.error = f"trick {name} failed: {r.get('values')}"[:200]
         if name not in HOLD_POSTURES:  # sitting and napping stay down until it is told to stand or walk
-            self._pose(self.drive.pitch_rad)
+            self._pose(0.0)  # level: the conversation tilt comes back a moment later (drive.RETILT_S)
         self.drive.action_done()
 
     # ---- main loop

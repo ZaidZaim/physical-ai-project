@@ -51,6 +51,9 @@ MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
 PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
 PROBE_AFTER_ANSWER_S = 2.0  # ... or this long after GPT-Live began answering it (at the booth its transcript of "Hey, Puppy"
                             # came more than 0.7 s after the answer began: the call was dropped while the robot said "Hi there")
+PROBE_NO_TRANSCRIPT_S = 4.0  # ... but while NO transcript has come yet, wait this long: at the robot (2026-11-06) the first "Hey
+                            # PuppyPi" after a quiet spell was dropped and the second worked; its session had to (re)connect, and
+                            # the 2 s were counted from the end of the sentence, not from when the session could hear it
 PROBE_WORDS = 6             # ... or as soon as this many words were heard with nothing like "hey" / "puppy" / "pi" among them:
                             # people say the wake word first. At the busy booth checking chatter cost more than the calls
                             # (9.3 of 17 minutes, ~4.9 s a sentence); most of it was listening to the rest of other people's sentences
@@ -217,6 +220,7 @@ class LiveCall:
         now = time.monotonic()
         self.opened = self.heard_at = self.bot_at = self.delta_at = now
         self.started_at: float | None = None
+        self.drop_detail = ""  # why a probe was dropped (timing only, never the words)
         self.answer_at: float | None = None
         self.speech_end_at: float | None = None  # the robot said the sentence ended (b"E")
         self.not_for_me = False  # its first words have nothing like the wake word: the check ends now (see PROBE_WORDS)
@@ -414,8 +418,18 @@ class LiveCall:
         reason when the call should close."""
         now = time.monotonic()
         if not self.confirmed:
-            if (self.not_for_me or (self.speech_end_at and now - self.speech_end_at > PROBE_AFTER_SPEECH_S)
+            heard_any = any(p[2] == "user" and p[3].strip() for p in self.pieces)
+            wait = PROBE_AFTER_SPEECH_S if heard_any else PROBE_NO_TRANSCRIPT_S
+            # the wait counts from when the session could hear it (it may still have been connecting when the sentence ended)
+            sentence_over = (self.speech_end_at is not None and self.started_at is not None
+                             and now - max(self.speech_end_at, self.started_at) > wait)
+            if (self.not_for_me or sentence_over
                     or (self.answer_at and now - self.answer_at > PROBE_AFTER_ANSWER_S) or now - self.opened > PROBE_MAX_S):
+                # why, and how long things took; never what was said (bystanders)
+                ready = "never ready" if self.started_at is None else "ready after %.1fs" % (self.started_at - self.opened)
+                self.drop_detail = "%s; session %s; %s" % (
+                    "words but no wake word" if heard_any else "no transcript came", ready,
+                    "the sentence ended %.1fs ago" % (now - self.speech_end_at) if self.speech_end_at else "still talking")
                 return "no wake word"
             return None
         if self.pieces and self.delta_at > self.committed_at and now - self.delta_at > BOT_TURN_GAP_S:
@@ -673,7 +687,8 @@ class LiveBridge:
             await call.run(await self._take_spare())
         finally:
             if not call.confirmed:  # what a bystander said is never printed
-                print("live: no wake word (%s): dropped" % (call.closed_reason or "session ended"), flush=True)
+                print("live: no wake word (%s): dropped%s" % (call.closed_reason or "session ended",
+                                                               " [%s]" % call.drop_detail if call.drop_detail else ""), flush=True)
             if self.call is call:
                 self.call = None
             if call.confirmed:

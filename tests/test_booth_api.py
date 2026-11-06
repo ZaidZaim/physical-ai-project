@@ -246,7 +246,10 @@ def test_hey_puppypi_does_the_trick_then_looks_up_then_levels_when_quiet(client)
     assert r.status_code == 200
     d = server.brain.drive.current()
     assert d["action"] == "boxing" and d["action_seq"] == 1  # the trick came first
-    assert math.isclose(d["pitch"], math.radians(25))  # then it looks up at the visitor, before it speaks
+    assert d["pitch"] == 0.0  # level right after the trick (it went idle for it)...
+    server.brain.drive._walk_until = 0.0  # ...a moment later (RETILT_S)
+    d = server.brain.drive.current()
+    assert math.isclose(d["pitch"], math.radians(25))  # it looks up at the visitor
     assert client.post("/api/listen").json()["state"] == "conversation"
     for e in server.brain.booth.encounters.values():
         e.last -= 999  # the conversation went quiet

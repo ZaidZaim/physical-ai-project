@@ -528,3 +528,29 @@ def test_a_walk_is_straight_and_restores_the_persons_speed():
         assert 4 in rec.speeds and d.speed == 2 and not d.auto
     finally:
         rec.close()
+
+
+def test_spin_really_turns_all_the_way_round(rig):
+    d, sim, nav, _ = rig
+    start = sim.heading
+    turned = {"total": 0.0, "last": start}
+
+    def watch():
+        while nav.state.get("active"):
+            h = sim.heading
+            turned["total"] += wrap180(h - turned["last"])
+            turned["last"] = h
+            time.sleep(0.002)
+
+    assert nav.start_move(Move("spin", degrees=360.0, speed=3))["started"]
+    w = threading.Thread(target=watch)
+    w.start()
+    nav.wait(10)
+    w.join(2)
+    assert nav.state["phase"] == "done" and turned["total"] > 330  # at the robot it ended at once, having turned nothing
+
+
+def test_spoken_turns_use_the_full_safe_turn_speed():
+    assert plan_move("turn_around", speed="normal").speed == 3
+    assert plan_move("turn_left", speed="slow").speed == 3
+

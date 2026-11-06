@@ -130,3 +130,26 @@ def test_sit_and_nap_hold_until_told_to_stand_and_walking_stands_up_first(monkey
     assert d.request_action("sit", asked=True)["ok"] and d.posture == "sit"
     d._action_until = d._moving_until = 0.0
     assert d.request_action("wave", asked=True)["ok"] and d.posture == "stand"  # any other trick ends standing
+
+
+def test_a_tilted_booth_dog_levels_before_walking_and_tilts_back_after(monkeypatch):
+    import math
+    import time as _t
+
+    import puppy_mind.drive as dm
+
+    d = DriveState()
+    d.arm(True)
+    d.set_booth(True, 10)
+    assert math.isclose(d.current()["pitch"], math.radians(10))
+    d.command(1, 0, 0)
+    c = d.current()
+    assert c["pitch"] == 0.0 and c["x"] == 0.0  # level first, no step yet
+    d._rise_until = 0.0
+    d.command(1, 0, 0)
+    assert d.current()["x"] == 1.0 and d.current()["pitch"] == 0.0  # walking level
+    monkeypatch.setattr(dm, "RETILT_S", 0.0)
+    d.stop()
+    d._walk_until = _t.monotonic() - 1
+    assert math.isclose(d.current()["pitch"], math.radians(10))  # stopped: looking up at people again
+

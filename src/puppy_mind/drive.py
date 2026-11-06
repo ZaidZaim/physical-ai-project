@@ -29,6 +29,14 @@ BIG_TRICKS = ("push-up", "moonwalk")
 # trick, or is asked to walk (then it first stands up, RISE_S, and walks after). Every other trick ends back in the standing pose.
 HOLD_POSTURES = ("sit", "lie_down")
 RISE_S = 1.0
+# Booth mode tilts the body nose-up to look at people. At the robot it could not walk properly tilted (the weight sits on the back
+# legs), so a walk or turn first levels the body (LEVEL_S, the pose takes 0.5 s) and the tilt comes back RETILT_S after it stops.
+LEVEL_S = 0.6
+RETILT_S = 1.5
+# Tricks (Hiwonder's recorded action groups) start from its level standing pose. At the robot, shake_hands from the 25 degree
+# conversation tilt, right after walking, tipped the dog over. So a trick first goes IDLE: stop, stand level, settle IDLE_S; the
+# tilt comes back RETILT_S after it ends.
+IDLE_S = 1.0
 MANUAL_GAP_S = 2.0  # a trick from the buttons waits only for the previous one to finish (plus this), not GESTURE_COOLDOWN_S
 MAX_SPEED_LEVEL = 4  # 4 = sprint: forward/back only goes faster (DRIVE_SPRINT_X); turning stays at level 3
 MAX_LOOK_UP_DEG = 30.0  # Hiwonder's pose node rejects |pitch| > 31 deg; its own "look down" pose is -15 deg
@@ -69,6 +77,7 @@ class DriveState:
         self.max_gestures_per_hour = 30
         self.posture = "stand"  # stand | sit | lie_down (a holding trick sets it; standing up or walking clears it)
         self._rise_until = 0.0
+        self._walk_until = 0.0  # walking or turning (or just stopped): hold the body level, not tilted
 
     # ---- booth mode
     def set_booth(self, on: bool, look_up_deg: float | None = None) -> None:
@@ -105,8 +114,9 @@ class DriveState:
                 return {"ok": False, "reason": reason}
             self.action, self.action_seq = name, self.action_seq + 1
             self.posture = name if name in HOLD_POSTURES else "stand"
-            self._action_until = now + self.action_busy_s
+            self._action_until = now + self.action_busy_s + IDLE_S
             self._moving_until = self._action_until + SETTLE_S  # perception waits: the view is bouncing
+            self._walk_until = self._action_until + RETILT_S  # level for the trick and a moment after it
             self._x = self._y = self._yaw = 0.0
             self._action_times.append(now)
             return {"ok": True, "reason": "", "action": name}
@@ -118,6 +128,7 @@ class DriveState:
             if now < self._action_until:
                 self._action_until = now
                 self._moving_until = now + SETTLE_S
+                self._walk_until = now + RETILT_S
 
     @property
     def in_action(self) -> bool:
@@ -148,9 +159,14 @@ class DriveState:
                 if not (x or y or yaw):  # the UI's heartbeat while no key is held: let the navigator keep turning
                     return
                 self._auto = False  # a key press takes over
+            now = time.monotonic()
             if self.posture != "stand" and (x or y or yaw):  # sitting or napping: stand up first, then walk
                 self.posture = "stand"
-                self._rise_until = time.monotonic() + RISE_S
+                self._rise_until = now + RISE_S
+            if (x or y or yaw) and self.booth and self.look_up_deg > 0 and now >= self._walk_until:  # tilted: level first
+                self._rise_until = max(self._rise_until, now + LEVEL_S)
+            if x or y or yaw or self._auto:
+                self._walk_until = now + DEADMAN_S + RETILT_S
             self._x, self._y, self._yaw = _clamp(x), _clamp(y), _clamp(yaw)
             self._stamp = time.monotonic()
             if self._x or self._y or self._yaw:
@@ -205,7 +221,13 @@ class DriveState:
                 x = 0.0
             return {"x": x, "y": y, "yaw": yaw, "speed": self.speed, "armed": self.armed,
                     "home_seq": self.home_seq, "action": self.action, "action_seq": self.action_seq,
-                    "pitch": math.radians(self.look_up_deg) if self.booth else 0.0, "busy": busy, "posture": self.posture}
+                    "pitch": self._pitch_now(), "busy": busy, "posture": self.posture}
+
+    def _pitch_now(self) -> float:
+        """The tilt to hold right now (lock held): booth mode's nose-up look, except while walking or turning (level)."""
+        if not self.booth or time.monotonic() < self._walk_until or self._auto:
+            return 0.0
+        return math.radians(self.look_up_deg)
 
     def robot_report(self, applied: dict[str, float]) -> None:
         with self._lock:
