@@ -37,6 +37,11 @@ import uuid
 import wave
 
 RATE, CHUNK_S = 16000, 0.03
+CUSHION_S = 0.25  # an answer starts after this much silence in the speaker queue: network jitter then never punches gaps into words
+TALK_TAIL_S = 0.3  # in a call, the mic stays silent this long after the robot's speaker was last fed speech. Was 0.8: people answer
+                   # at once, and the start of a quick reply ("Tell me ...", "Yes ...") fell into it and was lost (2026-11-14); the
+                   # echo canceller removes the robot's own voice, so a short tail is enough
+PRE_ROLL_S = 0.6  # outside a call, a sentence is sent from this long before it got loud enough to count as speech
 MIN_VOICE_S = 0.35  # at least this much actual loud sound before a recording is sent: a click plus silence is not speech
 KEEP_TAIL_S = 0.3   # trailing silence kept: the rest is cut before sending (less to upload and transcribe, fewer invented words)
 
@@ -258,6 +263,7 @@ class LiveOff(Exception):
 class Voice:
     def __init__(self, a):
         self.a = a
+        self.auto_threshold = False  # the speech threshold was measured here (not --threshold): it may follow a quieter room
         # set from the end of a visitor's sentence until the reply has been played, and while a greeting plays: the microphone is
         # ignored meanwhile. Listening while the brain still thinks sent the next sentence without the conversation id (a new
         # conversation that forgot the visitor) and made two replies fight over the speaker ("Device or resource busy").
@@ -341,6 +347,7 @@ class Voice:
         """The speech threshold from two quiet seconds of room noise (unless --threshold was given)."""
         if self.a.threshold is not None:
             return
+        self.auto_threshold = True  # measured, not given: it may follow a quieter room later (see live)
         print("Measuring room noise for 2 seconds: please stay quiet...")
         levels = []
         for _ in range(int(2.0 / CHUNK_S)):
@@ -370,7 +377,7 @@ class Voice:
                                   stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
         mic = subprocess.Popen(["arecord", "-q", "-D", self.a.mic, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
                                stdout=subprocess.PIPE)
-        state = {"call": False, "play_until": 0.0, "error": None, "fed_until": 0.0}
+        state = {"call": False, "play_until": 0.0, "error": None, "fed_until": 0.0, "dry": 0}
         speaker = threading.Lock()
         music = {"proc": None}
 
@@ -385,6 +392,9 @@ class Voice:
                                     stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
             if replace:
                 music["proc"] = proc
+            # in a call the mic stays silent while it plays, as for the robot's voice: GPT-Live heard the spin music and answered
+            # "sorry, I didn't catch that" (2026-11-06)
+            state["play_until"] = max(state["play_until"], time.time()) + len(pcm) / (RATE * 2.0)
             try:
                 proc.stdin.write(pcm)
                 proc.stdin.close()
@@ -416,15 +426,26 @@ class Voice:
                     op, data = ws.recv()
                     if op == 2 and data[:1] == b"A":
                         pcm = data[1:]
+                        loud = rms(pcm[:len(pcm) // 2 * 2]) > 200
+                        now = time.time()
+                        if loud and state["fed_until"] - now < 0.12:  # the queue holds no speech: (re)start with a cushion
+                            if now - state["play_until"] < 0.3:  # it was mid-answer: the speech arrived late, the speaker ran dry
+                                state["dry"] += 1
+                            feed(bytes(int(RATE * CUSHION_S) * 2))
                         feed(pcm)
-                        if rms(pcm[:len(pcm) // 2 * 2]) > 200:
-                            state["play_until"] = max(state["play_until"], time.time()) + len(pcm) / (RATE * 2.0)
+                        if loud:
+                            state["play_until"] = max(state["play_until"], state["fed_until"] - len(pcm) / (RATE * 2.0)) + len(pcm) / (RATE * 2.0)
                     elif op == 2 and data[:1] in (b"B", b"C"):  # music (replaces music still playing) / a short effect (the horn)
                         threading.Thread(target=play_music, args=(data[1:], data[:1] == b"B"), daemon=True).start()
                     elif op == 1:
                         m = json.loads(data.decode())
                         if m.get("type") == "call":
+                            if not m.get("open") and state["call"]:
+                                print("speaker ran dry %d time(s) mid-answer during that call (speech arrived late)" % state["dry"])
+                            if m.get("open"):
+                                state["dry"] = 0
                             state["call"] = bool(m.get("open"))
+                            state["mute_talking"] = bool(m.get("mute_while_talking", False))
                             print("call", "open: talking to GPT-Live" if state["call"] else "closed: say Hey PuppyPi to start again")
                         elif m.get("type") == "say":
                             print("say:", m.get("text", ""))
@@ -439,7 +460,9 @@ class Voice:
             self.measure(mic, n)
             floor, speech, quiet, started, voiced = 0.0, bytearray(), 0, False, 0
             end_quiet = int(self.a.live_silence / CHUNK_S)
-            pre = collections.deque(maxlen=int(0.3 / CHUNK_S))  # the start of the first word, from before it was loud enough
+            # the start of the first word, from before it was loud enough. Was 0.3 s: a soft, short "Hey" before "PuppyPi" was clipped
+            # and GPT-Live heard "...PuppyPi" or nothing, so the wake word worked on the second try (2026-11-14)
+            pre = collections.deque(maxlen=int(PRE_ROLL_S / CHUNK_S))
             streaming = False  # this sentence is being streamed (b"S"): GPT-Live hears it while it is said
             report, peak = time.time() + 10, 0.0
             while True:
@@ -450,7 +473,13 @@ class Voice:
                 buf = mic.stdout.read(n)
                 if not buf or len(buf) < n:
                     raise SystemExit("microphone stopped: check --mic (arecord -l)")
-                if state["call"]:  # in a call: stream everything (the laptop mutes it while the robot talks)
+                if state["call"]:  # in a call: stream everything, except the robot's own voice
+                    # The laptop guesses when the robot stops talking, but the speaker runs behind it (silence padding when the stream
+                    # runs dry, the audio system's own delay): on long answers the mic opened while the robot was still saying its last
+                    # words, GPT-Live heard its own voice as an interruption and stopped mid-sentence (2026-11-06). The robot knows when
+                    # its speaker is busy: silence until it has finished, plus a tail.
+                    if state.get("mute_talking") and time.time() < state["play_until"] + TALK_TAIL_S:
+                        buf = bytes(len(buf))
                     ws.send_bytes(b"M" + buf)
                     speech, quiet, started, voiced, streaming = bytearray(), 0, False, 0, False
                     continue
@@ -460,6 +489,14 @@ class Voice:
                 level = rms(buf)  # outside a call: only what someone says is sent (the laptop checks the wake word)
                 peak = max(peak, level)
                 if time.time() > report:  # what the microphone hears: the first thing to check when "Hey PuppyPi" is not heard
+                    # The start-up measurement can catch the robot itself (a restart while it stood up or talked): at the robot
+                    # (2026-11-06) it read the room as ~7500, the threshold stayed at 800 while the room was ~60, and a softly
+                    # spoken "Hey" never reached the laptop. Measured by us (not --threshold): follow the quiet room down.
+                    if self.auto_threshold and floor > 0 and not started:
+                        fit = auto_threshold([floor])
+                        if fit < self.a.threshold * 0.7:
+                            print("room is quieter than at start-up: speech threshold %.0f -> %.0f" % (self.a.threshold, fit))
+                            self.a.threshold = fit
                     print("mic: loudest %.0f in the last 10 s (speech counts above %.0f; room ~%.0f)" % (
                         peak, max(self.a.threshold, floor * self.a.live_ratio), floor))
                     report, peak = time.time() + 10, 0.0

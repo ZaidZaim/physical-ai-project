@@ -14,10 +14,10 @@ FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-se
 
 THEMES = {
     "light": dict(bg="#ffffff", ink="#1f2328", mute="#59636e", line="#8c959f", frame="#d1d9e0", panel="#f6f8fa",
-                  robot="#2a7f9e", long="#b9691a", short="#2f8f55", nams="#7050cc", voice="#b8457c", drop="#8c959f",
+                  robot="#2a7f9e", long="#b9691a", short="#2f8f55", proc="#c0507a", nams="#7050cc", voice="#b8457c", drop="#8c959f",
                   on_fill="#ffffff", label_bg="#ffffff"),
     "dark": dict(bg="#0d1117", ink="#e6edf3", mute="#9198a1", line="#6e7681", frame="#3d444d", panel="#151b23",
-                 robot="#4db3d6", long="#e3a047", short="#4cc27a", nams="#a98cf5", voice="#d96ca0", drop="#6e7681",
+                 robot="#4db3d6", long="#e3a047", short="#4cc27a", proc="#ec7fa5", nams="#a98cf5", voice="#d96ca0", drop="#6e7681",
                  on_fill="#0d1117", label_bg="#0d1117"),
 }
 
@@ -186,19 +186,22 @@ def loop(s: Svg, cx, cy, r, side, name, lines=None):
 
 def graph_model(theme: str) -> str:
     t = THEMES[theme]
-    s = new(900, 720, t, "puppy-mind graph ontology")
+    s = new(1140, 720, t, "puppy-mind graph ontology")
     R = {"Robot": (120, 112), "Session": (430, 112), "Place": (740, 150), "Sighting": (300, 320), "Item": (610, 320),
-         "Encounter": (760, 560), "Theme": (430, 610)}
+         "Encounter": (760, 560), "Theme": (430, 610), "Route": (1050, 150), "Trick": (1050, 400)}
     r = 46
     # edges first, nodes on top
     edge(s, R["Robot"], R["Session"], r, r, "RAN")
-    edge(s, R["Robot"], R["Place"], r, r + 4, "CURRENTLY_IN", bend=-150, lpos=0.5)
+    edge(s, R["Robot"], R["Place"], r, r + 4, "CURRENTLY_IN", color=t["robot"], bend=-150, lpos=0.5)
     edge(s, R["Sighting"], R["Session"], r, r, "IN_SESSION", lpos=0.45)
     edge(s, R["Sighting"], R["Place"], r, r + 4, "TAKEN_AT", bend=-30, lpos=0.38)
     edge(s, R["Sighting"], R["Item"], r, r, "DETECTED", color=t["short"], bend=-26, lpos=0.5)
     edge(s, R["Sighting"], R["Item"], r, r, "MISSED", dashed=True, bend=26, lpos=0.5)
     edge(s, R["Item"], R["Place"], r, r + 4, "LOCATED_AT", color=t["long"], lpos=0.55, loff=(44, 0))
     loop(s, *R["Place"], r + 4, "right", "ADJACENT_TO")
+    # procedural memory: know-how learned by doing
+    edge(s, R["Route"], R["Place"], r, r + 4, "STARTS_AT · ENDS_AT", color=t["proc"], bend=110, lpos=0.5)
+    edge(s, R["Trick"], R["Place"], r, r + 4, "PRACTISED_AT", color=t["proc"], lpos=0.45, loff=(30, 10))
     # booth: one anonymous node per conversation, never a person (NAMS / POLE+O names in the docs)
     edge(s, R["Encounter"], R["Place"], r, r + 4, "HELD_AT", lpos=0.55, loff=(36, 0))
     edge(s, R["Encounter"], R["Theme"], r, r, "DISCUSSED", color=t["nams"], bend=-30, lpos=0.5)
@@ -211,13 +214,21 @@ def graph_model(theme: str) -> str:
     node(s, *R["Place"], r + 4, "Place", "a room", t["long"])
     node(s, *R["Encounter"], r, "Encounter", "a conversation", t["nams"])
     node(s, *R["Theme"], r, "Theme", "a topic", t["nams"])
+    node(s, *R["Route"], r, "Route", "the moves", t["proc"])
+    node(s, *R["Trick"], r, "Trick", "a skill", t["proc"])
+    s.text(1050, 222, "walks · quickest · latest", size=11, fill=t["mute"])
+    s.text(1050, 472, "attempts · went wrong", size=11, fill=t["mute"])
+    s.text(1050, 488, "(skipped where it fails)", size=11, fill=t["mute"], italic=True)
+    s.text(610, 488, "every fact: seen · told · inferred,", size=11, fill=t["mute"])
+    s.text(610, 504, "fading unless confirmed", size=11, fill=t["mute"], italic=True)
     s.text(760, 630, "need · questions · familiarity", size=11, fill=t["mute"])
     s.text(760, 646, "never a name or a company", size=11, fill=t["mute"], italic=True)
     # legend
     y = 702
-    for i, (c, txt, dash) in enumerate([(t["long"], "long-term: the world", False), (t["short"], "short-term: what was seen, when", False),
-                                        (t["nams"], "booth: anonymous conversations", False), (t["line"], "dashed: expected but not seen", True)]):
-        x = 24 + i * 218
+    for i, (c, txt, dash) in enumerate([(t["long"], "long-term · semantic", False), (t["proc"], "long-term · procedural", False),
+                                        (t["short"], "short-term · episodic", False), (t["robot"], "short-term · working", False),
+                                        (t["nams"], "booth conversations", False), (t["line"], "expected, not seen", True)]):
+        x = 24 + i * 186
         if dash:
             s.add(f'<path d="M{x} {y - 4} h22" stroke="{c}" stroke-width="2" stroke-dasharray="5 4"/>')
         else:

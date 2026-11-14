@@ -23,6 +23,7 @@ from neo4j import GraphDatabase, RoutingControl
 from neo4j.exceptions import ClientError
 
 from .config import Settings
+from .knowledge import best_belief, describe_steps, reverse_steps, route_seconds, trick_advice
 from .matching import Known, Seen, assign
 from .models import EXCLUSIVE_PREDICATES, PREDICATES, Scene
 from .booth_graph import BOOTH_LABELS, BoothGraph
@@ -147,6 +148,8 @@ class Memory(BoothGraph):
             "CREATE CONSTRAINT utterance_id IF NOT EXISTS FOR (n:Utterance) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT reasoning_step_id IF NOT EXISTS FOR (n:ReasoningStep) REQUIRE n.id IS UNIQUE",
             "CREATE CONSTRAINT lookup_id IF NOT EXISTS FOR (n:Lookup) REQUIRE n.id IS UNIQUE",
+            "CREATE CONSTRAINT route_id IF NOT EXISTS FOR (n:Route) REQUIRE n.routeId IS UNIQUE",
+            "CREATE CONSTRAINT trick_name IF NOT EXISTS FOR (n:Trick) REQUIRE n.name IS UNIQUE",
             "CREATE INDEX item_label IF NOT EXISTS FOR (n:Item) ON (n.label)",
             "CREATE INDEX sighting_ts IF NOT EXISTS FOR (n:Sighting) ON (n.ts)",
             "CREATE INDEX item_status IF NOT EXISTS FOR (n:Item) ON (n.status)",
@@ -174,7 +177,8 @@ class Memory(BoothGraph):
     def reset(self) -> None:
         """Delete all memory THIS APP owns. Never touches NAMS's nodes (labels Entity, Conversation, Message, ...), not even one
         that carries one of our labels: NAMS gives an extracted entity its type as a label (a "Session" event became :Session:Entity)."""
-        for lbl in ("Sighting", "Item", "Session", "Place", "Robot", "Dialogue", "Utterance", "ReasoningStep", "Lookup", *BOOTH_LABELS):
+        for lbl in ("Sighting", "Item", "Session", "Place", "Robot", "Dialogue", "Utterance", "ReasoningStep", "Lookup", "Route", "Trick",
+                    *BOOTH_LABELS):
             self._write(f"MATCH (n:{lbl}) WHERE NOT n:Entity DETACH DELETE n")
 
     def start_session(self, session_id: str | None = None) -> str:
@@ -310,12 +314,12 @@ class Memory(BoothGraph):
                 o.description = CASE WHEN d.description='' THEN o.description ELSE d.description END,
                 o.lastSeen=datetime($ts), o.lastZone=d.zone, o.lastConfidence=d.conf,
                 o.lastBearing = CASE WHEN d.bearing IS NULL THEN o.lastBearing ELSE d.bearing END,
-                o.seenCount=o.seenCount+1, o.missCount=0, o.status='present'
+                o.seenCount=o.seenCount+1, o.missCount=0, o.status='present', o.learnedFrom='seen'
             MERGE (ob)-[dt:DETECTED]->(o)
             SET dt.confidence = d.conf, dt.zone = d.zone, dt.bearing = d.bearing  // SET accepts a null bearing; MERGE would refuse it
             MERGE (o)-[la:LOCATED_AT]->(l)
               ON CREATE SET la.firstSeen=datetime($ts), la.count=0
-            SET la.lastSeen=datetime($ts), la.count=la.count+1
+            SET la.lastSeen=datetime($ts), la.count=la.count+1, la.source='seen'
             """,
             loc=location, robot=self.s.robot_name, sid=session_id, ts=ts, obs=obs_id,
             summary=scene.summary, source=source, img=image_ref, n=len(det_rows), dets=det_rows,
@@ -337,7 +341,7 @@ class Memory(BoothGraph):
                 MERGE (a)-[r:{pred}]->(b)
                   ON CREATE SET r.since=datetime($ts), r.count=0
                 SET r.active=true, r.until=null, r.endedBy=null, r.lastConfirmed=datetime($ts),
-                    r.count=r.count+1, r.confidence=it.conf, r.lastObs=$obs
+                    r.count=r.count+1, r.confidence=it.conf, r.lastObs=$obs, r.source='seen'
                 """,
                 items=items, ts=ts, obs=obs_id,
             )
@@ -429,34 +433,49 @@ class Memory(BoothGraph):
         return sorted(w for w in re.findall(r"[a-z]+", (text or "").lower()) if w in have)
 
     def find_object(self, label: str, color: str | None = None, limit: int = 10) -> list[dict]:
+        """Matching objects, newest first, each with a `belief`: how its place was learned (seen / told) and how sure that still is."""
         if color is None:  # 'red shoe' means label shoe AND colour red
             qc = self._color_words(label)
             color = qc[0] if len(qc) == 1 else None
-        return self._read(
+        rows = self._read(
             """
             MATCH (o:Item) WHERE (toLower(o.label) CONTAINS toLower($label) OR toLower($label) CONTAINS toLower(o.label))
               AND ($color IS NULL OR toLower(coalesce(o.color,'')) = toLower($color))
             CALL (o) {
               OPTIONAL MATCH (o)-[la:LOCATED_AT]->(l:Place)
-              RETURN l.name AS location ORDER BY la.lastSeen DESC LIMIT 1
+              RETURN l.name AS location, toString(la.lastSeen) AS _loc_seen, toString(la.toldAt) AS _loc_told
+              ORDER BY coalesce(la.lastSeen, la.toldAt) DESC LIMIT 1
             }
             RETURN o.itemId AS id, o.label AS label, o.color AS color, o.description AS description,
                    o.status AS status, o.missCount AS consecutive_misses, o.seenCount AS times_seen,
                    toString(o.firstSeen) AS first_seen, toString(o.lastSeen) AS last_seen,
-                   o.lastZone AS last_zone, o.lastBearing AS last_bearing, location,
+                   o.lastZone AS last_zone, o.lastBearing AS last_bearing, location, _loc_seen, _loc_told,
+                   o.lastConfidence AS _seen_conf,
                    [(o)-[r]->(b:Item) WHERE type(r) IN $preds AND r.active |
-                      {predicate: type(r), target: b.label + ' ' + b.itemId, since: toString(r.since)}] AS active_relations,
+                      {predicate: type(r), target: b.label + ' ' + b.itemId, since: toString(r.since),
+                       _seen: toString(r.lastConfirmed), _told: toString(r.toldAt)}] AS active_relations,
                    [(o)-[mv:POSSIBLY_MOVED_FROM]->(c:Item) | {object: coalesce(c.color, 'unknown') + ' ' + c.label, id: c.itemId,
-                      place: head([(c)-[:LOCATED_AT]->(pl:Place) | pl.name]), confidence: mv.confidence}] AS maybe_moved_from,
+                      place: head([(c)-[:LOCATED_AT]->(pl:Place) | pl.name]), confidence: mv.confidence,
+                      learned_from: 'inferred'}] AS maybe_moved_from,
                    [(n:Item)-[mv2:POSSIBLY_MOVED_FROM]->(o) | {object: coalesce(n.color, 'unknown') + ' ' + n.label, id: n.itemId,
                       place: head([(n)-[:LOCATED_AT]->(pl2:Place) | pl2.name]), confidence: mv2.confidence}] AS maybe_moved_to,
                    [(o)-[h]->(hb:Item) WHERE type(h) IN $preds |
                       {predicate: type(h), target: hb.label + ' ' + hb.itemId, currently: h.active,
                        last_seen_so: toString(h.lastConfirmed), ended_by: h.endedBy}][..8] AS relation_history
-            ORDER BY o.lastSeen DESC LIMIT $limit
+            ORDER BY coalesce(o.lastSeen, o.lastTold) DESC LIMIT $limit
             """,
             label=label, color=color, preds=list(PREDICATES), limit=limit,
         )
+        return [self._with_belief(r) for r in rows]
+
+    def _with_belief(self, r: dict) -> dict:
+        """Say how each fact was learned and how sure the robot still is (knowledge.belief: the best evidence, faded by age)."""
+        hl = self.s.fact_half_life_days
+        loc_seen, loc_told, seen_conf = r.pop("_loc_seen", None), r.pop("_loc_told", None), r.pop("_seen_conf", None)
+        r["belief"] = best_belief([("seen", loc_seen, seen_conf), ("told", loc_told, None)], hl)
+        for rel in r.get("active_relations") or []:
+            rel["belief"] = best_belief([("seen", rel.pop("_seen", None), None), ("told", rel.pop("_told", None), None)], hl)
+        return r
 
     def related_objects(self, target_label: str, predicate: str = "ANY", include_ended: bool = False) -> list[dict]:
         """Objects related to the target. NEXT_TO and NEAR are symmetric, so both directions count; ON, INSIDE, IN_FRONT_OF and
@@ -903,6 +922,15 @@ class Memory(BoothGraph):
             MERGE (x)-[a:ADJACENT_TO]->(y) ON CREATE SET a.firstSeen = datetime(), a.lastSeen = datetime(), a.count = 0
             SET a.count = a.count + c
             """, s=src, d=dst)
+        self._write(
+            """
+            MATCH (t:Trick)-[p:PRACTISED_AT]->(s:Place {name: $s}), (d:Place {name: $d})
+            MERGE (t)-[q:PRACTISED_AT]->(d) ON CREATE SET q.attempts = 0, q.failed = 0, q.firstAt = p.firstAt
+            SET q.attempts = q.attempts + p.attempts, q.failed = q.failed + p.failed, q.lastAt = p.lastAt, q.lastResult = p.lastResult
+            DELETE p
+            """, s=src, d=dst)
+        # a route to or from the folded place is learned again on the next walk (its moves may not fit the merged room)
+        self._write("MATCH (r:Route)-[:STARTS_AT|ENDS_AT]->(:Place {name: $s}) DETACH DELETE r", s=src)
         self._write("MATCH (s:Place {name: $s}) DETACH DELETE s", s=src)
         return True
 
@@ -947,11 +975,171 @@ class Memory(BoothGraph):
             MERGE (n)-[r:POSSIBLY_MOVED_FROM]->(c)
               ON CREATE SET r.since = datetime($ts)
             SET r.confidence = round(100.0 * f * (CASE WHEN k = 1 THEN 0.6 ELSE 0.6 / k END)) / 100.0,
-                r.basis = 'same kind and colour, and the original stopped being seen elsewhere'
+                r.basis = 'same kind and colour, and the original stopped being seen elsewhere', r.source = 'inferred'
             RETURN n.itemId AS new_id, c.itemId AS old_id, n.label AS label, r.confidence AS confidence
             """,
             ids=new_ids, place=place, ts=ts,
         )
+
+    # ---- semantic memory a person adds: "the keys are in the drawer in the kitchen"
+    def remember_told(self, label: str, place: str, color: str | None = None, predicate: str | None = None,
+                      anchor: str | None = None, anchor_color: str | None = None, ts: str | None = None) -> dict[str, Any]:
+        """Store what someone told the robot as a TOLD fact: the object at the place (and, if given, ON/INSIDE/... an anchor object
+        there). It is believed with less confidence than a sighting and never counts as missed until the camera has seen it; a
+        sighting that matches it makes it a seen fact. Nothing of what the person said is stored, only the fact."""
+        ts = ts or now_iso()
+        label, color = (label or "").strip().lower(), (color or "unknown").strip().lower() or "unknown"
+        if not label or not (place or "").strip():
+            return {"stored": False, "reason": "I need what the object is and where it is"}
+        predicate = (predicate or "").strip().upper() or None
+        if predicate and predicate not in PREDICATES:
+            return {"stored": False, "reason": f"the relation must be one of {', '.join(PREDICATES)}"}
+        self.ensure_place(place)
+        item, created = self._told_item(label, color, place, ts)
+        out: dict[str, Any] = {"stored": True, "object": f"{label} ({item})", "place": place, "new_object": created,
+                               "learned_from": "told"}
+        if predicate and anchor:
+            a_id, a_new = self._told_item(anchor.strip().lower(), (anchor_color or "unknown").strip().lower() or "unknown", place, ts)
+            if predicate in EXCLUSIVE_PREDICATES:  # it is in the drawer now: no longer on the table
+                self._write(
+                    f"""
+                    MATCH (o:Item {{itemId: $o}})-[old:{predicate}]->(b:Item) WHERE old.active AND b.itemId <> $a
+                    SET old.active = false, old.until = datetime($ts), old.endedBy = 'told_otherwise'
+                    """, o=item, a=a_id, ts=ts)
+            self._write(
+                f"""
+                MATCH (o:Item {{itemId: $o}}), (a:Item {{itemId: $a}})
+                MERGE (o)-[r:{predicate}]->(a)
+                  ON CREATE SET r.since = datetime($ts), r.count = 0, r.source = 'told'
+                SET r.active = true, r.until = null, r.endedBy = null, r.toldAt = datetime($ts), r.lastObs = 'told'
+                """, o=item, a=a_id, ts=ts)
+            out["relation"] = {"predicate": predicate, "anchor": f"{anchor.strip().lower()} ({a_id})", "new_anchor": a_new}
+        return out
+
+    def _told_item(self, label: str, color: str, place: str, ts: str) -> tuple[str, bool]:
+        """The object at `place` this tells about (same label, compatible colour), or a new told-only object."""
+        rows = self._read(
+            """
+            MATCH (o:Item)-[:LOCATED_AT]->(:Place {name: $place})
+            WHERE toLower(o.label) = $label AND ($color = 'unknown' OR coalesce(o.color, 'unknown') IN ['unknown', $color])
+            RETURN o.itemId AS id ORDER BY coalesce(o.lastSeen, o.lastTold) DESC LIMIT 1
+            """, label=label, color=color, place=place)
+        created = not rows
+        item = rows[0]["id"] if rows else f"obj-{uuid.uuid4().hex[:8]}"
+        self._write(
+            """
+            MATCH (l:Place {name: $place})
+            MERGE (o:Item {itemId: $id})
+              ON CREATE SET o.label = $label, o.color = $color, o.firstSeen = datetime($ts), o.seenCount = 0, o.missCount = 0,
+                            o.status = 'told', o.learnedFrom = 'told'
+            SET o.lastTold = datetime($ts),
+                o.color = CASE WHEN $color = 'unknown' THEN o.color ELSE $color END,
+                o.status = CASE WHEN o.status = 'possibly_gone' THEN 'told' ELSE o.status END,
+                o.missCount = CASE WHEN o.status = 'told' THEN 0 ELSE o.missCount END
+            MERGE (o)-[la:LOCATED_AT]->(l)
+              ON CREATE SET la.count = 0, la.source = 'told'
+            SET la.toldAt = datetime($ts)
+            """, id=item, label=label, color=color, place=place, ts=ts)
+        return item, created
+
+    # ---- procedural memory: how to get from one place to the next
+    def learn_route(self, a: str, b: str, steps: list[dict], ts: str | None = None) -> dict[str, Any] | None:
+        """The robot walked from place a to place b making these moves: remember them as (Route)-[:STARTS_AT]->(a),
+        (Route)-[:ENDS_AT]->(b). One Route per direction; it keeps the quickest walk seen so far and the latest one, and counts walks."""
+        if not steps or a == b:
+            return None
+        ts = ts or now_iso()
+        secs = route_seconds(steps)
+        rows = self._write(
+            """
+            MATCH (x:Place {name: $a}), (y:Place {name: $b})
+            MERGE (r:Route {routeId: x.placeId + '>' + y.placeId})
+              ON CREATE SET r.firstWalked = datetime($ts), r.walks = 0
+            WITH r, x, y, (r.seconds IS NULL OR $secs < r.seconds) AS quicker
+            SET r.walks = r.walks + 1, r.lastWalked = datetime($ts), r.fromPlace = x.name, r.toPlace = y.name,
+                r.lastSteps = $steps, r.lastSeconds = $secs,
+                r.steps = CASE WHEN quicker THEN $steps ELSE r.steps END,
+                r.seconds = CASE WHEN quicker THEN $secs ELSE r.seconds END
+            MERGE (r)-[:STARTS_AT]->(x)
+            MERGE (r)-[:ENDS_AT]->(y)
+            RETURN r.routeId AS id, r.walks AS walks, r.seconds AS seconds
+            """, a=a, b=b, steps=json.dumps(steps), secs=secs, ts=ts)
+        return rows[0] if rows else None
+
+    def routes_along(self, places: list[str]) -> list[dict[str, Any]]:
+        """For each hop of a chain of places, how the robot walked it before (or the reverse walk, turned round), else nothing."""
+        if len(places) < 2:
+            return []
+        rows = self._read(
+            """
+            UNWIND range(0, size($p) - 2) AS i
+            WITH i, $p[i] AS a, $p[i + 1] AS b
+            OPTIONAL MATCH (f:Route)-[:STARTS_AT]->(:Place {name: a}), (f)-[:ENDS_AT]->(:Place {name: b})
+            OPTIONAL MATCH (g:Route)-[:STARTS_AT]->(:Place {name: b}), (g)-[:ENDS_AT]->(:Place {name: a})
+            RETURN i, a, b, f.steps AS steps, f.walks AS walks, toString(f.lastWalked) AS last_walked,
+                   g.steps AS back_steps, g.walks AS back_walks ORDER BY i
+            """, p=places)
+        out = []
+        for r in rows:
+            hop: dict[str, Any] = {"from": r["a"], "to": r["b"]}
+            if r["steps"]:
+                steps = json.loads(r["steps"])
+                hop.update(learned=True, steps=steps, how=describe_steps(steps), walks=r["walks"], last_walked=r["last_walked"])
+            elif r["back_steps"]:
+                steps = reverse_steps(json.loads(r["back_steps"]))
+                hop.update(learned=True, reversed=True, steps=steps, how=describe_steps(steps), walks=0,
+                           note=f"never walked this way: it is the way back from {r['b']}, turned round")
+            else:
+                hop.update(learned=False, how="no walk recorded yet")
+            out.append(hop)
+        return out
+
+    # ---- procedural memory: how tricks go in each place
+    def record_trick(self, name: str, place: str, failed: bool = False, source: str = "seen", ts: str | None = None) -> dict[str, Any]:
+        """A trick was played at `place` (failed=False), or one went wrong there (failed=True: the robot reported it, or a person
+        said so, source='told'). (Trick)-[:PRACTISED_AT {attempts, failed}]->(Place)."""
+        ts = ts or now_iso()
+        rows = self._write(
+            """
+            MATCH (l:Place {name: $place})
+            MERGE (t:Trick {name: $name})
+            MERGE (t)-[p:PRACTISED_AT]->(l)
+              ON CREATE SET p.attempts = 0, p.failed = 0, p.firstAt = datetime($ts)
+            SET p.attempts = CASE WHEN NOT $failed OR p.attempts <= p.failed THEN p.attempts + 1 ELSE p.attempts END,
+                p.failed = p.failed + CASE WHEN $failed THEN 1 ELSE 0 END,
+                p.lastAt = datetime($ts), p.lastResult = CASE WHEN $failed THEN 'failed' ELSE 'played' END,
+                p.lastSource = $source
+            RETURN p.attempts AS attempts, p.failed AS failed
+            """, name=name, place=place, failed=bool(failed), source=source, ts=ts)
+        return rows[0] if rows else {"attempts": 0, "failed": 0}
+
+    def trick_record(self, name: str, place: str) -> dict[str, int]:
+        rows = self._read("MATCH (:Trick {name: $name})-[p:PRACTISED_AT]->(:Place {name: $place}) RETURN p.attempts AS attempts, p.failed AS failed",
+                          name=name, place=place)
+        return rows[0] if rows else {"attempts": 0, "failed": 0}
+
+    def know_how(self, place: str | None = None) -> dict[str, Any]:
+        """Everything procedural: learned routes (from, to, moves, walks) and how each trick went per place."""
+        routes = self._read(
+            """
+            MATCH (r:Route)-[:STARTS_AT]->(a:Place), (r)-[:ENDS_AT]->(b:Place)
+            WHERE $place IS NULL OR $place IN [a.name, b.name]
+            RETURN a.name AS from, b.name AS to, r.steps AS steps, r.seconds AS seconds, r.walks AS walks,
+                   toString(r.lastWalked) AS last_walked ORDER BY r.walks DESC
+            """, place=place)
+        for r in routes:
+            r["steps"] = json.loads(r["steps"]) if r["steps"] else []
+            r["how"] = describe_steps(r["steps"])
+        tricks = self._read(
+            """
+            MATCH (t:Trick)-[p:PRACTISED_AT]->(l:Place) WHERE $place IS NULL OR l.name = $place
+            RETURN t.name AS trick, l.name AS place, p.attempts AS attempts, p.failed AS failed, p.lastResult AS last_result,
+                   toString(p.lastAt) AS last_at ORDER BY l.name, t.name
+            """, place=place)
+        for t in tricks:
+            t.update({k: v for k, v in trick_advice(t["attempts"], t["attempts"] - t["failed"], t["failed"],
+                                                    self.s.trick_avoid_after_fails).items() if k in ("avoid", "why")})
+        return {"routes": routes, "tricks": tricks}
 
     def clear_nams_links(self) -> int:
         """Forget which NAMS entity mirrors each object (used before a rebuild). Touches only our Object nodes."""
@@ -1081,7 +1269,8 @@ class Memory(BoothGraph):
                    count { (:Sighting) } AS Sighting, count { (s:Session) WHERE NOT s:Entity } AS Session,
                    count { (:Dialogue) } AS Dialogue, count { (:Utterance) } AS Utterance,
                    count { (:ReasoningStep) } AS ReasoningStep, count { (:Lookup) } AS Lookup,
-                   count { (:Theme) } AS Theme, count { (:Encounter) } AS Encounter
+                   count { (:Theme) } AS Theme, count { (:Encounter) } AS Encounter,
+                   count { (:Route) } AS Route, count { (:Trick) } AS Trick
             """
         )[0]
 
@@ -1095,11 +1284,13 @@ class Memory(BoothGraph):
             RETURN count {{ (:Sighting) }} AS observations, count {{ (:Utterance) }} AS messages,
                    count {{ (:Dialogue) }} AS conversations, count {{ (:Item) }} AS objects,
                    count {{ (:Place) }} AS places, count {{ ()-[:{REL_ALT}]->() }} AS spatial,
-                   count {{ (:ReasoningStep) }} AS steps, count {{ (:Lookup) }} AS tool_calls
+                   count {{ (:ReasoningStep) }} AS steps, count {{ (:Lookup) }} AS tool_calls,
+                   count {{ (:Route) }} AS routes, count {{ (:Trick) }} AS tricks
             """
         )[0]
         out = {"short": {"observations": r["observations"], "messages": r["messages"], "conversations": r["conversations"]},
-               "long": {"objects": r["objects"], "places": r["places"], "relationships": r["spatial"], "nams_entities": 0},
+               "long": {"objects": r["objects"], "places": r["places"], "relationships": r["spatial"], "nams_entities": 0,
+                        "routes": r["routes"], "tricks": r["tricks"]},
                "reasoning": {"steps": r["steps"], "tool_calls": r["tool_calls"]}}
         try:  # add what NAMS stored in the same database
             from .nams_graph import summary as nams_summary
@@ -1151,8 +1342,12 @@ class Memory(BoothGraph):
         return counts
 
     def graph_snapshot(self, limit: int = 300, lens: str = "long", nams_entities: bool = False) -> dict[str, Any]:
-        """Nodes/edges for one memory lens: long (entities+facts), short (observation + conversation stream),
-        reasoning (agent steps+tool calls), or all. Each node carries `memory` for colouring; stable ids for diffing."""
+        """Nodes/edges for one memory layer (ontology.LAYERS): long (semantic: objects, places, facts; procedural: routes and tricks),
+        short (working: where the robot is; episodic: recent sightings and the conversation), reasoning (agent steps and lookups), or
+        all. Each node carries `memory` (the layer, for colouring); stable ids for diffing. A memory type's name shows its layer."""
+        from .ontology import lens_name
+
+        lens = lens_name(lens)
         nodes: dict[str, dict] = {}
         edges: list[dict] = []
 
@@ -1186,7 +1381,7 @@ class Memory(BoothGraph):
                 edge(e["source"], e["target"], "ADJACENT_TO", "long")
             for e in self._read("MATCH (r:Robot)-[c:CURRENTLY_IN]->(p:Place) RETURN r.name AS robot, 'loc:' + p.name AS target, c.heading AS h"):
                 node("robot:" + e["robot"], "Robot", e["robot"], "long", detail=("heading %d deg" % e["h"]) if e["h"] is not None else "")
-                edge("robot:" + e["robot"], e["target"], "CURRENTLY_IN", "long")
+                edge("robot:" + e["robot"], e["target"], "CURRENTLY_IN", "short")  # short-term, working memory: where it is right now
 
         if lens in ("short", "all"):
             obs = self._read(
@@ -1219,6 +1414,30 @@ class Memory(BoothGraph):
             mids = [m["id"] for m in msgs]
             for n in self._read("MATCH (a:Utterance)-[:FOLLOWED_BY]->(b:Utterance) WHERE a.id IN $ids AND b.id IN $ids RETURN a.id AS a, b.id AS b", ids=mids):
                 edge(n["a"], n["b"], "FOLLOWED_BY", "short")
+
+        if lens in ("long", "all"):  # long-term, procedural: know-how, attached to the places it belongs to
+            for r in self._read(
+                """
+                MATCH (r:Route)-[:STARTS_AT]->(a:Place), (r)-[:ENDS_AT]->(b:Place)
+                RETURN r.routeId AS id, a.name AS a, b.name AS b, r.walks AS walks, r.steps AS steps LIMIT $limit
+                """, limit=limit):
+                for p in (r["a"], r["b"]):
+                    node("loc:" + p, "Place", p, "long", place=p)
+                steps = json.loads(r["steps"]) if r["steps"] else []
+                node("route:" + r["id"], "Route", f"{r['a']} → {r['b']}", "long", memory_type="procedural",
+                     detail=f"{describe_steps(steps)} (walked {r['walks']}x)")
+                edge("route:" + r["id"], "loc:" + r["a"], "STARTS_AT", "long")
+                edge("route:" + r["id"], "loc:" + r["b"], "ENDS_AT", "long")
+            for t in self._read(
+                """
+                MATCH (t:Trick)-[p:PRACTISED_AT]->(l:Place)
+                RETURN t.name AS trick, l.name AS place, p.attempts AS attempts, p.failed AS failed LIMIT $limit
+                """, limit=limit):
+                node("loc:" + t["place"], "Place", t["place"], "long", place=t["place"])
+                node("trick:" + t["trick"], "Trick", t["trick"].replace("_", " "), "long", memory_type="procedural")
+                edge("trick:" + t["trick"], "loc:" + t["place"], "PRACTISED_AT", "long")
+                nodes["trick:" + t["trick"]]["detail"] = (nodes["trick:" + t["trick"]].get("detail", "") +
+                                                          f"{t['place']}: {t['attempts']} tries, {t['failed']} went wrong. ")
 
         if lens in ("reasoning", "all"):
             steps = self._read(

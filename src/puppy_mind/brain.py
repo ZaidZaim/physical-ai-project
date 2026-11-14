@@ -21,6 +21,7 @@ from .agent import Agent
 from .config import Settings, get_settings
 from .drive import SETTLE_S, DriveState
 from .graph import Memory, now_iso
+from .knowledge import compress_journey, describe_steps, trick_advice
 from .models import Scene
 from .navigate import OPPOSITE, Navigator, Plan, pick_target, plan_go_to, plan_move
 from .pose import HeadingTracker
@@ -94,6 +95,7 @@ class Brain:
         self._last_here: str | None = None  # time of the last frame that showed we were still in the current place
         self._suspect_since: str | None = None  # time of the first frame of a suspected move (cleared once we settle)
         self._settled_motion: tuple[int, int] | None = None  # drive counters when we last settled in a place
+        self._settled_at = time.monotonic()  # when: the moves made after it, up to arriving somewhere else, are the route between
         self._candidate: str | None = None  # where the last unconfirmed frame pointed (filed only if that is where we end up)
         self._confirmed_key: str | None = None
         self.obs_seq = 0  # camera views checked so far (stored, near-duplicate or empty); the look-around scan waits for it to move
@@ -127,6 +129,9 @@ class Brain:
             self.agent.go_fn = self.go_to
             self.agent.move_fn = self.move
             self.agent.stop_fn = self.stop_moving
+            self.agent.told_fn = self.remember_told
+            self.agent.know_how_fn = self.know_how
+            self.agent.trick_feedback_fn = self.trick_feedback
         # The booth host: greet, talk as the Graph Wizard, keep anonymous notes of what the booth talked about (never who).
         self.voice = None
         self.drive.set_booth(self.s.booth_mode, self.s.look_up_deg)
@@ -134,6 +139,7 @@ class Brain:
         self.booth = BoothHost(self.s, self.mem, client=self.agent.client if self.agent else None, agent=self.agent, bus=self.bus,
                                gesture_fn=self.gesture)
         self.booth.move_fn, self.booth.stop_fn, self.booth.routine_fn = self.move, self.stop_moving, self.routine
+        self.booth.trick_feedback_fn = self.trick_feedback
         self.booth.nams = self.nams if self.nams.enabled else None
         if self.agent:
             from .voice import Voice
@@ -231,6 +237,7 @@ class Brain:
         res = self._ingest(scene, loc, source, jpeg, ts, count_misses=not moved, place_conf=place_conf, heading=self.heading.value())
         self._last_here, self._suspect_since = res.get("ts") or ts or now_iso(), None  # settled: this frame shows where we are
         self._settled_motion = self.drive.motion_snapshot()
+        self._settled_at = time.monotonic()
         self._moved = self._moved_view = False
         return res
 
@@ -319,6 +326,7 @@ class Brain:
                 why_not = self._not_adjacent(r, prev, scene.room_type, ts or now_iso())
                 if not why_not:
                     self.mem.note_transition(prev, name)
+                    self._learn_route(prev, name)
                     self.nams.submit_transition(prev, self._place_id(prev), name, self._place_id(name, scene.room_type))
                 self.bus.publish("map", {"from": prev, "to": name, "learned": not why_not, "reason": why_not or "rooms next to each other"})
                 self._moved_view = True
@@ -331,6 +339,21 @@ class Brain:
         self.place_state = {"mode": "auto", "name": self.location, "confidence": round(r.confidence, 2), "reason": r.reason,
                             "room_type": scene.room_type, "uncertain": r.uncertain, "hint": r.hint}
         return self.location, r.uncertain, r.confidence
+
+    def _learn_route(self, a: str, b: str) -> None:
+        """Procedural memory: the moves made since the robot last settled in `a` are how to get to `b` (only for a direct change of
+        room, the same evidence that teaches that the two connect). Turning on the spot alone is no route."""
+        if not hasattr(self.mem, "learn_route"):
+            return
+        steps = compress_journey(self.drive.journey_since(self._settled_at))
+        if not any(s["kind"] in ("forward", "back") for s in steps):
+            return
+        try:
+            r = self.mem.learn_route(a, b, steps)
+        except Exception as e:
+            self.bus.publish("error", {"error": f"could not store the route {a} -> {b}: {e}"[:200]})
+            return
+        self.bus.publish("route", {"from": a, "to": b, "how": describe_steps(steps), "walks": (r or {}).get("walks")})
 
     def _not_adjacent(self, r: TrackResult, prev: str, room: str, ts: str) -> str:
         """Why this change of place must NOT be learned as 'prev is next to the new place' ('' = learn it).
@@ -417,6 +440,8 @@ class Brain:
             bearing = self.mem.bearing_since(target["id"], here, self.heading_epoch)
         plan = plan_go_to(target, here, heading, bearing, route, weak_route=weak)
         out: dict[str, Any] = {"plan": plan.as_dict()}
+        if route and len(route) > 1 and hasattr(self.mem, "routes_along"):  # procedural memory: how each hop was walked before
+            out["route_how"] = self.mem.routes_along(route)
         if plan.kind == "scan" and not (self.perception and self.fps > 0):
             out["run"] = {"started": False, "reason": "To look around I need the camera running with frame analysis on. Start the camera and ask again."}
         elif execute and plan.kind in ("turn", "scan"):
@@ -442,8 +467,14 @@ class Brain:
         elif self.drive.in_action:
             r = {"started": False, "reason": "I'm still finishing a trick"}
         else:
-            ready = self.sound_fn("spin") if mv.direction == "spin" and self.s.spin_music and self.sound_fn else None
-            r = self._spin_with_music(mv, ready, in_routine) if ready is not None else self.nav.start_move(mv)
+            # a spin waits for its music, so whatever would stop it must be checked now: the model must never hear "started" for a
+            # spin that then cannot start (seen at the robot: "Spinning!" with Enable keys off, and the music played alone)
+            if mv.direction == "spin" and not self.drive.armed:
+                r = {"started": False, "reason": "my legs are not enabled: someone has to click 'Enable keys' in the app first "
+                                                 "(and keep a hand near me)"}
+            else:
+                ready = self.sound_fn("spin") if mv.direction == "spin" and self.s.spin_music and self.sound_fn else None
+                r = self._spin_with_music(mv, ready, in_routine) if ready is not None else self.nav.start_move(mv)
             if r.get("started"):
                 self._moved = True
         print("move %s: %s" % (direction, r.get("message") if r.get("started") else "refused, " + str(r.get("reason"))), flush=True)
@@ -613,13 +644,63 @@ class Brain:
         self.booth.maybe_invite(self.listening and not self._engaged)  # the claw machine cheerleader, when nobody talks to the robot
 
     def gesture(self, name: str, manual: bool = False, asked: bool = False) -> dict:
-        """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks."""
+        """A trick (booth mode). Never while the navigator is turning; drive.py adds the motion and rate checks. Procedural memory:
+        every trick played is counted for the place it was played in, and one that went wrong here too often is skipped (unless a
+        person pressed the button for it: manual)."""
+        advice = self.trick_advice(name)
         if self.nav.state.get("active"):
             r = {"ok": False, "reason": "the robot is turning toward something"}
+        elif advice and advice["avoid"] and not manual:
+            r = {"ok": False, "reason": f"I'd rather not do {name.replace('_', ' ')} here: {advice['why']}", "avoided": True}
         else:
             r = self.drive.request_action(name, manual, asked)
+            if r.get("ok") and hasattr(self.mem, "record_trick"):
+                try:
+                    self._place_id(self.location)  # the place node exists before a trick is counted against it
+                    self.mem.record_trick(name, self.location)
+                except Exception:
+                    pass  # the trick still plays; only its count is lost
         self.bus.publish("gesture", {"name": name, **r})
         return r
+
+    def trick_advice(self, name: str, place: str | None = None) -> dict | None:
+        if not hasattr(self.mem, "trick_record"):
+            return None
+        try:
+            rec = self.mem.trick_record(name, place or self.location)
+        except Exception:
+            return None
+        return trick_advice(rec["attempts"], rec["attempts"] - rec["failed"], rec["failed"], self.s.trick_avoid_after_fails)
+
+    def trick_feedback(self, name: str | None = None, worked: bool = False) -> dict:
+        """Someone says a trick went wrong ("you fell over"): count it against that trick in this place (a TOLD outcome). No name:
+        the trick played last. worked=True is only acknowledged (every play already counts as an attempt)."""
+        name = (name or self.drive.action or "").strip()
+        if not name:
+            return {"recorded": False, "reason": "I haven't done a trick yet"}
+        if worked:
+            return {"recorded": True, "trick": name, "place": self.location, "note": "glad it worked"}
+        if not hasattr(self.mem, "record_trick"):
+            return {"recorded": False, "reason": "my memory is not available"}
+        self._place_id(self.location)
+        rec = self.mem.record_trick(name, self.location, failed=True, source="told")
+        adv = trick_advice(rec["attempts"], rec["attempts"] - rec["failed"], rec["failed"], self.s.trick_avoid_after_fails)
+        self.bus.publish("trick_feedback", {"trick": name, "place": self.location, **rec})
+        return {"recorded": True, "trick": name, "place": self.location, **rec,
+                "from_now_on": "I'll skip it in this room" if adv["avoid"] else "I'll be careful with it here"}
+
+    # ---- semantic memory a person adds, and procedural memory as a whole
+    def remember_told(self, label: str, place: str | None = None, color: str | None = None, predicate: str | None = None,
+                      anchor: str | None = None, anchor_color: str | None = None) -> dict:
+        """'The keys are in the drawer' -> a TOLD fact (weaker than a sighting until the camera confirms it). Place: here, unless named."""
+        place = (place or "").strip() or self.location
+        r = self.mem.remember_told(label, place, color, predicate, anchor, anchor_color)
+        if r.get("stored"):
+            self.bus.publish("told", {"object": r["object"], "place": place, "relation": r.get("relation")})
+        return r
+
+    def know_how(self, place: str | None = None) -> dict:
+        return self.mem.know_how(place) if hasattr(self.mem, "know_how") else {"routes": [], "tricks": []}
 
     def _seen_now(self, target: dict, seq: int) -> dict | None:
         """Did the latest stored observation detect the target? Same label; colour must agree when both are known."""

@@ -9,7 +9,7 @@ from puppy_mind import ontology
 from puppy_mind.config import get_settings
 from puppy_mind.devfake import FakeMemory
 
-# Labels NAMS creates in a shared database (seen via its idx_* indexes and its documented node types).
+# Labels NAMS creates in a shared database (NAMS's Skill is its own procedural memory: the robot's tricks are :Trick) (seen via its idx_* indexes and its documented node types).
 NAMS_LABELS = {"Entity", "Conversation", "Message", "AgentStep", "ToolCall", "Observation", "Reflection", "Skill",
                "SkillVersion", "SkillComponent", "SkillStep", "DistillationRun", "Alias", "PipelineMeta"}
 SRC = Path(__file__).parents[1] / "src" / "puppy_mind"
@@ -22,16 +22,25 @@ def test_we_never_write_labels_that_nams_owns():
     a, b = src.index("    def _migrate_labels"), src.index("    def init_schema")
     src = src[:a] + src[b:]  # the one-time migration must name the OLD label (:Observation) to rename it; nothing else may
     used = set(cypher_label.findall(src))
+    assert {"Route", "Trick"} <= used  # procedural memory is written, under labels of our own
     assert not (used & NAMS_LABELS), used & NAMS_LABELS
     for label, *_ in ontology.MEMORY_TYPES:
         assert label not in NAMS_LABELS, label
 
 
-def test_ontology_covers_three_memory_layers_and_edges_point_at_real_types():
+def test_ontology_files_everything_under_three_layers_and_a_memory_type_and_edges_point_at_real_types():
     o = ontology.build({"Item": 3, "Sighting": 5})
     ids = {n["id"] for n in o["nodes"]}
-    assert {n["memory"] for n in o["nodes"]} == {"short", "long", "reasoning"}
-    assert {"Agent", "Object", "Location", "Sighting", "Utterance", "ReasoningStep", "Lookup"} <= ids
+    assert set(o["layers"]) == {n["memory"] for n in o["nodes"]} == {"short", "long", "reasoning"}  # the umbrella
+    assert o["memory_types"] == {"working": "short", "episodic": "short", "semantic": "long", "procedural": "long", "reasoning": "reasoning"}
+    assert set(o["provenance"]) == {"seen", "told", "inferred"}
+    by = {n["id"]: n for n in o["nodes"]}
+    kind = lambda i: (by[i]["memory"], by[i]["memory_type"])
+    assert kind("Object") == ("long", "semantic") and kind("Sighting") == ("short", "episodic") and kind("Event") == ("long", "episodic")
+    assert kind("Route") == kind("Trick") == ("long", "procedural") and kind("Lookup") == ("reasoning", "reasoning")
+    e = next(e for e in o["edges"] if e["type"] == "CURRENTLY_IN")
+    assert (e["memory"], e["memory_type"]) == ("short", "working")
+    assert {"Agent", "Object", "Location", "Sighting", "Utterance", "ReasoningStep", "Lookup", "Route", "Trick"} <= ids
     for e in o["edges"]:
         assert e["source"] in ids and e["target"] in ids, e
     po = next(n for n in o["nodes"] if n["id"] == "Object")
@@ -53,17 +62,21 @@ def make_fake():
 
 def test_lenses_separate_memory_types_and_share_entities_as_context():
     m, oid = make_fake()
+    m.learn_route("Booth", "Hall", [{"kind": "forward", "speed": 2, "seconds": 3.0}])
+    m.record_trick("shake_hands", "Booth")
     kinds = lambda lens: {n["kind"] for n in m.graph_snapshot(lens=lens)["nodes"]}
-    assert kinds("long") == {"Object", "Place"}
-    assert {"Sighting", "Utterance", "Dialogue"} <= kinds("short")
+    assert kinds("long") == {"Object", "Place", "Route", "Trick"}  # long-term: semantic and procedural
+    assert kinds("semantic") == kinds("procedural") == kinds("long")  # a memory type's name shows its layer
+    assert {"Sighting", "Utterance", "Dialogue"} <= kinds("short") and kinds("episodic") == kinds("short")
     assert {"ReasoningStep", "Lookup"} <= kinds("reasoning") and "Utterance" not in kinds("reasoning")
     assert kinds("long") <= kinds("all") and {"ReasoningStep", "Sighting"} <= kinds("all")
     snap = m.graph_snapshot(lens="reasoning")
     mem = {n["kind"]: n["memory"] for n in snap["nodes"]}
-    assert mem["ReasoningStep"] == "reasoning" and mem["Object"] == "long"  # colour = memory type, even as context
+    assert mem["ReasoningStep"] == "reasoning" and mem["Object"] == "long"  # colour = memory layer, even as context
     assert any(e["type"] == "RELIED_ON" and e["target"] == oid for e in snap["edges"])  # provenance: answer -> entity
     s = m.memory_summary()
     assert s["short"]["messages"] == 2 and s["reasoning"] == {"steps": 1, "tool_calls": 1} and s["long"]["objects"] == 2
+    assert (s["long"]["routes"], s["long"]["tricks"]) == (1, 1)
 
 
 @pytest.fixture
@@ -82,8 +95,9 @@ def client(monkeypatch):
 
 def test_api_lenses_ontology_and_demo_guard(client, monkeypatch):
     assert client.get("/api/graph?lens=bad").status_code == 400
-    for lens in ("long", "short", "reasoning", "all"):
+    for lens in ("long", "short", "reasoning", "all", "semantic", "procedural", "episodic"):
         assert client.get(f"/api/graph?lens={lens}").status_code == 200
+    assert client.get("/api/graph?lens=procedural").json()["lens"] == "long"
     o = client.get("/api/ontology").json()
     assert {n["memory"] for n in o["nodes"]} == {"short", "long", "reasoning"}
     assert client.get("/api/state").json()["memory"] == "fake"

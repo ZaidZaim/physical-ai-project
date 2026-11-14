@@ -63,6 +63,9 @@ class DriveState:
         self._auto = False  # the navigator is driving (only while armed; any user input ends it)
         # what the robot has done, so the brain can tell "only turned on the spot" from "walked somewhere"
         self.translations = 0  # commands that moved it forward/back/sideways
+        # procedural memory: the moves it made, as segments {kind, speed, start, end} (monotonic time), for learning routes
+        self.journey: list[dict] = []
+        self._seg: dict | None = None
         self.rotations = 0     # commands that turned it
         self.last_rotation = 0.0
         # booth mode: look up at people, greet with a trick
@@ -142,6 +145,7 @@ class DriveState:
             if not on:
                 self._x = self._y = self._yaw = 0.0
                 self._auto = False
+                self._log_motion(time.monotonic())
 
     def set_speed(self, level: int) -> None:
         with self._lock:
@@ -169,6 +173,7 @@ class DriveState:
                 self._walk_until = now + DEADMAN_S + RETILT_S
             self._x, self._y, self._yaw = _clamp(x), _clamp(y), _clamp(yaw)
             self._stamp = time.monotonic()
+            self._log_motion(self._stamp)
             if self._x or self._y or self._yaw:
                 self._moving_until = self._stamp + DEADMAN_S + SETTLE_S
             if self._x or self._y:
@@ -182,6 +187,41 @@ class DriveState:
             self._x = self._y = self._yaw = 0.0
             self._stamp = time.monotonic()
             self._auto = False
+            self._log_motion(self._stamp)
+
+    JOURNEY_MAX = 400
+
+    def _log_motion(self, now: float) -> None:
+        """Called with the lock held after every command: close the running segment when the move changes. A command stream that
+        just stops (the dead-man) ends DEADMAN_S after its last command."""
+        from .knowledge import motion_kind
+
+        kind = motion_kind(self._x, self._yaw)
+        seg = self._seg
+        if seg is not None:
+            end = min(now, seg["last"] + DEADMAN_S)
+            if kind != seg["kind"] or self.speed != seg["speed"] or now - seg["last"] > DEADMAN_S:
+                seg["end"] = end
+                self.journey.append(seg)
+                del self.journey[:-self.JOURNEY_MAX]
+                seg = self._seg = None
+            else:
+                seg["last"] = now
+        if seg is None and kind != "idle":
+            self._seg = {"kind": kind, "speed": self.speed, "start": now, "last": now}
+
+    def journey_since(self, t0: float) -> list[dict]:
+        """The moves made since monotonic time t0, as [{kind, speed, seconds}] (the move still running counts up to now)."""
+        with self._lock:
+            segs = list(self.journey)
+            if self._seg is not None:
+                segs.append({**self._seg, "end": min(time.monotonic(), self._seg["last"] + DEADMAN_S)})
+        out = []
+        for s in segs:
+            start, end = max(s["start"], t0), s["end"]
+            if end > start:
+                out.append({"kind": s["kind"], "speed": s["speed"], "seconds": end - start})
+        return out
 
     def begin_auto(self) -> bool:
         """The navigator asks to drive. Only possible while armed (the person has said motion is OK)."""
@@ -196,6 +236,7 @@ class DriveState:
             if self._auto:
                 self._x = self._y = self._yaw = 0.0
                 self._stamp = time.monotonic()
+                self._log_motion(self._stamp)
             self._auto = False
 
     @property

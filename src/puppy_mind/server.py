@@ -294,9 +294,11 @@ def changes(since: str):
 
 @app.get("/api/graph")
 def graph(lens: str = "long", nams: bool = False):
-    if lens not in ("long", "short", "reasoning", "all"):
-        raise HTTPException(400, "lens must be long, short, reasoning or all")
-    return brain.mem.graph_snapshot(lens=lens, nams_entities=nams)
+    from .ontology import LENSES, lens_name
+
+    if lens_name(lens) not in LENSES:
+        raise HTTPException(400, "lens must be one of " + ", ".join(LENSES))
+    return brain.mem.graph_snapshot(lens=lens_name(lens), nams_entities=nams)
 
 
 @app.get("/api/memory/summary")
