@@ -15,9 +15,9 @@
 <style>
   :root { --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", sans-serif; }
   :root[data-theme="light"] { --bg:#e9edf2; --panel:#eff2f6; --card:#f6f8fa; --ink:#1c2733; --mute:#5d6d7e; --line:#c8d0d9; --accent:#2a7f9e; --accent-ink:#fff;
-          --long:#b9691a; --short:#2f8f55; --reasoning:#7050cc; --gone:#8794a3; --new:#2f8f55; --seen:#2a7f9e; --miss:#b7791f; --ask:#7050cc; --bad:#c0392b; --canvas:#f3f5f8; }
+          --long:#b9691a; --short:#2f8f55; --proc:#c0507a; --work:#2a7f9e; --reasoning:#7050cc; --gone:#8794a3; --new:#2f8f55; --seen:#2a7f9e; --miss:#b7791f; --ask:#7050cc; --bad:#c0392b; --canvas:#f3f5f8; }
   :root[data-theme="dark"] { --bg:#0b1117; --panel:#101821; --card:#141e29; --ink:#dde6ee; --mute:#7e8e9f; --line:#223040; --accent:#4db3d6; --accent-ink:#06151c;
-          --long:#e3a047; --short:#4cc27a; --reasoning:#a98cf5; --gone:#667587; --new:#4cc27a; --seen:#4db3d6; --miss:#e0a63a; --ask:#a98cf5; --bad:#f06a5d; --canvas:#0d141c; }
+          --long:#e3a047; --short:#4cc27a; --proc:#ec7fa5; --work:#4db3d6; --reasoning:#a98cf5; --gone:#667587; --new:#4cc27a; --seen:#4db3d6; --miss:#e0a63a; --ask:#a98cf5; --bad:#f06a5d; --canvas:#0d141c; }
   * { box-sizing:border-box } html, body { height:100%; max-height:100vh }
   body { margin:0; background:var(--bg); color:var(--ink); font:12px/1.4 var(--sans); display:flex; flex-direction:column; overflow:hidden }
   [hidden] { display:none !important }
@@ -233,10 +233,10 @@
   <!-- centre: the memory -->
   <section class="center">
     <div class="toolbar" id="lenses">
-      <button class="lens on" data-lens="long" style="--c:var(--long)" title="Entities and facts: objects, places and how they relate"><span>LONG-TERM<small id="c-long"></small></span></button>
-      <button class="lens" data-lens="short" style="--c:var(--short)" title="What is happening now: the stream of observations and the conversation"><span>SHORT-TERM<small id="c-short"></small></span></button>
+      <button class="lens on" data-lens="long" style="--c:var(--long)" title="Long-term memory. Semantic: objects, places and how they relate, each fact seen, told or inferred and fading unless confirmed. Procedural: routes between rooms and how each trick goes in each room"><span>LONG-TERM<small id="c-long"></small></span></button>
+      <button class="lens" data-lens="short" style="--c:var(--short)" title="Short-term memory. Working: where the robot is now. Episodic: the stream of sightings and the conversation"><span>SHORT-TERM<small id="c-short"></small></span></button>
       <button class="lens" data-lens="reasoning" style="--c:var(--reasoning)" title="How answers were reached: reasoning steps and the lookups they made"><span>REASONING<small id="c-reasoning"></small></span></button>
-      <button class="lens" data-lens="all" style="--c:var(--ink)" title="All three memory types in one graph"><span>ALL<small>every layer</small></span></button>
+      <button class="lens" data-lens="all" style="--c:var(--ink)" title="All three memory layers in one graph"><span>ALL<small>every layer</small></span></button>
       <input type="text" id="find" placeholder="Find an object or place"><label class="chk" title="Also show the entities NAMS extracted from your questions. Off: one node per thing."><input type="checkbox" id="namsent"> NAMS entities</label>
       <span class="gstat" id="gstat"></span>
     </div>
@@ -348,7 +348,7 @@ const LEGEND_MEM = $('#legend').innerHTML;
 const NEO = { Place:['#F79767', '#F36924', '#fff'], Object:['#57C7E3', '#23B3D7', '#2A2C34'], Robot:['#F16667', '#EB2728', '#fff'],
   gone:['#A5ABB6', '#9AA1AC', '#2A2C34'], Sighting:['#FFC454', '#D7A013', '#2A2C34'], Utterance:['#DA7194', '#CC3C6C', '#fff'],
   Dialogue:['#C990C0', '#B261A5', '#fff'], ReasoningStep:['#8DCC93', '#5DB665', '#2A2C34'], Lookup:['#4C8EDA', '#2870C2', '#fff'],
-  Entity:['#D9C8AE', '#C0A378', '#2A2C34'] };
+  Route:['#ec7fa5', '#c0507a', '#fff'], Trick:['#f2a7c3', '#d9789e', '#2A2C34'], Entity:['#D9C8AE', '#C0A378', '#2A2C34'] };
 const NEO_NAME = { gone:'possibly gone', ReasoningStep:'Reasoning step', Entity:'NAMS entity' };
 const NEO_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const NEO_SIZE = { Place:86, Robot:60, Object:62, gone:50, Sighting:58, Utterance:74, Dialogue:66, ReasoningStep:74, Lookup:62, Entity:58 };  // px
@@ -682,7 +682,7 @@ async function refreshSummary() {
   try {
     const m = await api('/api/memory/summary');
     $('#c-short').textContent = `${m.short.observations} sightings · ${m.short.messages} messages`;
-    $('#c-long').textContent = `${m.long.objects} objects · ${m.long.relationships} facts`;
+    $('#c-long').textContent = `${m.long.objects} objects · ${m.long.relationships} facts · ${m.long.routes} routes`;
     $('#c-reasoning').textContent = `${m.reasoning.steps} steps · ${m.reasoning.tool_calls} lookups`;
   } catch (e) {}
 }
@@ -889,8 +889,8 @@ async function loadTimeline() {
 
 /* ---------- ontology ---------- */
 let ontoNet = null;
-const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what exists', order:['Agent', 'Object', 'Location', 'Event', 'Person', 'Organization', 'Topic'] },
-                short:{ y:60, label:'SHORT-TERM MEMORY: what is happening', order:['Session', 'Sighting', 'Dialogue', 'Utterance'] },
+const LANES = { long:{ y:-170, label:'LONG-TERM MEMORY: what is known. Semantic (seen, told or inferred; fades unless confirmed) and procedural (know-how)', order:['Agent', 'Object', 'Location', 'Event', 'Person', 'Organization', 'Topic', 'Route', 'Trick'] },
+                short:{ y:60, label:'SHORT-TERM MEMORY: what is happening. Working (where it is now) and episodic (sightings, the conversation)', order:['Session', 'Sighting', 'Dialogue', 'Utterance'] },
                 reasoning:{ y:270, label:'REASONING MEMORY: how answers were reached', order:['ReasoningStep', 'Lookup'] } };
 async function loadOntology() {
   const o = await api('/api/ontology'), M = MEM(), GAP = 230;
@@ -926,7 +926,7 @@ async function loadOntology() {
   ontoNet.on('click', p => {
     const box = $('#ontodetail');
     if (p.nodes.length) { const n = data.nodes.get(p.nodes[0])._n;
-      box.innerHTML = `<b>${esc(n.aura_label)}</b>${n.label !== n.aura_label ? ` <span class="tag">${esc(n.label)} in NAMS</span>` : ''} <span class="tag">${esc(o.layers[n.memory])}</span>${n.pole ? ` <span class="tag">${esc(n.pole)}</span>` : ''}${n.pii ? ' <span class="tag warn">personal data</span>' : ''}<br>${esc(n.description)}<br>`
+      box.innerHTML = `<b>${esc(n.aura_label)}</b>${n.label !== n.aura_label ? ` <span class="tag">${esc(n.label)} in NAMS</span>` : ''} <span class="tag">${esc(o.layers[n.memory])}</span>${n.memory_type && n.memory_type !== n.memory ? ` <span class="tag">${esc(n.memory_type)}</span>` : ''}${n.pole ? ` <span class="tag">${esc(n.pole)}</span>` : ''}${n.pii ? ' <span class="tag warn">personal data</span>' : ''}<br>${esc(n.description)}<br>`
         + `<span style="color:var(--mute)">${n.count} now · properties: ${esc(n.properties.join(', ') || 'none')}</span>`; }
     else if (p.edges.length) { const list = data.edges.get(p.edges[0])._list, e0 = list[0];
       box.innerHTML = `<b>${esc(e0.source)} → ${esc(e0.target)}</b><br>` + list.map(e => `<div><span class="tag">${esc(e.type)}</span> ${esc(e.description || '')}${e.count != null ? ` <span style="color:var(--mute)">${e.count} in your graph</span>` : ''}</div>`).join(''); }

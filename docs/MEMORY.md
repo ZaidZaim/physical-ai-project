@@ -1,5 +1,49 @@
 # Memory design: Aura world model + NAMS agent memory
 
+## Memory layers and types, applied to a robot that lives in space
+
+The umbrella stays the Neo4j agent-memory model: **short-term**, **long-term** and **reasoning** memory. Inside it sit the memory
+types of cognitive science, and the usual split (conversational, semantic, episodic, procedural) does not get an extra box called
+"spatial": for a robot, *where* runs through every type, the way the hippocampus both holds the map and stamps every episode with a
+place. So each type here is the familiar one with a place attached (`ontology.py` files every label and relationship under a layer,
+`memory`, and a type, `memory_type`):
+
+| Layer | Memory type | Without space | With space (this robot) | Stored as |
+|---|---|---|---|---|
+| Short-term | working | the current turn | where am I, which way am I facing | `(Robot)-[:CURRENTLY_IN {heading}]->(Place)`, kept in RAM too |
+| Short-term | episodic | the conversation so far | "at 10:42 I saw the mug on the kitchen table" | `Sighting -[:TAKEN_AT]-> Place`, `Dialogue`/`Utterance` |
+| Long-term | semantic | "Zaid likes graphs" | "the mug is in the kitchen, on the table" (the map) | `Item -[:LOCATED_AT]-> Place`, spatial relations, `ADJACENT_TO` |
+| Long-term | procedural | "how I answer FAQs" | "how to get from the hall to the kitchen", "no push-ups on this carpet" | `Route`, `Trick -[:PRACTISED_AT]-> Place` |
+| Long-term | episodic | a summary of a past chat | the anonymous note of one booth conversation, and where it was held | `Encounter -[:HELD_AT]-> Place` |
+| Reasoning | | | how an answer was reached, and which things it relied on | `ReasoningStep`, `Lookup`, `RELIED_ON` |
+
+Conversational memory is the episodic memory of talk: `Dialogue`/`Utterance` here, `Conversation`/`Message` in NAMS. What a person
+*tells* the robot about the world ("the keys are in the drawer") does not stay a sentence: it becomes a semantic fact marked `told`.
+
+**Provenance and forgetting** (`knowledge.py`). Every semantic fact records how it was learned, as `source` on `LOCATED_AT`, the
+spatial relations and `POSSIBLY_MOVED_FROM`:
+
+| `source` | Starting confidence | Example |
+|---|---|---|
+| `seen` | the detector's confidence (about 0.9) | the camera saw the mug on the table |
+| `told` | 0.6 | "the keys are in the kitchen drawer" (`remember_this` tool); a told-only object has status `told` and is never missed |
+| `inferred` | 0.4 | a look-alike appeared in another room after the original stopped being seen |
+
+A fact's confidence is the best of its evidence, halved every `FACT_HALF_LIFE_DAYS` (default 7) since that evidence; answers say
+"sure" (0.7 and up), "probably" (0.4 to 0.7) or "not sure any more". Nothing is deleted by fading: episodes stay as the record of what
+was seen, and a new sighting restores full confidence.
+
+**Procedural memory** is learned by doing:
+* `drive.py` logs every move as a segment (forward / back / turn, speed level, seconds). When the robot changes room directly (the same
+  evidence that teaches `ADJACENT_TO`), the moves since it last settled in the old room become a `Route` (`STARTS_AT` the old room,
+  `ENDS_AT` the new one): one per direction, keeping the quickest walk and the latest, with a walk count. `go_to_object` across rooms
+  returns these moves per hop (`route_how`; a reversed route is marked as never walked that way). The robot never replays a route by
+  itself: the gyro reports false turns while walking.
+* Every trick played is an attempt at that place; one that went wrong (a person says so: `trick_feedback`, or `trick_went_wrong` at the
+  booth) counts as failed, source `told`. A trick that failed `TRICK_AVOID_AFTER_FAILS` times (default 2) in a place, and more often
+  than it worked, is skipped there unless someone presses its button.
+* NAMS owns the label `Skill` (its own procedural memory for agents, e.g. reusable tool sequences), so these are `Route` and `Trick`.
+
 Two graphs, each doing what it is best at, cross-linked.
 
 | | Aura (`graph.py`) | NAMS (`nams.py`) |
@@ -16,9 +60,10 @@ Your Aura instance also holds NAMS's own data (bring-your-own-database): it has 
 
 | Concept | Memory type | This app (Aura) | NAMS equivalent |
 |---|---|---|---|
-| Camera frame analysed | short-term | `Sighting` (was `Observation`; migrated 2026-10-14) | `Observation` (message summaries) |
-| One chat | short-term | `Dialogue`-[`HAS_UTTERANCE`]->`Utterance`-[`FOLLOWED_BY`]->`Utterance` | `Conversation`/`Message` |
-| Entities and facts | long-term | `Object`, `Location`, `Robot` + `ON`/`NEXT_TO`/... | `Entity` + relationships |
+| Camera frame analysed | short-term (episodic) | `Sighting` (was `Observation`; migrated 2026-10-14) | `Observation` (message summaries) |
+| One chat | short-term (episodic) | `Dialogue`-[`HAS_UTTERANCE`]->`Utterance`-[`FOLLOWED_BY`]->`Utterance` | `Conversation`/`Message` |
+| Entities and facts | long-term (semantic) | `Item`, `Place`, `Robot` + `LOCATED_AT`, `ON`/`NEXT_TO`/... with `source` | `Entity` + relationships |
+| Know-how | long-term (procedural) | `Route`, `Trick`-[`PRACTISED_AT`]->`Place` | `Skill` (not used: a different idea, and its label) |
 | Why an answer | reasoning | `ReasoningStep`-[`MADE_LOOKUP`]->`Lookup`, `-[RELIED_ON]->Object`, `Utterance-[ABOUT]->Object` | `AgentStep`/`ToolCall`/`INFLUENCED` |
 
 `reset` only deletes this app's labels. Because both live in one database, linking our `Object` to NAMS's `Entity` can later be a plain
@@ -26,9 +71,11 @@ Cypher relationship instead of an API round trip; reading NAMS's own conversatio
 NAMS key works (not implemented: its exact property names are unverified).
 
 ## Viewing memory by type
-The graph panel has lenses: **Long-term** (entities and facts), **Short-term** (recent sightings and the conversation), **Reasoning**
-(steps, lookups and the objects they relied on), and **All**. Colour = memory type (orange / green / purple); shape = kind of node.
-Each answer is stored (in the background) as Dialogue/Utterance + ReasoningStep/Lookup so the short-term and reasoning lenses fill up.
+The graph panel has one lens per layer: **Long-term** (entities and facts, plus routes and tricks beside the places they belong to),
+**Short-term** (recent sightings and the conversation), **Reasoning** (steps, lookups and the objects they relied on), and **All**.
+Colour = layer (orange / green / purple); shape = kind of node. `/api/graph?lens=semantic` (or `procedural`, `episodic`, `working`)
+shows the layer that type belongs to. Each answer is stored (in the background) as Dialogue/Utterance + ReasoningStep/Lookup so the
+short-term and reasoning lenses fill up.
 The **Ontology** tab draws the schema itself: domain types from `ontology/puppy_pi.json` plus the memory types, sized by live counts.
 
 ## What flows where

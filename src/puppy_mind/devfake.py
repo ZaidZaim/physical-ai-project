@@ -7,7 +7,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import json
+
 from .graph import now_iso
+from .knowledge import best_belief, describe_steps, reverse_steps, route_seconds, trick_advice
+from .models import EXCLUSIVE_PREDICATES, PREDICATES
 from .matching import Known, Seen, assign
 from .pose import bearing_of, in_view
 from .models import Scene
@@ -24,6 +28,8 @@ class FakeMemory(FakeBooth):
         self.places: dict[str, dict] = {}
         self.adj: dict[tuple, int] = {}
         self.steps: list[dict] = []
+        self.routes: dict[tuple, dict] = {}   # (from, to) -> {steps, seconds, walks, last_steps, last_walked}
+        self.tricks: dict[tuple, dict] = {}   # (trick, place) -> {attempts, failed, last_result}
 
     def close(self): ...
     def init_schema(self): ...
@@ -70,7 +76,7 @@ class FakeMemory(FakeBooth):
             oid = mp[i] or f"obj-{uuid.uuid4().hex[:8]}"
             ids[i] = oid
             o = self.objs.setdefault(oid, {"id": oid, "label": d.label, "color": d.color, "loc": loc, "status": "present", "miss": 0})
-            o.update(zone=d.zone, status="present", miss=0, last_seen=ts)
+            o.update(zone=d.zone, status="present", miss=0, last_seen=ts, seen_conf=d.confidence, learned_from="seen")
             if heading is not None:
                 o["bearing"], o["bearing_ts"] = bearing_of(d.zone, heading, fov), ts
             if d.color != "unknown":
@@ -82,7 +88,7 @@ class FakeMemory(FakeBooth):
             if r.subject in ids and r.object in ids:
                 k = (ids[r.subject], r.predicate, ids[r.object])
                 cur.add(k)
-                self.rels.setdefault(k, {"since": ts})["active"] = True
+                self.rels.setdefault(k, {"since": ts}).update(active=True, seen_at=ts, source="seen")
         vis = set(ids.values())
         for (a, p, b), r in self.rels.items():
             if r["active"] and (a, p, b) not in cur and a in vis and b in vis:
@@ -146,11 +152,103 @@ class FakeMemory(FakeBooth):
         return None
 
     def find_object(self, label, color=None, limit=10):
+        hl = self.s.fact_half_life_days
         rows = [{"id": o["id"], "label": o["label"], "color": o["color"], "status": o["status"], "location": o["loc"],
-                 "last_seen": o.get("last_seen"), "last_zone": o.get("zone"), "last_bearing": o.get("bearing")}
+                 "last_seen": o.get("last_seen"), "last_zone": o.get("zone"), "last_bearing": o.get("bearing"),
+                 "belief": best_belief([("seen", o.get("last_seen"), o.get("seen_conf")), ("told", o.get("told_at"), None)], hl),
+                 "active_relations": [{"predicate": p, "target": f"{self.objs[b]['label']} {b}",
+                                       "belief": best_belief([("seen", r.get("seen_at"), None), ("told", r.get("told_at"), None)], hl)}
+                                      for (a, p, b), r in self.rels.items() if a == o["id"] and r.get("active")]}
                 for o in self.objs.values()
                 if (label.lower() in o["label"].lower() or o["label"].lower() in label.lower()) and (color is None or o["color"] == color)]
-        return sorted(rows, key=lambda r: r["last_seen"] or "", reverse=True)[:limit]
+        return sorted(rows, key=lambda r: r["last_seen"] or "", reverse=True)[:limit]  # told-only objects (never seen) last
+
+    # ---- told facts, routes and tricks (RAM mirror of graph.Memory)
+    def _told_item(self, label, color, place, ts):
+        for o in self.objs.values():
+            if o["loc"] == place and o["label"].lower() == label and (color == "unknown" or o["color"] in ("unknown", color)):
+                o["told_at"] = ts
+                if o["status"] == "possibly_gone":
+                    o.update(status="told", miss=0)
+                return o["id"], False
+        oid = f"obj-{uuid.uuid4().hex[:8]}"
+        self.objs[oid] = {"id": oid, "label": label, "color": color, "loc": place, "status": "told", "miss": 0, "zone": "unknown",
+                          "told_at": ts, "learned_from": "told"}
+        return oid, True
+
+    def remember_told(self, label, place, color=None, predicate=None, anchor=None, anchor_color=None, ts=None):
+        ts = ts or now_iso()
+        label, color = (label or "").strip().lower(), (color or "unknown").strip().lower() or "unknown"
+        if not label or not (place or "").strip():
+            return {"stored": False, "reason": "I need what the object is and where it is"}
+        predicate = (predicate or "").strip().upper() or None
+        if predicate and predicate not in PREDICATES:
+            return {"stored": False, "reason": f"the relation must be one of {', '.join(PREDICATES)}"}
+        self._place(place)
+        oid, new = self._told_item(label, color, place, ts)
+        out = {"stored": True, "object": f"{label} ({oid})", "place": place, "new_object": new, "learned_from": "told"}
+        if predicate and anchor:
+            aid, a_new = self._told_item(anchor.strip().lower(), (anchor_color or "unknown").strip().lower() or "unknown", place, ts)
+            if predicate in EXCLUSIVE_PREDICATES:
+                for (a, p, b), r in self.rels.items():
+                    if a == oid and p == predicate and b != aid and r.get("active"):
+                        r.update(active=False, until=ts, ended_by="told_otherwise")
+            r = self.rels.setdefault((oid, predicate, aid), {"since": ts, "source": "told"})
+            r.update(active=True, told_at=ts)
+            out["relation"] = {"predicate": predicate, "anchor": f"{anchor.strip().lower()} ({aid})", "new_anchor": a_new}
+        return out
+
+    def learn_route(self, a, b, steps, ts=None):
+        if not steps or a == b:
+            return None
+        ts, secs = ts or now_iso(), route_seconds(steps)
+        r = self.routes.setdefault((a, b), {"walks": 0, "seconds": None, "steps": None})
+        if r["seconds"] is None or secs < r["seconds"]:
+            r.update(steps=list(steps), seconds=secs)
+        r.update(walks=r["walks"] + 1, last_steps=list(steps), last_walked=ts)
+        return {"id": f"{a}>{b}", "walks": r["walks"], "seconds": r["seconds"]}
+
+    def routes_along(self, places):
+        out = []
+        for a, b in zip(places, places[1:]):
+            hop = {"from": a, "to": b}
+            f, g = self.routes.get((a, b)), self.routes.get((b, a))
+            if f:
+                hop.update(learned=True, steps=f["steps"], how=describe_steps(f["steps"]), walks=f["walks"], last_walked=f["last_walked"])
+            elif g:
+                st = reverse_steps(g["steps"])
+                hop.update(learned=True, reversed=True, steps=st, how=describe_steps(st), walks=0,
+                           note=f"never walked this way: it is the way back from {b}, turned round")
+            else:
+                hop.update(learned=False, how="no walk recorded yet")
+            out.append(hop)
+        return out
+
+    def record_trick(self, name, place, failed=False, source="seen", ts=None):
+        if place not in self.places:
+            return {"attempts": 0, "failed": 0}
+        t = self.tricks.setdefault((name, place), {"attempts": 0, "failed": 0})
+        if not failed or t["attempts"] <= t["failed"]:
+            t["attempts"] += 1
+        if failed:
+            t["failed"] += 1
+        t.update(last_result="failed" if failed else "played", last_source=source, last_at=ts or now_iso())
+        return {"attempts": t["attempts"], "failed": t["failed"]}
+
+    def trick_record(self, name, place):
+        t = self.tricks.get((name, place)) or {"attempts": 0, "failed": 0}
+        return {"attempts": t["attempts"], "failed": t["failed"]}
+
+    def know_how(self, place=None):
+        routes = [{"from": a, "to": b, "steps": r["steps"], "seconds": r["seconds"], "walks": r["walks"], "last_walked": r["last_walked"],
+                   "how": describe_steps(r["steps"])} for (a, b), r in self.routes.items() if place in (None, a, b)]
+        tricks = []
+        for (n, p), t in sorted(self.tricks.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+            if place in (None, p):
+                adv = trick_advice(t["attempts"], t["attempts"] - t["failed"], t["failed"], self.s.trick_avoid_after_fails)
+                tricks.append({"trick": n, "place": p, "attempts": t["attempts"], "failed": t["failed"], "last_result": t.get("last_result"),
+                               "avoid": adv["avoid"], "why": adv["why"]})
+        return {"routes": sorted(routes, key=lambda r: -r["walks"]), "tricks": tricks}
 
     def bearing_since(self, item_id, place, since_iso):
         o = self.objs.get(item_id)
@@ -242,7 +340,8 @@ class FakeMemory(FakeBooth):
         return {"Item": len(self.objs), "Place": len({o["loc"] for o in self.objs.values()}), "Robot": 1, "Sighting": len(self.obs),
                 "Session": 1, "Dialogue": 1 if self.msgs else 0, "Utterance": len(self.msgs), "ReasoningStep": len(self.steps),
                 "Lookup": sum(len(s["tools"]) for s in self.steps),
-                "Theme": len({t for c in self._convs().values() for t in c["topics"] + c["enjoyed"]}), "Encounter": len(self._convs())}
+                "Theme": len({t for c in self._convs().values() for t in c["topics"] + c["enjoyed"]}), "Encounter": len(self._convs()),
+                "Route": len(self.routes), "Trick": len({n for n, _ in self.tricks})}
 
     def rel_counts(self):
         out = {}
@@ -253,10 +352,14 @@ class FakeMemory(FakeBooth):
     def memory_summary(self):
         c = self.label_counts()
         return {"short": {"observations": c["Sighting"], "messages": c["Utterance"], "conversations": c["Dialogue"]},
-                "long": {"objects": c["Item"], "places": c["Place"], "relationships": len(self.rels)},
+                "long": {"objects": c["Item"], "places": c["Place"], "relationships": len(self.rels),
+                         "routes": len(self.routes), "tricks": len({n for n, _ in self.tricks})},
                 "reasoning": {"steps": c["ReasoningStep"], "tool_calls": c["Lookup"]}}
 
     def graph_snapshot(self, limit=300, lens="long", nams_entities=False):
+        from .ontology import lens_name
+
+        lens = lens_name(lens)
         nodes, edges = {}, []
 
         def node(i, kind, label, memory, **x):
@@ -294,6 +397,17 @@ class FakeMemory(FakeBooth):
                 if prev:
                     edge(prev, m["id"], "FOLLOWED_BY", "short")
                 prev = m["id"]
+        if lens in ("long", "all"):
+            for (a, b), r in self.routes.items():
+                for p in (a, b):
+                    node(f"loc:{p}", "Place", p, "long", place=p)
+                node(f"route:{a}>{b}", "Route", f"{a} → {b}", "long", detail=f"{describe_steps(r['steps'])} (walked {r['walks']}x)")
+                edge(f"route:{a}>{b}", f"loc:{a}", "STARTS_AT", "long")
+                edge(f"route:{a}>{b}", f"loc:{b}", "ENDS_AT", "long")
+            for (n, p), t in self.tricks.items():
+                node(f"loc:{p}", "Place", p, "long", place=p)
+                node(f"trick:{n}", "Trick", n.replace("_", " "), "long")
+                edge(f"trick:{n}", f"loc:{p}", "PRACTISED_AT", "long")
         if lens in ("reasoning", "all"):
             used = set()
             for st in self.steps[-8:]:

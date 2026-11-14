@@ -21,7 +21,8 @@ How it runs:
 Robot frames, binary: b"S" + PCM (someone is speaking, outside a call: streamed from the start of the sentence, since GPT-Live
 listens at real-time speed and a sentence sent only once it ended cost its whole length again), b"E" (that sentence ended),
 b"U" + PCM (a whole utterance at once: older robot clients), b"M" + PCM (microphone stream, during a call). Laptop frames:
-binary b"A" + PCM (play this), text {"type": "call", "open": bool} and {"type": "say", "text": ...}. PCM is mono 16-bit 16 kHz.
+binary b"A" + PCM (play this), b"B"/b"C" + PCM (music / a sound effect, beside the voice), text {"type": "call", "open": bool,
+"mute_while_talking": bool} and {"type": "say", "text": ...}. PCM is mono 16-bit 16 kHz.
 """
 from __future__ import annotations
 
@@ -45,7 +46,8 @@ RATE = 16000
 BPS = RATE * 2              # bytes per second of 16-bit mono audio
 URL = "wss://api.openai.com/v1/live/sessions"
 LOUD_OUT = 200.0            # output audio louder than this (RMS) is the robot talking; GPT-Live also streams near-silence
-ECHO_TAIL_S = 0.6           # the microphone stays muted this long after the robot's last audible sound (its player buffers)
+ECHO_TAIL_S = 0.3           # the microphone stays muted this long after the robot's last audible sound (was 0.6: the start of a quick
+                            # reply was lost; the robot mutes its own mic while its speaker plays, so a short tail is enough)
 BOT_TURN_GAP_S = 1.2        # no new transcript for this long: the turns so far are committed (GPT-Live sends no end-of-turn event)
 MAX_CALL_S = 600.0          # a safety net: no call runs longer than ten minutes
 PROBE_AFTER_SPEECH_S = 2.0  # a sentence without the wake word: its session is closed this long after the sentence ended
@@ -62,6 +64,16 @@ PROBE_MAX_S = 20.0          # ... and a long monologue without it after this lon
 TRAIL_SILENCE_S = 1.5       # after the robot says a sentence ended, a probe is fed this much silence: GPT-Live transcribes a
                             # turn only once it HEARS the pause after it, and the robot sends nothing between sentences. Without
                             # it the first "Hey PuppyPi" after a quiet spell often got no transcript at all (robot, 2026-11-06)
+BACKUP_WAKE_AFTER_S = 1.5   # a probe with no transcript this long after its sentence ended: its audio goes to the plain
+                            # speech-to-text too. At the robot (2026-11-06) GPT-Live returned no words at all for a clear, loud first
+                            # "Hey PuppyPi" (1.4 s of audio) and the visitor had to say it again; if the backup hears the wake word, the
+                            # call opens anyway (a new session that hears the same audio)
+WAKE_CHECK_HINT = "A robot dog named Puppy Pi."
+PROBE_KEEP_S = 12.0         # how much of a probe's audio is kept for that (then dropped with the probe; never stored or logged)
+ANSWERING_QUIET_S = 1.0     # in a call the microphone is silent while GPT-Live is still producing its answer, until this long after
+                            # its last loud audio or transcript. Measured (2026-11-06): with silence as its only input a long answer
+                            # always came whole; at the robot long answers stopped mid-word ("... or h", "... similar text. T"):
+                            # sound reaching GPT-Live while it was still answering interrupted it. Barge-in (LIVE_BARGE_IN) is off.
 SOUND_QUIET_S = 0.8         # a sound (the spin jingle) waits until no speech has been sent for this long and all of it has played
 SOUND_WAIT_S = 6.0          # ... but no longer than this
 SPARE_MAX_AGE_S = 45.0      # the connection kept ready for the next call is renewed this often (an idle one may be dropped)
@@ -98,15 +110,50 @@ SAY_SETUP_S = 6.0           # connecting and starting a line's session: longer, 
 SAY_TIMEOUT_S = 15.0        # speaking a line, counted once its session has started
 SAY_DONE_QUIET_S = 0.8      # the line is over once its words were all said and the voice has been quiet this long
 
-STOP_WORDS = {"stop", "halt", "freeze"}  # heard in a call: the robot stops at once, before GPT-Live has even answered
+STOP_WORDS = {"stop", "halt", "freeze"}
+# The body must follow the words. At the robot (2026-11-06) one call never handed a trick to the backend: asked three times for
+# push-ups, GPT-Live said "one, two, three, I'm basically a gym dog" and the robot did not move. When someone clearly asks for a
+# trick or a spin and no tool call came FALLBACK_AFTER_S after they stopped talking, the app does it itself (a late tool call for the
+# same trick is then refused: a trick is already running). Phrases, longest first; misheard forms seen at the robot are included.
+SPOKEN_ACTIONS = [
+    (("push-ups", "push ups", "push-up", "push up", "pushups", "press-ups", "press ups"), ("do_trick", {"name": "push-up"})),
+    (("shake hands", "shake hand", "shake my hand", "give me your paw", "give paw", "your paw", "high five"), ("do_trick", {"name": "shake_hands"})),
+    (("moonwalk", "moon walk", "dance"), ("do_trick", {"name": "moonwalk"})),
+    (("lie down", "take a nap", "go to sleep", "nap", "take enough", "take an app", "take a map", "take a knap"),
+     ("do_trick", {"name": "lie_down"})),
+    (("stand up", "stand"), ("do_trick", {"name": "stand"})),
+    (("sit down", "sit"), ("do_trick", {"name": "sit"})),
+    (("stretch",), ("do_trick", {"name": "stretch"})),
+    (("take a bow", "bow"), ("do_trick", {"name": "bow"})),
+    (("wave",), ("do_trick", {"name": "wave"})),
+    (("spin", "us pen", "a pin", "his pin", "us pin", "may i kiss him"), ("move", {"direction": "spin"})),
+    (("turn around",), ("move", {"direction": "turn_around"})),
+]
+FALLBACK_AFTER_S = 4.0
+_NOT_A_REQUEST = re.compile(r"\b(don'?t|do not|never|stop|what is|what's|why|how do|how does)\b")
+
+
+def spoken_action(text: str) -> tuple[str, dict] | None:
+    """The trick or move a sentence clearly asks for ('do some push-ups', 'can you shake hands?'), or None (a question about it,
+    'don't sit', or nothing of the kind)."""
+    t = " " + " ".join("".join(c if c.isalnum() or c in "-'" else " " for c in (text or "").lower()).split()) + " "
+    if _NOT_A_REQUEST.search(t):
+        return None
+    for phrases, action in SPOKEN_ACTIONS:
+        if any(f" {p} " in t for p in phrases):
+            return action[0], dict(action[1])
+    return None  # heard in a call: the robot stops at once, before GPT-Live has even answered
 
 BACKEND = ("You are the backend of {robot}, a robot dog at the Neo4j booth. Use the tools: do_trick when someone asks for a trick, "
            "move when someone asks you to walk, come closer, come back, back up, turn or spin (never sideways: it cannot) (faster = speed fast "
            "or sprint), routine when one sentence asks for several things ('come here and sit', 'walk over and take a nap', 'show them "
            "what you can do', 'wake up' = stand then stretch), do_trick for sit / take a nap (lie_down) / stand up (stand) / "
            "shake hands or give paw (shake_hands) / stretch / push-ups or exercise (push-up), "
-           "stop_moving the moment anyone says stop, wait or freeze, "
+           "stop_moving the moment anyone says stop, wait or freeze, trick_went_wrong when someone says the last trick went wrong "
+           "('you fell over', 'that didn't work'), "
            "ask_world for anything about the room or what the robot can see, new_visitor when a different person has taken over. "
+           "The transcript mishears 'make a spin' as 'make us pen', 'a pin', 'his pin' or 'may I kiss him': that is a spin; and 'take a "
+           "nap' as 'take enough', 'take an app' or 'take a map': that is lie_down. "
            "Reply with one short plain sentence the voice can say. Never ask for or keep personal data.")
 
 
@@ -155,6 +202,13 @@ def merge_turns(pieces: list[tuple]) -> list[dict]:
                 changed = True
                 break
     return [{"role": x["role"], "content": fix_terms(" ".join(x["content"].split()))} for x in runs if x["content"].strip()]
+
+
+def _worded(s, text: str) -> str:
+    """Booth wording, or generic wording for a live demo (LIVE_DEMO)."""
+    from .wizard import generic_wording
+
+    return generic_wording(text) if s.live_demo else text
 
 
 def live_tools() -> list[dict]:
@@ -228,9 +282,17 @@ class LiveCall:
         self.drop_detail = ""  # why a probe was dropped (timing only, never the words)
         self.answer_at: float | None = None
         self.speech_end_at: float | None = None  # the robot said the sentence ended (b"E")
+        self.audio = bytearray(first_pcm)  # what the robot sent while this is a probe, for the backup wake check (RAM only)
+        self.backup: asyncio.Task | None = None  # the backup wake check (speech-to-text of `audio`), when no transcript came
+        self.preconfirmed = ""  # opened by the backup check: the call is confirmed with this as soon as its session has started
+        self.tool_at = 0.0       # when the backend last asked for a tool (a trick, a move ...)
+        self.answer_loud_at = 0.0  # the last loud audio or transcript of GPT-Live's answer (the microphone waits for it to finish)
+        self.fallback_for = 0.0  # the visitor turn (its last words' time) already checked by the trick safety net
         self.robot_audio_at = 0.0  # the last microphone frame from the robot (the trailing silence never cuts into speech)
         self.robot_audio_s = 0.0   # how much the robot sent, and how loud: logged when a probe is dropped (never the words)
         self.robot_peak = 0.0
+        self.robot_clipped = 0     # samples at full scale (distorted): the share is logged, a sign the robot's mic is too loud
+        self.robot_samples = 0
         self.not_for_me = False  # its first words have nothing like the wake word: the check ends now (see PROBE_WORDS)
         self.close_at: float | None = None
         self.ws = None
@@ -248,10 +310,11 @@ class LiveCall:
             state += f"\n- When they leave, invite them to try the claw machine to win {s.claw_prize}."
         return {
             "model": s.live_model,
-            "instructions": system_prompt(s.robot_name, s.event_name, state, s.voice_language, self.booth._booth_info(), live=True),
+            "instructions": system_prompt(s.robot_name, s.event_name, state, s.voice_language, self.booth._booth_info(), live=True,
+                                          demo=s.live_demo),
             "audio": {"format": {"type": "audio/pcm", "rate": RATE}, "output": {"voice": s.live_voice_name}},
             "delegation": {"type": "responses", "responses": {
-                "model": s.live_backend_model, "instructions": BACKEND.format(robot=s.robot_name),
+                "model": s.live_backend_model, "instructions": _worded(s, BACKEND.format(robot=s.robot_name)),
                 "tools": live_tools(), "tool_choice": "auto", "parallel_tool_calls": False}},
         }
 
@@ -288,6 +351,9 @@ class LiveCall:
             if self.pending:                      # what was said while the session was opening
                 await self.mic(bytes(self.pending))
                 self.pending.clear()
+            if self.preconfirmed:  # the backup check already heard the wake word: this is a call, whatever GPT-Live makes of it
+                await self.mic(bytes(int(BPS * TRAIL_SILENCE_S) // 2 * 2))  # and the pause after it, so it answers
+                await self.confirm(self.preconfirmed)
             watch = asyncio.create_task(self._watch())
             async for raw in self.ws:
                 if await self.on_event(json.loads(raw)) == "closed":
@@ -315,6 +381,8 @@ class LiveCall:
         if t == "session.output_audio.delta":
             raw = base64.b64decode(m.get("delta") or "")
             item = (louder_pcm(raw, self.s.voice_gain), pcm_rms(raw) > LOUD_OUT)  # talking or not: judged before the gain
+            if item[1]:
+                self.answer_loud_at = now  # still answering: the microphone stays silent (see ANSWERING_QUIET_S)
             if self.confirmed:
                 await self.b.play(*item)
             else:
@@ -333,7 +401,7 @@ class LiveCall:
                 if self.confirmed and STOP_WORDS & set(_plain(m.get("delta") or "").split()) and self.booth.stop_fn:
                     print("live: heard stop, robot stopped:", self.booth.stop_fn(), flush=True)
             else:
-                self.bot_at = now
+                self.bot_at = self.answer_loud_at = now
                 self.answer_at = self.answer_at or now
             if not self.confirmed and not self.closed_reason:  # a session already being closed is never confirmed after all
                 heard = " ".join(x["content"] for x in merge_turns(self.pieces) if x["role"] == "user")
@@ -358,6 +426,9 @@ class LiveCall:
             return "closed"
         return None
 
+    def clipped_share(self) -> str:
+        return "%.1f%%" % (100.0 * self.robot_clipped / self.robot_samples) if self.robot_samples else "0%"
+
     async def confirm(self, heard: str) -> None:
         """The wake word (or an answer to a greeting) is in the transcript: this is a conversation. Play what is held, keep notes."""
         self.confirmed = True
@@ -365,15 +436,20 @@ class LiveCall:
         self.enc = self.booth._encounter(None, self.brain.place_info().get("name"))
         self.enc.messages.append({"role": "user", "content": self.wake_text})  # the conversation is open from now on
         self.enc.turns += 1
-        print("live: woken by %r (%.1fs after the session started; robot sent %.1fs of audio, loudest RMS %.0f)" % (
-            self.wake_text, time.monotonic() - (self.started_at or self.opened), self.robot_audio_s, self.robot_peak), flush=True)
+        print("live: woken by %r (%.1fs after the session started; robot sent %.1fs of audio, loudest RMS %.0f, %s clipped)" % (
+            self.wake_text, time.monotonic() - (self.started_at or self.opened), self.robot_audio_s, self.robot_peak,
+            self.clipped_share()), flush=True)
         self.brain.on_wake()  # look up at the visitor
-        await self.b.tell({"type": "call", "open": True})
+        # the robot silences its own mic while its speaker talks (it knows better than this laptop when that ends), unless visitors
+        # may interrupt it (LIVE_BARGE_IN with the robot's echo canceller)
+        await self.b.tell({"type": "call", "open": True,
+                           "mute_while_talking": not (self.s.live_barge_in and self.b.robot_aec)})
         held, self.held = self.held, []
         for pcm, loud in held:
             await self.b.play(pcm, loud)
 
     async def _tool(self, item: dict) -> None:
+        self.tool_at = time.monotonic()
         name = item.get("name", "")
         try:
             args = json.loads(item.get("arguments") or "{}")
@@ -436,10 +512,10 @@ class LiveCall:
                     or (self.answer_at and now - self.answer_at > PROBE_AFTER_ANSWER_S) or now - self.opened > PROBE_MAX_S):
                 # why, and how long things took; never what was said (bystanders)
                 ready = "never ready" if self.started_at is None else "ready after %.1fs" % (self.started_at - self.opened)
-                self.drop_detail = "%s; session %s; %s; robot sent %.1fs of audio, loudest RMS %.0f" % (
+                self.drop_detail = "%s; session %s; %s; robot sent %.1fs of audio, loudest RMS %.0f, %s clipped" % (
                     "words but no wake word" if heard_any else "no transcript came", ready,
                     "the sentence ended %.1fs ago" % (now - self.speech_end_at) if self.speech_end_at else "still talking",
-                    self.robot_audio_s, self.robot_peak)
+                    self.robot_audio_s, self.robot_peak, self.clipped_share())
                 return "no wake word"
             return None
         if self.pieces and self.delta_at > self.committed_at and now - self.delta_at > BOT_TURN_GAP_S:
@@ -462,6 +538,28 @@ class LiveCall:
             if reason:
                 await self.close(reason)
                 return
+            await self._trick_safety_net()
+
+    async def _trick_safety_net(self) -> None:
+        """See SPOKEN_ACTIONS: the visitor clearly asked for a trick or a spin, stopped talking FALLBACK_AFTER_S ago, and the backend
+        asked for no tool since they started that turn: do it here."""
+        now = time.monotonic()
+        if not self.confirmed or self.heard_at <= self.fallback_for or now - self.heard_at < FALLBACK_AFTER_S:
+            return
+        self.fallback_for = self.heard_at
+        turns = [x for x in merge_turns(self.pieces) if x["role"] == "user"]
+        if not turns or self.tool_at >= self.heard_at - 8.0:  # a tool call came for this turn (it starts at most ~8 s before its end)
+            return
+        action = spoken_action(turns[-1]["content"])
+        if not action:
+            return
+        name, args = action
+        print("live: asked for %s but the backend did not do it: doing it anyway" % (args.get("name") or args.get("direction")), flush=True)
+        try:
+            res = await asyncio.to_thread(self.booth._tool, self.enc, name, args)
+        except Exception as e:
+            res = {"error": str(e)[:200]}
+        print("live safety net %s %s -> %s" % (name, json.dumps(args), json.dumps(res, default=str)[:160]), flush=True)
 
     async def close(self, reason: str) -> None:
         if not self.open:
@@ -498,7 +596,12 @@ class LiveBridge:
         """In a call: send silence instead of the microphone? While the robot talks, unless LIVE_BARGE_IN is on and the robot's
         echo canceller removes its own voice (then visitors can interrupt it). NOT while it moves: muting the servo noise also
         muted "Stop!", which is exactly when it is said (robot, 2026-11-06)."""
-        return time.monotonic() < self.audible_until + ECHO_TAIL_S and not (self.brain.s.live_barge_in and self.robot_aec)
+        if self.brain.s.live_barge_in and self.robot_aec:
+            return False
+        now = time.monotonic()
+        call = self.call
+        answering = call is not None and call.confirmed and now - call.answer_loud_at < ANSWERING_QUIET_S
+        return answering or now < self.audible_until + ECHO_TAIL_S
 
     def busy(self) -> bool:
         """The robot is talking (its microphone hears its own speaker) or moving (it hears its servos). A line still being prepared
@@ -511,7 +614,7 @@ class LiveBridge:
         ws = await self._take_spare() or await openai_connect(s)
         try:
             await ws.send(json.dumps({"type": "session.start", "event_id": "say", "session": {
-                "model": s.live_model, "instructions": SAY_INSTRUCTIONS.format(robot=s.robot_name),
+                "model": s.live_model, "instructions": _worded(s, SAY_INSTRUCTIONS.format(robot=s.robot_name)),
                 "audio": {"format": {"type": "audio/pcm", "rate": RATE}, "output": {"voice": s.live_voice_name}}}}))
             while True:
                 m = json.loads(await ws.recv())
@@ -728,9 +831,15 @@ class LiveBridge:
                     if call is not None and not call.confirmed and call.speech_end_at is None:
                         call.speech_end_at = time.monotonic()
                         asyncio.create_task(self._trail(call))
+                        call.backup = asyncio.create_task(self._backup_wake(call))
                 elif call is not None and call.open:
                     call.robot_audio_at, call.robot_audio_s = time.monotonic(), call.robot_audio_s + len(pcm) / BPS
                     call.robot_peak = max(call.robot_peak, pcm_rms(pcm))
+                    a = np.frombuffer(pcm[:len(pcm) // 2 * 2], dtype="<i2")
+                    call.robot_clipped += int(np.count_nonzero(np.abs(a.astype(np.int32)) >= 32000))
+                    call.robot_samples += a.size
+                    if not call.confirmed and len(call.audio) < PROBE_KEEP_S * BPS:
+                        call.audio += pcm
                     if call.starting:
                         call.pending += pcm
                     elif kind in (b"M", b"S") or not call.confirmed:  # a probe hears the rest of the sentence as it is said
@@ -763,11 +872,45 @@ class LiveBridge:
                                                                " [%s]" % call.drop_detail if call.drop_detail else ""), flush=True)
             if self.call is call:
                 self.call = None
+            if not call.confirmed and call.backup is not None and not call.preconfirmed:
+                wake = ""
+                try:
+                    wake = await asyncio.wait_for(call.backup, 6.0)
+                except Exception:
+                    pass
+                if wake and self.call is None and self.ws is not None:
+                    print("live: the backup speech-to-text heard the wake word (GPT-Live had no words for it): opening the call",
+                          flush=True)
+                    again = LiveCall(self, bytes(call.audio))
+                    again.preconfirmed = wake
+                    self.call = again
+                    asyncio.create_task(self._probe(again))
             if call.confirmed:
                 try:
                     await self.tell({"type": "call", "open": False})
                 except Exception:
                     pass
+
+    async def _backup_wake(self, call: LiveCall) -> str:
+        """BACKUP_WAKE_AFTER_S after the sentence ended, if GPT-Live still has no words for it: the plain speech-to-text of the same
+        audio. Returns its text if it holds the wake word, else '' (the text is never printed or kept)."""
+        await asyncio.sleep(BACKUP_WAKE_AFTER_S)
+        voice = getattr(self.brain, "voice", None)
+        # also when GPT-Live did hear words but not the wake word: at the robot it turned "Hey PuppyPi" into other words twice in a
+        # row. Not for a long sentence that clearly was not for the robot (not_for_me: six words, none like hey / puppy / pi)
+        if call.confirmed or call.not_for_me or voice is None or len(call.audio) < 0.4 * BPS:
+            return ""
+        from .jingle import wav_bytes
+        from .voice import echoes_the_hint
+
+        # A hint WITHOUT the wake word: on unclear audio the speech model answers with its hint, and the usual one starts with "Hey
+        # PuppyPi" (it opened a call on noise). Tested 2026-11-06: this one keeps "Puppy Pi" right and echoes nothing that wakes.
+        try:
+            text = await asyncio.to_thread(voice.transcribe, wav_bytes(bytes(call.audio)), "speech.wav", WAKE_CHECK_HINT)
+        except Exception as e:
+            print("live: backup wake check failed:", type(e).__name__, str(e)[:120], flush=True)
+            return ""
+        return text if has_wake_word(text, self.brain.s.wake_word) and not echoes_the_hint(text) else ""
 
     async def _trail(self, call: LiveCall) -> None:
         """The sentence ended: feed the probe the pause after it (see TRAIL_SILENCE_S), once its session can hear."""

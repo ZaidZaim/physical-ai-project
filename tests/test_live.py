@@ -169,7 +169,7 @@ def test_a_live_call_starts_on_the_wake_word_in_gpt_lives_own_transcript_and_pla
 
     _ev(call, "input", 600, " Hey Puppy Pi, what is GraphRAG?")
 
-    assert call.confirmed and bridge.woke and bridge.told == [{"type": "call", "open": True}] and len(bridge.played) == 1
+    assert call.confirmed and bridge.woke and bridge.told == [{"type": "call", "open": True, "mute_while_talking": True}] and len(bridge.played) == 1
 
     assert booth.conversation_active()
 
@@ -259,7 +259,7 @@ def test_live_instructions_ask_their_own_question_and_say_when_to_delegate():
 
     names = {t["name"] for t in live_tools()}
 
-    assert names == {"do_trick", "move", "routine", "stop_moving", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
+    assert names == {"do_trick", "move", "routine", "stop_moving", "trick_went_wrong", "new_visitor", "ask_world"} and all(t["type"] == "function" and "parameters" in t for t in live_tools())
 
 
 
@@ -774,3 +774,103 @@ def test_the_horn_honks_at_once_over_speech_and_never_cuts_the_spin_music(monkey
         await asyncio.sleep(0.05)
     asyncio.run(go_old())
     assert b"".join(a[1:] for a in old.ws.audio) == pcm and old.ws.audio[0][:1] == b"A"
+
+
+def test_when_gpt_live_has_no_words_for_a_sentence_the_backup_speech_to_text_checks_it_for_the_wake_word(monkeypatch):
+    from puppy_mind import live
+    monkeypatch.setattr(live, "BACKUP_WAKE_AFTER_S", 0.0)
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    said = {"text": "Hey PuppyPi!"}
+    bridge.brain.voice = type("V", (), {"transcribe": lambda self, wav, name="speech.wav", prompt=None: said["text"]})()
+    bridge.brain.booth = _booth()[0]
+    call = live.LiveCall(bridge, b"\x01\x00" * 16000)  # one second of (quiet) audio
+    assert asyncio.run(bridge._backup_wake(call)) == "Hey PuppyPi!"
+    said["text"] = "pass me the salt"
+    assert asyncio.run(bridge._backup_wake(call)) == ""  # a bystander: nothing, and the words are not kept
+    said["text"] = "Hey PuppyPi, PuppyPi, Neo4j, Cypher, GraphRAG, GraphAcademy, Aura"  # the speech model echoing a vocabulary hint
+    assert asyncio.run(bridge._backup_wake(call)) == ""
+    said["text"] = "Hey PuppyPi!"
+    call.pieces.append((0.0, 0, "user", "hey poppy", None))  # GPT-Live heard other words: the backup still checks (seen at the robot)
+    assert asyncio.run(bridge._backup_wake(call)) == "Hey PuppyPi!"
+    call.not_for_me = True  # a long sentence clearly not for the robot: no backup
+    assert asyncio.run(bridge._backup_wake(call)) == ""
+    short = live.LiveCall(bridge, b"\x01\x00" * 1000)  # a click, not a sentence
+    assert asyncio.run(bridge._backup_wake(short)) == ""
+
+
+def test_a_call_opened_by_the_backup_check_is_confirmed_as_soon_as_its_session_starts(monkeypatch):
+    from puppy_mind import live
+    bridge = _bridge(monkeypatch, FakeOpenAI("Hi there"))
+    bridge.brain.booth = _booth()[0]
+    confirmed = []
+
+    async def confirm(self, heard):
+        confirmed.append(heard)
+        self.closed_reason = "test"
+        self.open = False
+    monkeypatch.setattr(live.LiveCall, "confirm", confirm)
+    call = live.LiveCall(bridge, b"\x01\x00" * 16000)
+    call.preconfirmed = "Hey PuppyPi"
+
+    async def go():
+        t = asyncio.create_task(call.run(FakeOpenAI("Hi there")))
+        for _ in range(100):
+            if confirmed:
+                break
+            await asyncio.sleep(0.01)
+        t.cancel()
+    asyncio.run(go())
+    assert confirmed == ["Hey PuppyPi"]
+
+
+def test_clear_trick_requests_are_recognised_in_what_the_visitor_said():
+    from puppy_mind.live import spoken_action as a
+    assert a("Maybe do some push-ups") == ("do_trick", {"name": "push-up"})
+    assert a("Can you stand") == ("do_trick", {"name": "stand"}) and a("I understand") is None
+    assert a("Make us pen") == a("Make his pin") == ("move", {"direction": "spin"})  # 'make a spin', as the transcript heard it
+    assert a("Shake hands") == ("do_trick", {"name": "shake_hands"}) and a("Can you dance") == ("do_trick", {"name": "moonwalk"})
+    assert a("What is a push-up?") is None and a("Don't sit") is None and a("Tell me about Neo4j") is None
+
+
+def test_the_safety_net_does_the_trick_when_the_backend_never_asked_for_it(monkeypatch):
+    import time as _t
+    from puppy_mind import live
+    booth, _ = _booth()
+    done = []
+    booth._tool = lambda enc, name, args: done.append((name, args)) or {"ok": True}
+    bridge = FakeBridge(booth)
+    call = live.LiveCall(bridge, b"")
+    call.confirmed, call.enc = True, None
+    call.pieces.append((0.0, 0, "user", "Do some push-ups please", None))
+    call.heard_at = _t.monotonic() - live.FALLBACK_AFTER_S - 0.1  # they stopped talking a while ago, and no tool call came
+    asyncio.run(call._trick_safety_net())
+    assert done == [("do_trick", {"name": "push-up"})]
+    asyncio.run(call._trick_safety_net())
+    assert len(done) == 1  # once per turn
+    call.pieces.append((5000.0, 1, "user", "now shake hands", None))
+    call.heard_at = _t.monotonic() - live.FALLBACK_AFTER_S - 0.1
+    call.tool_at = _t.monotonic() - 1  # the backend did ask for a tool this time: nothing to do
+    asyncio.run(call._trick_safety_net())
+    assert len(done) == 1
+
+
+def test_the_microphone_is_silent_while_gpt_live_is_still_answering(monkeypatch):
+    import time as _t
+    from puppy_mind import live
+    bridge = _bridge(monkeypatch, FakeOpenAI(""))
+    bridge.call = type("C", (), {"confirmed": True, "answer_loud_at": _t.monotonic()})()
+    assert bridge.mute_mic()  # mid-answer: nothing may interrupt it (long answers stopped mid-word at the robot)
+    bridge.call.answer_loud_at = _t.monotonic() - live.ANSWERING_QUIET_S - 0.1
+    assert not bridge.mute_mic()  # it has finished (and nothing is playing): the visitor is heard again
+
+
+def test_a_live_demo_never_says_booth_and_a_booth_still_does():
+    import dataclasses as dc
+    from puppy_mind import live
+    from puppy_mind.wizard import system_prompt
+    demo = system_prompt("PuppyPi", "the conference", "", live=True, demo=True)
+    assert "booth" not in demo.lower() and "giving a live demo for Neo4j" in demo and "Neo4j team here" in demo
+    assert "booth" in system_prompt("PuppyPi", "the conference", "", live=True).lower()  # LIVE_DEMO off: booth wording as before
+    s = dc.replace(S, live_demo=True)
+    assert "booth" not in live._worded(s, live.BACKEND.format(robot="PuppyPi")).lower()
+    assert "booth" not in live._worded(s, live.SAY_INSTRUCTIONS.format(robot="PuppyPi")).lower()

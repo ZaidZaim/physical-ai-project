@@ -332,6 +332,10 @@ TOOLS = [
     {"type": "function", "function": {"name": "stop_moving",
      "description": "Stop walking or turning right now ('stop', 'wait', 'freeze', 'that's enough').",
      "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {"name": "trick_went_wrong",
+     "description": "Someone says your last trick went wrong ('you fell over', 'that didn't work', 'you slipped'). You remember it for "
+                    "this room, and after it goes wrong twice here you skip that trick here. Say sorry lightly and what you will do.",
+     "parameters": {"type": "object", "properties": {"trick": {"type": "string", "description": "which trick, if they said; else the last one"}}}}},
     {"type": "function", "function": {"name": "new_visitor",
      "description": "A DIFFERENT person has started talking to you (they say it is their turn, or ignore the conversation so far). Call this "
                     "FIRST, so the previous visitor's conversation is not mixed up with theirs.",
@@ -391,6 +395,7 @@ class BoothHost:
         self.gesture_fn = gesture_fn  # set by Brain: plays a trick (booth mode only; rate-limited in drive.py)
         self.move_fn: Callable[..., dict] | None = None  # set by Brain: a short spoken walk or turn (only while driving is armed)
         self.stop_fn: Callable[[], dict] | None = None  # set by Brain: stop moving now
+        self.trick_feedback_fn: Callable[..., dict] | None = None  # set by Brain: a trick went wrong here (procedural memory)
         self.routine_fn: Callable[[list], dict] | None = None  # set by Brain: several moves and tricks in a row
         self.nams = None  # set by Brain: the anonymous conversation notes are mirrored to NAMS after each save
         # after each answer, what the conversation is about is noted (in the background, beside the reply being prepared)
@@ -517,6 +522,8 @@ class BoothHost:
             return self.routine_fn(a.get("steps") or []) if self.routine_fn else {"started": False, "reason": "not available"}
         if name == "stop_moving":
             return self.stop_fn() if self.stop_fn else {"stopped": False}
+        if name == "trick_went_wrong":
+            return self.trick_feedback_fn(a.get("trick") or None) if self.trick_feedback_fn else {"recorded": False}
         if name == "new_visitor":
             with self._lock:
                 self.encounters.pop(enc.id, None)
@@ -586,7 +593,8 @@ class BoothHost:
             if self.extract_fn and self.learn_in_background:  # note what this conversation is about while the reply is prepared
                 learner = threading.Thread(target=self._learn, args=(enc, start_id, *self._transcript(enc, text)), daemon=True)
                 learner.start()
-            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language, self._booth_info())
+            sysmsg = system_prompt(self.s.robot_name, self.s.event_name, self._state(enc), self.s.voice_language, self._booth_info(),
+                                   demo=self.s.live_demo)
             history = enc.messages[-12:]
             msgs: list[dict] = [{"role": "system", "content": sysmsg}, *history, {"role": "user", "content": text}]
             trace: list[dict] = []
@@ -608,7 +616,8 @@ class BoothHost:
                     msgs.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(res, default=str)[:6000]})
                     if tc.function.name == "new_visitor":  # forget the previous visitor's conversation, in this turn too
                         msgs = [{"role": "system", "content": system_prompt(self.s.robot_name, self.s.event_name, self._state(enc),
-                                                                            self.s.voice_language, self._booth_info())},
+                                                                            self.s.voice_language, self._booth_info(),
+                                                                            demo=self.s.live_demo)},
                                 *msgs[1 + len(history):]]
                         history = []
             else:

@@ -90,8 +90,10 @@ class Voice:
             client = OpenAI(api_key=s.openai_api_key)
         self.client = client
 
-    def transcribe(self, audio: bytes, filename: str = "speech.wav") -> str:
-        r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), prompt=VOCAB_HINT,
+    def transcribe(self, audio: bytes, filename: str = "speech.wav", prompt: str | None = None) -> str:
+        """prompt: the vocabulary hint (default VOCAB_HINT); "" for none (the wake check: the hint itself contains the wake word)."""
+        hint = VOCAB_HINT if prompt is None else prompt
+        r = self.client.audio.transcriptions.create(model=self.s.stt_model, file=(filename, audio), **({"prompt": hint} if hint else {}),
                                                     language=self.s.voice_language or None)  # never guess: see Settings.voice_language
         return fix_terms((getattr(r, "text", "") or "").strip())
 

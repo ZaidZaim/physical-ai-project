@@ -52,6 +52,20 @@ Rules:
 - WALKING ON REQUEST: when the person tells you to walk, back up, turn or spin ("come here", "turn left", "turn around",
   "faster!"), call move. You cannot walk sideways (your legs only swing forward and back): offer to turn that way instead; "stop" / "wait" calls stop_moving. Moves are short (at most 4 s) and need driving armed: if `started` is false,
   say `reason` briefly. The move runs after you reply, so say "on my way" rather than claiming you already arrived.
+- HOW YOU KNOW (memory types): what you know about the world was SEEN (camera), TOLD (a person said so) or INFERRED (your guess),
+  and it fades when not confirmed. Every find_object result has a `belief` (and each active relation too): `learned_from`, `confidence`,
+  `certainty`, `days_since_confirmed`. Say it the way a person would: seen and sure -> state it; "probably" -> "it was probably ...
+  (I last saw it N days ago)"; told -> "you told me it is ..." / "I was told ..., but I haven't seen it myself"; low confidence ->
+  "I'm not sure any more". Status 'told' means never seen by the camera.
+- BEING TOLD: when the person tells you where something is ("my keys are in the kitchen drawer", "the remote is on the sofa"), call
+  remember_this (place defaults to where you are now; use the relation and anchor when they say on/in/next to something). Confirm in
+  a few words that you will remember it, and that you have not seen it yourself yet when that is so. Never store anything about a person.
+- KNOW-HOW (procedural memory): you learn routes by walking them (how you got from one room to the next) and how each trick goes in each
+  room. For "how do I get to the kitchen" / "how did you get here" / "which tricks work here", call know_how. go_to_object between rooms
+  returns `route_how`: for each hop, the moves you made last time (rough seconds; a reversed route was never walked that way). Give
+  them as directions for the person to drive; you never walk a route on your own.
+- When someone says a trick went wrong ("you fell", "that didn't work"), call trick_feedback: after it goes wrong twice in a room you
+  skip that trick there.
 - recall_memory searches past conversations and the narrative log. It is a second opinion about the past, never the source of truth for
   where things are or when they changed: if it disagrees with the graph tools, trust the graph tools and say so.
 - For EVERY question about the world, call a tool again. Never answer from your earlier replies in this chat: the memory
@@ -131,8 +145,26 @@ TOOLS = [
         "description": "Stop walking or turning now.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "remember_this",
+        "description": "Remember what the person TOLD you about where an object is (not seen by you): stored as a told fact, weaker than a sighting until the camera confirms it. place defaults to where you are now. relation + anchor: 'the keys are IN the drawer' -> relation INSIDE, anchor drawer.",
+        "parameters": {"type": "object", "properties": {
+            "object": {"type": "string", "description": "what it is, e.g. keys"}, "color": {"type": "string"},
+            "place": {"type": "string", "description": "the room, if they named one"},
+            "relation": {"type": "string", "enum": ["ON", "INSIDE", "NEXT_TO", "NEAR", "IN_FRONT_OF", "BEHIND"]},
+            "anchor": {"type": "string", "description": "the thing it is on / in / next to, e.g. drawer"},
+            "anchor_color": {"type": "string"}}, "required": ["object"]}}},
+    {"type": "function", "function": {
+        "name": "know_how",
+        "description": "Procedural memory: the routes you learned by walking between rooms (the moves, how often walked) and how each trick went in each room (tries, how many went wrong, whether you now avoid it). Optionally for one place.",
+        "parameters": {"type": "object", "properties": {"place": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "trick_feedback",
+        "description": "The person says a trick went wrong (or worked). Counted for this room; a trick that went wrong twice here is skipped here.",
+        "parameters": {"type": "object", "properties": {"trick": {"type": "string", "description": "which trick; omit for the last one"},
+                                                         "worked": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
         "name": "read_cypher",
-        "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:TAKEN_AT]->(Place), (Item)-[:LOCATED_AT {firstSeen,lastSeen,count}]->(Place {placeId,name,roomType,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed}]->(Item). Item{itemId,label,color,status,firstSeen,lastSeen,seenCount,missCount}. Sighting{id,ts,summary}. Property keys are camelCase.",
+        "description": "Last resort: read-only Cypher. Schema: (Sighting)-[:DETECTED|MISSED]->(Item), (Sighting)-[:TAKEN_AT]->(Place), (Item)-[:LOCATED_AT {firstSeen,lastSeen,toldAt,count,source}]->(Place {placeId,name,roomType,visits}), (Place)-[:ADJACENT_TO]-(Place), (Robot)-[:CURRENTLY_IN]->(Place), (Item)-[:ON|INSIDE|NEXT_TO|NEAR|IN_FRONT_OF|BEHIND {active,since,until,lastConfirmed,toldAt,source}]->(Item), (Route {steps,seconds,walks,lastWalked})-[:STARTS_AT|ENDS_AT]->(Place), (Trick {name})-[:PRACTISED_AT {attempts,failed,lastResult}]->(Place). source is seen/told/inferred. Item{itemId,label,color,status(present/possibly_gone/told),firstSeen,lastSeen,lastTold,seenCount,missCount}. Sighting{id,ts,summary}. Property keys are camelCase.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
 ]
 
@@ -145,6 +177,9 @@ class Agent:
         self.go_fn = None  # set by Brain: plans (and, if driving is armed, starts) a turn toward an object
         self.move_fn = None  # set by Brain: a short walk or turn the person asked for (only while driving is armed)
         self.stop_fn = None  # set by Brain: stop moving now
+        self.told_fn = None  # set by Brain: remember what the person told us (a told fact)
+        self.know_how_fn = None  # set by Brain: procedural memory (routes, tricks per place)
+        self.trick_feedback_fn = None  # set by Brain: a trick went wrong (or worked) here
         self.history: dict[str, list[dict]] = {}  # per-session short-term turns (also mirrored to NAMS)
 
     def _with_directions(self, rows: list[dict]) -> list[dict]:
@@ -179,6 +214,13 @@ class Agent:
             "move": lambda: (self.move_fn(a.get("direction", ""), a.get("seconds"), a.get("degrees"), a.get("speed"))
                              if self.move_fn else {"error": "moving is not available"}),
             "stop_moving": lambda: (self.stop_fn() if self.stop_fn else {"error": "moving is not available"}),
+            "remember_this": lambda: (self.told_fn(a.get("object", ""), a.get("place"), a.get("color"), a.get("relation"), a.get("anchor"),
+                                                   a.get("anchor_color")) if self.told_fn else m.remember_told(
+                                                   a.get("object", ""), a.get("place") or "", a.get("color"), a.get("relation"),
+                                                   a.get("anchor"), a.get("anchor_color"))),
+            "know_how": lambda: (self.know_how_fn(a.get("place")) if self.know_how_fn else m.know_how(a.get("place"))),
+            "trick_feedback": lambda: (self.trick_feedback_fn(a.get("trick"), bool(a.get("worked")))
+                                       if self.trick_feedback_fn else {"error": "tricks are not available"}),
         }[name]()
 
     def ask(self, question: str, session_id: str) -> dict[str, Any]:

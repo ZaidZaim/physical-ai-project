@@ -49,6 +49,10 @@ class Settings:
     strict_vocab: bool = _bool("STRICT_VOCAB", False)
     min_confidence: float = float(os.getenv("MIN_CONFIDENCE", "0.5"))
     miss_threshold: int = int(os.getenv("MISS_THRESHOLD", "3"))
+    # forgetting: a fact's confidence halves every this many days it is not confirmed again (knowledge.belief)
+    fact_half_life_days: float = float(os.getenv("FACT_HALF_LIFE_DAYS", "7"))
+    # procedural memory: a trick that went wrong this many times in a place (and more often than it worked) is not tried there again
+    trick_avoid_after_fails: int = int(os.getenv("TRICK_AVOID_AFTER_FAILS", "2"))
     # a frame only counts as evidence of absence if it shares at least this fraction of the objects known (present) at the place
     min_overlap: float = float(os.getenv("MIN_OVERLAP", "0.5"))
     auto_place: bool = _bool("AUTO_PLACE", True)
@@ -95,6 +99,8 @@ class Settings:
     # Wizard mentions it. CHEER_EVERY_S: how often it calls people over by itself when nobody talks to it. 0 (the default) = only by
     # button: at the booth, the robot speaking up on its own was unwanted.
     claw_machine: bool = _bool("CLAW_MACHINE", False)
+    # a live demo, not a booth: every voice prompt says "giving a live demo" and "the Neo4j team here" instead of the booth wording
+    live_demo: bool = _bool("LIVE_DEMO", False)
     claw_prize: str = os.getenv("CLAW_PRIZE", "a Graph Wizard")
     cheer_every_s: float = float(os.getenv("CHEER_EVERY_S", "0"))
     # GPT-Live (OpenAI gpt-live-1): the conversation as one full-duplex voice stream instead of record, transcribe, chat, speak. Measured

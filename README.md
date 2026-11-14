@@ -52,38 +52,71 @@ client (`robot/puppy_voice.py`) starts there by itself at boot.
 NAMS writes into the **same** Aura database under its own labels (`Entity`, `Message`, `AgentStep`, ...). The app never writes those
 labels and never deletes NAMS's nodes. `MIRRORED_BY` and `RELIED_ON` link the two.
 
+### Memory: short-term, long-term, reasoning, and spatial memory runs through all of them
+
+Memory has the three layers of the Neo4j agent-memory model; inside them sit the memory types of cognitive science. Spatial memory is
+not a separate box: *where* runs through all of them (where an episode happened, where a thing is, how to get there).
+
+| Layer | Memory type | For the robot | In the graph |
+|---|---|---|---|
+| **Short-term** | working | where it is right now, which way it faces | `(Robot)-[:CURRENTLY_IN {heading}]->(Place)` |
+| | episodic | the stream of what happens: camera frames, the conversation | `Sighting`, `Session`, `Dialogue`/`Utterance` |
+| **Long-term** | semantic | what is known: objects, places, what is on what, which rooms connect | `Item`, `Place`, `LOCATED_AT`, `ON`/`INSIDE`/..., `ADJACENT_TO` |
+| | procedural | know-how learned by doing: how it walked from room to room, how each trick goes in each room | `Route`, `Trick`, `PRACTISED_AT` |
+| | episodic | what is kept of an episode: the anonymous note of a booth conversation | `Encounter`, `Theme` |
+| **Reasoning** | | how an answer was reached | `ReasoningStep`, `Lookup`, `RELIED_ON` |
+
+- **Every fact says how it was learned:** `seen` (the camera), `told` (a person said "the keys are in the kitchen drawer") or
+  `inferred` (a look-alike appeared elsewhere: maybe it moved). A told fact is believed less (0.6) until the camera confirms it, and a
+  told-only object is never counted as missing before the camera has seen it.
+- **Facts fade:** confidence halves every `FACT_HALF_LIFE_DAYS` (7) without confirmation, so answers move from "it is on the table" to
+  "it was probably on the table (last seen 9 days ago)" to "I'm not sure any more". Episodes are never deleted by this.
+- **Routes are learned by walking:** when the robot drives from one room into the next, the moves it made (from the drive log) become
+  a `Route`, keeping the quickest walk and the latest one. "Go to the stove" in another room answers with those moves as directions;
+  the robot never walks a route on its own (the gyro drifts while walking).
+- **Tricks are learned per room:** every trick played counts as an attempt in that room, and "you fell over" (by voice, at the booth
+  too) counts as one that went wrong. After `TRICK_AVOID_AFTER_FAILS` (2) failures in a room, and more failures than successes, the
+  robot skips that trick there (a slippery floor is a fact about the room); pressing the button still plays it.
+
+The graph panel has one lens per layer: **Long-term** (with routes and tricks beside the map), **Short-term**, **Reasoning**, and **All**.
+
 ### Graph ontology
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/graph-model-dark.svg">
-  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology: Robot RAN Session; Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; Item LOCATED_AT Place and spatial relations between Items; Place ADJACENT_TO Place; Robot CURRENTLY_IN Place; booth: an anonymous Encounter (one conversation) DISCUSSED and ENJOYED Theme and was HELD_AT Place" width="900">
+  <img src="docs/diagrams/graph-model-light.svg" alt="Graph ontology by memory type: working, Robot CURRENTLY_IN Place; episodic, Robot RAN Session, Sighting IN_SESSION Session, TAKEN_AT Place, DETECTED or MISSED Item; semantic, Item LOCATED_AT Place and spatial relations between Items (each fact seen, told or inferred, fading unless confirmed), Place ADJACENT_TO Place; procedural, Route STARTS_AT and ENDS_AT Place, Trick PRACTISED_AT Place; booth, an anonymous Encounter DISCUSSED and ENJOYED Theme and was HELD_AT Place" width="900">
 </picture>
 
 
 | Node | Key properties |
 |---|---|
-| `Item` | `itemId`, `label`, `color`, `status` (`present` / `possibly_gone`), `firstSeen`, `lastSeen`, `seenCount`, `missCount`, `lastBearing` |
+| `Item` | `itemId`, `label`, `color`, `status` (`present` / `possibly_gone` / `told`: never seen yet), `learnedFrom`, `firstSeen`, `lastSeen`, `lastTold`, `seenCount`, `missCount`, `lastBearing` |
 | `Place` | `placeId`, `name`, `roomType`, `visits` |
 | `Sighting` | `id`, `ts`, `summary`, `objectCount`, `roomType`, `heading` |
 | `Session` · `Robot` | `id`, `startedAt` · `name` |
 | `Encounter` | `id`, `ts`, `event`, `need`, `familiarity`, `questions`, `summary`, `turns`: one anonymous booth conversation (never a name, company or transcript) |
 | `Theme` | `name`: a topic visitors talked about |
+| `Route` | `routeId`, `steps` (the quickest walk), `seconds`, `walks`, `lastSteps`, `lastWalked`: how the robot got from one place to the next |
+| `Trick` | `name`: a trick the robot knows (how it goes per place is on `PRACTISED_AT`) |
 
 | Relationship | Properties | Meaning |
 |---|---|---|
 | `DETECTED` | `confidence`, `zone`, `bearing` | this frame showed the object, and in which direction |
 | `MISSED` | | expected here and not seen: not proof it is gone |
-| `LOCATED_AT` | `firstSeen`, `lastSeen`, `count` | where the object lives |
-| `ON`, `INSIDE`, `NEXT_TO`, `NEAR`, `IN_FRONT_OF`, `BEHIND` | `active`, `since`, `until`, `lastConfirmed` | how things sit, kept with their history |
+| `LOCATED_AT` | `firstSeen`, `lastSeen`, `toldAt`, `count`, `source` | where the object lives, and how that was learned (`seen` / `told`) |
+| `ON`, `INSIDE`, `NEXT_TO`, `NEAR`, `IN_FRONT_OF`, `BEHIND` | `active`, `since`, `until`, `lastConfirmed`, `toldAt`, `source` | how things sit, kept with their history |
 | `ADJACENT_TO` | `count` | learned from the robot moving between rooms |
 | `CURRENTLY_IN` | `heading` | where the robot is now, and which way it faces |
-| `POSSIBLY_MOVED_FROM` | `confidence` | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
+| `POSSIBLY_MOVED_FROM` | `confidence`, `source` (`inferred`) | a hypothesis that a look-alike elsewhere is the same thing; never asserted as fact |
+| `STARTS_AT` · `ENDS_AT` | | where a `Route` begins · arrives |
+| `PRACTISED_AT` | `attempts`, `failed`, `lastResult`, `lastSource` | how a trick went in this place (a failure is seen or told) |
 | `DISCUSSED` · `ENJOYED` | | what a booth conversation was about · what the visitor enjoyed most at the event |
 | `HELD_AT` | | where the conversation took place |
 
 The ontology ([`ontology/puppy_pi.json`](ontology/puppy_pi.json)) uses NAMS's POLE+O types, and `puppy-mind nams-setup` sends that
 same file to NAMS. In Aura each type has its own label, so the app never shares nodes with NAMS: Agent is `Robot`, Location `Place`,
-Object `Item`, Topic `Theme` and Event `Encounter`. The booth stores **no personal data**: lead generation (`Person`, `Company`) is
+Object `Item`, Topic `Theme` and Event `Encounter`. NAMS also owns `Skill` (its own procedural memory for agents), so the robot's
+tricks are `Trick`. The booth stores **no personal data**: lead generation (`Person`, `Company`) is
 on hold for compliance, parked on branch `parked/booth-lead-generation`.
 
 The model follows Neo4j modeling practice: camelCase keys, a uniqueness constraint on every `MERGE` key, existence and type
@@ -164,6 +197,8 @@ uv run puppy-mind booth                                            # robot app +
 
 The agent can only learn about the world through graph tools, so it cannot make things up from general knowledge. It cites
 timestamps, tells "currently visible" apart from "remembered" and "possibly gone", and treats `POSSIBLY_MOVED_FROM` as a hypothesis.
+It also says how it knows ("I saw it", "you told me", "probably, I last saw it 9 days ago"), remembers what you tell it ("my keys are
+in the kitchen drawer"), and answers know-how questions ("how do I get to the kitchen?", "which tricks work here?").
 
 ```bash
 uv run puppy-mind ask "What changed since the beginning?" --evidence
@@ -212,6 +247,10 @@ does only what is safe:
 - **Relations are temporal** (`since`, `until`, `active`). `ON` and `INSIDE` are exclusive per object.
 - **Object identity is per room:** a chair in the kitchen and one in the living room are different objects.
 - **Moving never looks like loss:** perception pauses while the robot moves, and the first frame afterwards does not count misses.
+- **Seen beats told, recent beats old:** a fact's confidence is the best of its evidence (a sighting, being told), halved every
+  `FACT_HALF_LIFE_DAYS` since. Being told something never overrides what the camera saw; seeing it turns a told fact into a seen one.
+- **Know-how is local:** a route belongs to two places and a trick's record to one; merging two places moves the trick records and
+  forgets the routes (they are learned again on the next walk).
 
 ## Command line
 
@@ -247,6 +286,8 @@ Set in `.env` (see [.env.example](.env.example)). `.env` overrides variables alr
 | `AUTO_PLACE`, `PLACE_CONFIRM_FRAMES`, `NEW_PLACE_CONFIRM_FRAMES` | `true`, `2`, `2` | recognise rooms automatically; agreeing frames to confirm a move to a known room / a room never seen before |
 | `ADJACENCY_MAX_GAP_S` | `60` | a move between rooms teaches "these are neighbours" only if it took at most this long |
 | `MIN_CONFIDENCE`, `MISS_THRESHOLD`, `MIN_OVERLAP` | `0.5`, `3`, `0.5` | detection floor; misses before `possibly_gone`; view overlap that counts as evidence |
+| `FACT_HALF_LIFE_DAYS` | `7` | a fact's confidence halves every N days it is not confirmed (forgetting) |
+| `TRICK_AVOID_AFTER_FAILS` | `2` | a trick that went wrong N times in a room (and more often than it worked) is skipped there; `0` = never |
 | `CAMERA_FOV_DEG` | `70` | horizontal field of view, used for bearings |
 | `OBJECT_VOCAB`, `STRICT_VOCAB` | a common list, `false` | the labels to prefer (or allow only) |
 | `PEOPLE_CONSENT`, `STORE_IMAGES` | `false`, `false` | privacy switches |
